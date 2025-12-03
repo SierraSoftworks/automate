@@ -1,0 +1,36 @@
+<rss version="2.0">
+    <channel>
+        <title>xkcd.com</title>
+        <link>https://xkcd.com/</link>
+        <description>xkcd.com: A webcomic of romance and math humor.</description>
+        <language>en</language>
+        <item>
+            <title>Eclipse Clouds</title>
+            <link>https://xkcd.com/2915/</link>
+            <description>&lt;img src="https://imgs.xkcd.com/comics/eclipse_clouds.png" title="The rare compound solar-lunar-nephelogical eclipse" alt="The rare compound solar-lunar-nephelogical eclipse" /&gt;</description>
+            <pubDate>Wed, 03 Apr 2024 04:00:00 -0000</pubDate>
+            <guid>https://xkcd.com/2915/</guid>
+        </item>
+        <item>
+            <title>Eclipse Coolness</title>
+            <link>https://xkcd.com/2914/</link>
+            <description>&lt;img src="https://imgs.xkcd.com/comics/eclipse_coolness.png" title="A partial eclipse is like a cool sunset. A total eclipse is like someone broke the sky." alt="A partial eclipse is like a cool sunset. A total eclipse is like someone broke the sky." /&gt;</description>
+            <pubDate>Mon, 01 Apr 2024 04:00:00 -0000</pubDate>
+            <guid>https://xkcd.com/2914/</guid>
+        </item>
+        <item>
+            <title>Periodic Table Regions</title>
+            <link>https://xkcd.com/2913/</link>
+            <description>&lt;img src="https://imgs.xkcd.com/comics/periodic_table_regions.png" title="Cesium-133, let it be. Cesium-134, let it be even more." alt="Cesium-133, let it be. Cesium-134, let it be even more." /&gt;</description>
+            <pubDate>Fri, 29 Mar 2024 04:00:00 -0000</pubDate>
+            <guid>https://xkcd.com/2913/</guid>
+        </item>
+        <item>
+            <title>Cursive Letters</title>
+            <link>https://xkcd.com/2912/</link>
+            <description>&lt;img src="https://imgs.xkcd.com/comics/cursive_letters.png" title="𝓘 𝓽𝓱𝓲𝓷𝓴 𝓬𝓪𝓹𝓲𝓽𝓪𝓵 𝓛 𝓲𝓼 𝓹𝓻𝓸𝓫𝓪𝓫𝓵𝔂 𝓽𝓱𝓮 𝓶𝓸𝓼𝓽 𝓯𝓾𝓷 𝓽𝓸 𝔀𝓻𝓲𝓽𝓮, 𝓽𝓱𝓸𝓾𝓰𝓱 𝓵𝓸𝔀𝓮𝓻𝓬𝓪𝓼𝓮 𝓺 𝓲𝓼 𝓪𝓵𝓼𝓸 𝓪 𝓼𝓽𝓻𝓸𝓷𝓰 𝓬𝓸𝓷𝓽𝓮𝓷𝓭𝓮𝓻." alt="𝓘 𝓽𝓱𝓲𝓷𝓴 𝓬𝓪𝓹𝓲𝓽𝓪𝓵 𝓛 𝓲𝓼 𝓹𝓻𝓸𝓫𝓪𝓫𝓵𝔂 𝓽𝓱𝓮 𝓶𝓸𝓼𝓽 𝓯𝓾𝓷 𝓽𝓸 𝔀𝓻𝓲𝓽𝓮, 𝓽𝓱𝓸𝓾𝓰𝓱 𝓵𝓸𝔀𝓮𝓻𝓬𝓪𝓼𝓮 𝓺 𝓲𝓼 𝓪𝓵𝓼𝓸 𝓪 𝓼𝓽𝓻𝓸𝓷𝓰 𝓬𝓸𝓷𝓽𝓮𝓷𝓭𝓮𝓻." /&gt;</description>
+            <pubDate>Wed, 27 Mar 2024 04:00:00 -0000</pubDate>
+            <guid>https://xkcd.com/2912/</guid>
+        </item>
+    </channel>
+</rss>

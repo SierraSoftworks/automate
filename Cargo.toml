@@ -1,0 +1,22 @@
+[package]
+name = "automate-rs"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+chrono = { version = "0.4.40", features = ["serde"] }
+cron = "0.15.0"
+feed-rs = "2.3.1"
+fjall = "2.8.0"
+human-errors = "0.2.1"
+icalendar = "0.16.13"
+reqwest = { version = "0.12.15", features = ["blocking"] }
+rstest = "0.25.0"
+rusqlite = { version = "0.37.0", features = ["bundled", "chrono"] }
+serde = { version = "1.0.219", features = ["alloc", "derive"] }
+serde_json = { version = "1.0.140", features = ["alloc"] }
+tokio = { version = "1.44.1", features = ["net", "io-std", "rt-multi-thread", "time", "fs"] }
+uuid = "1.19.0"
+
+[dev-dependencies]
+wiremock = "0.6"
