@@ -1,9 +1,11 @@
 use crate::{services::Services};
 
+mod github_releases;
 mod rss;
 mod youtube;
 mod xkcd;
 
+pub use github_releases::GitHubReleases;
 pub use rss::Rss;
 pub use youtube::YouTube;
 pub use xkcd::Xkcd;

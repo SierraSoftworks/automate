@@ -38,10 +38,12 @@ impl Config {
 #[derive(Default, Clone, Deserialize)]
 pub struct ConnectionConfigs {
     pub todoist: TodoistConfig,
+    pub github: GitHubConfig,
 }
 
 #[derive(Clone, Deserialize)]
 pub struct WorkflowConfigs {
+    pub github_releases: Vec<crate::workflows::GitHubReleases>,
     pub rss: Vec<crate::workflows::Rss>,
     pub youtube: Vec<crate::workflows::YouTube>,
     pub xkcd: Option<crate::workflows::Xkcd>,
@@ -51,14 +53,21 @@ impl WorkflowConfigs {
     pub async fn run_all(self, services: impl crate::services::Services + Clone + Send + Sync + 'static) -> Result<(), human_errors::Error> {
         let mut join_handles = vec![];
 
+        for workflow in self.github_releases {
+            info!("Registered workflow {}", &workflow);
+            join_handles.push(tokio::spawn(workflow.run(services.clone())));
+        }
+
         for workflow in self.rss {
             info!("Registered workflow {}", &workflow);
             join_handles.push(tokio::spawn(workflow.run(services.clone())));
         }
+
         for workflow in self.youtube {
             info!("Registered workflow {}", &workflow);
             join_handles.push(tokio::spawn(workflow.run(services.clone())));
         }
+        
         if let Some(xkcd_workflow) = self.xkcd {
             info!("Registered workflow {}", &xkcd_workflow);
             join_handles.push(tokio::spawn(xkcd_workflow.run(services.clone())));
@@ -72,4 +81,10 @@ impl WorkflowConfigs {
 
         Ok(())
     }
+}
+
+#[derive(Default, Clone, Deserialize)]
+pub struct GitHubConfig {
+    #[serde(default)]
+    pub api_key: Option<String>,
 }

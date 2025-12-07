@@ -1,6 +1,7 @@
 mod differential;
 mod incremental;
 
+mod github_releases;
 mod rss;
 mod youtube;
 mod xkcd;
@@ -8,6 +9,7 @@ mod xkcd;
 pub use differential::DifferentialCollector;
 pub use incremental::IncrementalCollector;
 
+pub use github_releases::{GitHubReleasesCollector, GitHubReleaseItem};
 pub use rss::RssCollector;
 pub use youtube::{YouTubeCollector, YouTubeItem};
 pub use xkcd::{XkcdCollector, XkcdItem};

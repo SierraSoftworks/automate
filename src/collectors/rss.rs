@@ -44,6 +44,7 @@ impl IncrementalCollector for RssCollector {
     async fn fetch_since(
         &self,
         watermark: Option<Self::Watermark>,
+        _services: &impl crate::services::Services,
     ) -> Result<Vec<Self::Item>, human_errors::Error> {
         let content = reqwest::get(&self.feed_url).await.wrap_err_as_user(
             format!("Failed to fetch RSS feed from URL '{}'.", &self.feed_url),
@@ -88,8 +89,9 @@ mod tests {
         let collector = RssCollector {
             feed_url: mock_server.uri(),
         };
+        let services = crate::testing::mock_services().await.unwrap();
 
-        let items = collector.fetch_since(None).await.unwrap();
+        let items = collector.fetch_since(None, &services).await.unwrap();
         assert_eq!(items.len(), 4, "Expected to fetch 4 RSS items from test data");
         assert_eq!(items[0].title.as_ref().unwrap().content, "Eclipse Clouds");
         assert_eq!(items[3].title.as_ref().unwrap().content, "Cursive Letters");
@@ -108,6 +110,7 @@ mod tests {
         let collector = RssCollector {
             feed_url: mock_server.uri(),
         };
+        let services = crate::testing::mock_services().await.unwrap();
 
         // Watermark set to filter items on or before April 1, 2024
         let watermark = Some(
@@ -115,7 +118,7 @@ mod tests {
                 .unwrap()
                 .with_timezone(&Utc)
         );
-        let items = collector.fetch_since(watermark).await.unwrap();
+        let items = collector.fetch_since(watermark, &services).await.unwrap();
         
         assert_eq!(items.len(), 1, "Expected only items after watermark");
         assert_eq!(items[0].title.as_ref().unwrap().content, "Eclipse Clouds");

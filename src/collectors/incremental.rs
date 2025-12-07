@@ -6,7 +6,7 @@ pub trait IncrementalCollector: Collector {
     type Watermark: Ord + serde::Serialize + serde::de::DeserializeOwned + Send + 'static;
 
     fn kind(&self) -> &'static str;
-    
+
     fn partition(&self, namespace: Option<&'static str>) -> String {
         if let Some(ns) = namespace {
             format!("collector::{ns}::{}", self.kind())
@@ -19,7 +19,7 @@ pub trait IncrementalCollector: Collector {
 
     fn watermark(&self, item: &Self::Item) -> Self::Watermark;
 
-    async fn fetch_since(&self, watermark: Option<Self::Watermark>) -> Result<Vec<Self::Item>, human_errors::Error>;
+    async fn fetch_since(&self, watermark: Option<Self::Watermark>, services: &impl Services) -> Result<Vec<Self::Item>, human_errors::Error>;
     
     async fn fetch(&self, services: &impl Services) -> Result<Vec<Self::Item>, human_errors::Error> {
         let partition = self.partition(None);
@@ -27,7 +27,7 @@ pub trait IncrementalCollector: Collector {
 
         let current_watermark = services.kv().get(partition.clone(), key.clone()).await?;
 
-        let new_items = self.fetch_since(current_watermark).await?;
+        let new_items = self.fetch_since(current_watermark, services).await?;
         if let Some(new_watermark) = new_items.iter().map(|item| self.watermark(item)).max() {
             services.kv().set(partition, key, new_watermark).await?;
         }
