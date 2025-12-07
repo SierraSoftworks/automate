@@ -2,7 +2,7 @@ use std::fmt::Display;
 
 use serde::{Deserialize};
 
-use crate::{collectors::{IncrementalCollector, XkcdCollector, XkcdItem}, filter::{Filter, Filterable}, publishers::{Publisher, PublisherConfig, TodoistConfig, TodoistPublisher}, services::Services, workflows::Workflow};
+use crate::{collectors::{Collector, XkcdCollector, XkcdItem}, filter::{Filter, Filterable}, publishers::{Publisher, PublisherConfig, TodoistConfig, TodoistPublisher}, services::Services, workflows::Workflow};
 
 #[derive(Clone, Deserialize)]
 pub struct Xkcd {
@@ -42,10 +42,10 @@ impl<S: Services + Clone + Send + Sync + 'static> Workflow<S> for Xkcd {
         let todoist = services.connections().todoist.merge(&default_todoist_config()).merge(&todoist);
 
         crate::engines::cron(format!("{}", &self), cron, services, async move |services| {
-            let collector = XkcdCollector::new("https://xkcd.com/rss.xml");
+            let collector = XkcdCollector::new();
             let publisher = TodoistPublisher;
 
-            let items = collector.fetch(&services).await?;
+            let items = collector.list(&services).await?;
 
             for item in items.into_iter() {
                 match filter.matches(&XkcdEntryFilter(&item)) {

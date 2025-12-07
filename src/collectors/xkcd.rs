@@ -1,14 +1,11 @@
-use std::borrow::Cow;
 
-use crate::collectors::incremental::IncrementalCollector;
-use human_errors::ResultExt;
-use feed_rs::{model::Entry, parser::parse};
+use crate::collectors::{Collector, RssCollector, incremental::IncrementalCollector};
+use feed_rs::{model::Entry};
 use chrono::{DateTime, Utc};
 
-pub struct XkcdCollector {
-    pub feed_url: String,
-}
+pub struct XkcdCollector(RssCollector);
 
+#[allow(dead_code)]
 pub struct XkcdItem {
     pub title: String,
     pub url: String,
@@ -17,57 +14,29 @@ pub struct XkcdItem {
     pub image_alt: Option<String>,
 }
 
-impl IncrementalCollector for XkcdCollector {
+#[async_trait::async_trait]
+impl Collector for XkcdCollector {
     type Item = XkcdItem;
-    type Watermark = DateTime<Utc>;
 
-    fn kind(&self) -> &'static str {
-        "xkcd"
-    }
+    async fn list(&self, services: &(impl crate::services::Services + Send + Sync + 'static)) -> Result<Vec<Self::Item>, human_errors::Error> {
+        let items = self.0.fetch(services).await?;
 
-    fn key(&self) -> Cow<'static, str> {
-        Cow::Borrowed("xkcd")
-    }
+        let xkcd_items = items.into_iter()
+            .map(XkcdCollector::parse_xkcd_entry)
+            .collect();
 
-    fn watermark(&self, item: &Self::Item) -> Self::Watermark {
-        item.published
-    }
-
-    async fn fetch_since(
-        &self,
-        watermark: Option<Self::Watermark>,
-    ) -> Result<Vec<Self::Item>, human_errors::Error> {
-        let content = reqwest::get(&self.feed_url).await.wrap_err_as_user(
-            format!("Failed to fetch RSS feed from URL '{}'.", &self.feed_url),
-            &[
-                "Check that your network connection is working properly.",
-                "Try again later, as the server may be temporarily unavailable.",
-            ],
-        )?.bytes().await.wrap_err_as_user(
-            format!("Failed to read the content of the RSS feed from URL '{}'.", &self.feed_url),
-            &[
-                "Check that your network connection is working properly.",
-                "Try again later, as the server may be temporarily unavailable.",
-            ],
-        )?;
-
-        parse(&content[..]).wrap_err_as_user(
-            format!("Failed to parse RSS feed information from URL '{}'.", &self.feed_url), 
-            &[
-                "Ensure that the content at the URL is a valid RSS feed.",
-                "Try again later, as the server may be temporarily unavailable.",
-            ],
-        ).map(|feed| feed.entries.into_iter()
-            .map(Self::parse_xkcd_entry)
-            .filter(|item| watermark.map(|wm| wm < self.watermark(item)).unwrap_or(true)).collect())
+        Ok(xkcd_items)
     }
 }
 
 impl XkcdCollector {
-    pub fn new(feed_url: impl ToString) -> Self {
-        Self {
-            feed_url: feed_url.to_string(),
-        }
+    pub fn new() -> Self {
+        Self(RssCollector::new("https://xkcd.com/rss.xml"))
+    }
+
+    #[cfg(test)]
+    pub fn new_with_feed(feed_url: impl ToString) -> Self {
+        Self(RssCollector::new(feed_url))
     }
 
     fn parse_xkcd_entry(entry: Entry) -> XkcdItem {
@@ -106,6 +75,10 @@ impl XkcdCollector {
 
 #[cfg(test)]
 mod tests {
+    use crate::db::KeyValueStore;
+    use crate::services::Services;
+    use crate::testing::mock_services;
+
     use super::*;
     use wiremock::{MockServer, Mock, ResponseTemplate};
     use wiremock::matchers::method;
@@ -120,11 +93,10 @@ mod tests {
             .mount(&mock_server)
             .await;
 
-        let collector: XkcdCollector = XkcdCollector {
-            feed_url: mock_server.uri(),
-        };
+        let collector: XkcdCollector = XkcdCollector::new_with_feed(mock_server.uri());
+        let services = mock_services().await.unwrap();
 
-        let items = collector.fetch_since(None).await.unwrap();
+        let items = collector.list(&services).await.unwrap();
         assert_eq!(items.len(), 4, "Expected to fetch 4 RSS items from test data");
         assert_eq!(items[0].title, "Eclipse Clouds");
         assert_eq!(items[0].url, "https://xkcd.com/2915/");
@@ -143,17 +115,19 @@ mod tests {
             .mount(&mock_server)
             .await;
 
-        let collector = XkcdCollector {
-            feed_url: mock_server.uri(),
-        };
+        let collector = XkcdCollector::new_with_feed(mock_server.uri());
+        let services = mock_services().await.unwrap();
 
-        // Watermark set to filter items on or before April 1, 2024
-        let watermark = Some(
+        // Store watermark to filter items on or before April 1, 2024
+        services.kv().set(
+            collector.0.partition(None),
+            collector.0.key(),
             DateTime::parse_from_rfc2822("Mon, 01 Apr 2024 04:00:00 -0000")
                 .unwrap()
                 .with_timezone(&Utc)
-        );
-        let items = collector.fetch_since(watermark).await.unwrap();
+        ).await.unwrap();
+
+        let items = collector.list(&services).await.unwrap();
         
         assert_eq!(items.len(), 1, "Expected only items after watermark");
         assert_eq!(items[0].title, "Eclipse Clouds");

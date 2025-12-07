@@ -44,14 +44,14 @@ impl Display for YouTube {
 
 impl<S: Services + Clone + Send + Sync + 'static> Workflow<S> for YouTube {
     async fn run(self, services: S) -> Result<(), human_errors::Error> {
-        let YouTube{ name: channel_name, channel_id, cron, filter, todoist } = self.clone();
+        let YouTube{ name, channel_id, cron, filter, todoist } = self.clone();
         let todoist = services.connections().todoist.merge(&default_todoist_config()).merge(&todoist);
 
         crate::engines::cron(format!("{}", &self), cron, services, async move |services| {
             let collector = YouTubeCollector::new(&channel_id);
             let publisher = TodoistPublisher;
 
-            let items = collector.fetch(&services).await?;
+            let items = collector.list(&services).await?;
 
             for item in items.into_iter() {
                 match filter.matches(&YouTubeEntryFilter(&item)) {
@@ -63,8 +63,7 @@ impl<S: Services + Clone + Send + Sync + 'static> Workflow<S> for YouTube {
                 }
 
                 publisher.publish(todoist_api::CreateTaskArgs {
-                    content: format!("Watch {} video on [{}]({})", channel_name, item.title.as_ref().map(|t| t.content.as_str()).unwrap_or("YouTube"), item.links[0].href),
-                    description: item.summary.as_ref().map(|s| s.content.clone()),
+                    content: format!("[{}]({}): {}", if item.channel.is_empty() { &name } else { &item.channel }, item.link, item.title),
                     due_string: Some("today".into()),
                     ..Default::default()
                 }, todoist.clone(), &services).await?;
@@ -76,14 +75,14 @@ impl<S: Services + Clone + Send + Sync + 'static> Workflow<S> for YouTube {
 }
 
 
-struct YouTubeEntryFilter<'a>(&'a feed_rs::model::Entry);
+struct YouTubeEntryFilter<'a>(&'a YouTubeItem);
 
 impl<'a> Filterable for YouTubeEntryFilter<'a> {
     fn get(&self, key: &str) -> crate::filter::FilterValue {
         match key {
-            "title" => self.0.title.as_ref().map(|t| t.content.as_str()).unwrap_or("").into(),
-            "description" => self.0.summary.as_ref().map(|s| s.content.as_str()).unwrap_or("").into(),
-            "link" => self.0.links.get(0).map(|l| l.href.as_str()).unwrap_or("").into(),
+            "channel" => self.0.channel.clone().into(),
+            "title" => self.0.title.clone().into(),
+            "link" => self.0.link.clone().into(),
             _ => crate::filter::FilterValue::Null,
         }
     }

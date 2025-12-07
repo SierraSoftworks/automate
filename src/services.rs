@@ -2,8 +2,6 @@ use std::sync::Arc;
 
 use crate::config::ConnectionConfigs;
 
-pub type ProdServicesContainer = ServicesContainer<crate::db::SqliteDatabase>;
-
 pub trait Services {
     fn kv(&self) -> Arc<impl crate::db::KeyValueStore + Send + Sync>;
     fn queue(&self) -> Arc<impl crate::db::Queue + Send + Sync>;
@@ -35,6 +33,15 @@ where
             database: Arc::new(database),
             connections: Arc::new(connections),
         }
+    }
+}
+
+#[cfg(test)]
+impl ServicesContainer<crate::db::SqliteDatabase> {
+    pub async fn new_mock() -> Result<Self, human_errors::Error> {
+        let database = crate::db::SqliteDatabase::open_in_memory().await?;
+        let connections = ConnectionConfigs::default();
+        Ok(Self::new(database, connections))
     }
 }
 

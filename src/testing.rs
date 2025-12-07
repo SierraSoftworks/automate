@@ -11,3 +11,7 @@ pub fn get_test_file_contents<P: AsRef<str>>(name: P) -> String {
     let path = get_test_file_path(name);
     std::fs::read_to_string(path).unwrap_or_else(|_| panic!("Failed to read test file"))
 }
+
+pub async fn mock_services() -> Result<impl crate::services::Services, human_errors::Error> {
+    crate::services::ServicesContainer::new_mock().await
+}

@@ -1,78 +1,64 @@
-use std::borrow::Cow;
-
-use crate::collectors::incremental::IncrementalCollector;
-use human_errors::ResultExt;
-use feed_rs::{model::Entry, parser::parse};
+use crate::{collectors::{Collector, RssCollector, incremental::IncrementalCollector}};
+use feed_rs::{model::Entry};
 use chrono::{DateTime, Utc};
 
-pub struct YouTubeCollector {
-    pub channel_id: String,
-    base_url: Cow<'static, str>,
+pub struct YouTubeCollector(RssCollector);
+
+#[allow(dead_code)]
+pub struct YouTubeItem {
+    pub channel: String,
+    pub title: String,
+    pub link: String,
+    pub published: DateTime<Utc>,
 }
 
 impl YouTubeCollector {
     pub fn new(channel_id: impl ToString) -> Self {
-        Self {
-            channel_id: channel_id.to_string(),
-            base_url: "https://www.youtube.com/feeds/videos.xml?channel_id=".into(),
-        }
+        Self(RssCollector::new(
+            format!("https://www.youtube.com/feeds/videos.xml?channel_id={}", channel_id.to_string())
+        ))
     }
 
     #[cfg(test)]
-    pub fn with_base_url(channel_id: &str, base_url: String) -> Self {
-        Self {
-            channel_id: channel_id.to_string(),
-            base_url: base_url.into(),
-        }
+    pub fn new_with_feed(feed_url: impl ToString) -> Self {
+        Self(RssCollector::new(feed_url))
     }
 }
 
-impl IncrementalCollector for YouTubeCollector {
-    type Item = Entry;
-    type Watermark = DateTime<Utc>;
+#[async_trait::async_trait]
+impl Collector for YouTubeCollector {
+    type Item = YouTubeItem;
 
-    fn kind(&self) -> &'static str {
-        "youtube"
+    async fn list(&self, services: &(impl crate::services::Services + Send + Sync + 'static)) -> Result<Vec<Self::Item>, human_errors::Error> {
+        let items = self.0.fetch(services).await?;
+
+        let youtube_items = items.iter()
+            .map(|entry| parse_youtube_entry(entry))
+            .collect();
+
+        Ok(youtube_items)
     }
+}
 
-    fn key(&self) -> Cow<'static, str> {
-        Cow::Owned(self.channel_id.clone())
-    }
+fn parse_youtube_entry(entry: &Entry) -> YouTubeItem {
+    let title = entry.title.as_ref().map(|t| t.content.to_string()).unwrap_or_default();
+    let link = entry.links.first().map(|l| l.href.to_string()).unwrap_or_default();
+    let published = entry.published.unwrap_or_else(|| DateTime::UNIX_EPOCH);
+    let channel = entry.authors.first().map(|a| a.name.to_string()).unwrap_or_default();
 
-    fn watermark(&self, item: &Self::Item) -> Self::Watermark {
-        item.published
-            .unwrap_or_else(|| DateTime::UNIX_EPOCH)
-    }
-
-    async fn fetch_since(
-        &self,
-        watermark: Option<Self::Watermark>,
-    ) -> Result<Vec<Self::Item>, human_errors::Error> {
-        let content = reqwest::get(&format!("{}{}", self.base_url, self.channel_id)).await.wrap_err_as_user(
-            format!("Failed to fetch YouTube feed for channel '{}'.", &self.channel_id),
-            &[
-                "Check that the URL is correct and that the server is reachable.",
-                "Check that your network connection is working properly.",
-            ],
-        )?.bytes().await.wrap_err_as_user(
-            format!("Failed to read the content of the YouTube feed for channel '{}'.", &self.channel_id),
-            &[
-                "Check that the URL is correct and that the server is reachable.",
-                "Check that your network connection is working properly.",
-            ],
-        )?;
-        parse(&content[..]).wrap_err_as_user(
-            format!("Failed to parse YouTube feed information for channel '{}'.", &self.channel_id), 
-            &[
-                "Ensure that the content at the URL is a valid RSS feed.",
-            ],
-        ).map(|feed| feed.entries.into_iter()
-            .filter(|item| watermark.map(|wm| wm < self.watermark(item)).unwrap_or(true)).collect())
+    YouTubeItem {
+        channel,
+        title,
+        link,
+        published,
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use crate::services::Services;
+    use crate::db::KeyValueStore;
+
     use super::*;
     use wiremock::{MockServer, Mock, ResponseTemplate};
     use wiremock::matchers::method;
@@ -87,12 +73,13 @@ mod tests {
             .mount(&mock_server)
             .await;
 
-        let collector = YouTubeCollector::with_base_url("test", format!("{}/", mock_server.uri()));
+        let collector = YouTubeCollector::new_with_feed(mock_server.uri());
+        let services = crate::testing::mock_services().await.unwrap();
 
-        let items = collector.fetch_since(None).await.unwrap();
+        let items = collector.list(&services).await.unwrap();
         assert_eq!(items.len(), 15, "Expected to fetch 15 RSS items from test data");
-        assert_eq!(items[0].title.as_ref().unwrap().content, "Remember to always dispose of chemicals properly 🌎");
-        assert_eq!(items[3].title.as_ref().unwrap().content, "Would you recommend aftermarket bars or not?");
+        assert_eq!(items[0].title, "Remember to always dispose of chemicals properly 🌎");
+        assert_eq!(items[3].title, "Would you recommend aftermarket bars or not?");
     }
 
     #[tokio::test]
@@ -105,17 +92,21 @@ mod tests {
             .mount(&mock_server)
             .await;
 
-        let collector = YouTubeCollector::with_base_url("test", format!("{}/", mock_server.uri()));
+        let collector = YouTubeCollector::new_with_feed(mock_server.uri());
+        let services = crate::testing::mock_services().await.unwrap();
 
-        // Watermark set to filter items on or before April 1, 2024
-        let watermark = Some(
+        // Set watermark to filter items on or before April 4, 2024
+        services.kv().set(
+            collector.0.partition(None),
+            collector.0.key(),
             DateTime::parse_from_rfc3339("2024-04-04T12:00:45+00:00")
                 .unwrap()
                 .with_timezone(&Utc)
-        );
-        let items = collector.fetch_since(watermark).await.unwrap();
+        ).await.unwrap();
+
+        let items = collector.list(&services).await.unwrap();
         
         assert_eq!(items.len(), 1, "Expected only items after watermark");
-        assert_eq!(items[0].title.as_ref().unwrap().content, "Remember to always dispose of chemicals properly 🌎");
+        assert_eq!(items[0].title, "Remember to always dispose of chemicals properly 🌎");
     }
 }

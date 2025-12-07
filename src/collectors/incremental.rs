@@ -1,13 +1,12 @@
 use std::borrow::Cow;
 
-use crate::{db::KeyValueStore, services::Services};
+use crate::{collectors::Collector, db::KeyValueStore, services::Services};
 
-pub trait IncrementalCollector {
-    type Item;
+pub trait IncrementalCollector: Collector {
     type Watermark: Ord + serde::Serialize + serde::de::DeserializeOwned + Send + 'static;
 
     fn kind(&self) -> &'static str;
-
+    
     fn partition(&self, namespace: Option<&'static str>) -> String {
         if let Some(ns) = namespace {
             format!("collector::{ns}::{}", self.kind())

@@ -1,13 +1,12 @@
 use std::borrow::Cow;
 
-use crate::{db::KeyValueStore, services::Services};
+use crate::{collectors::Collector, db::KeyValueStore, services::Services};
 
-pub trait DifferentialCollector {
-    type Item;
+pub trait DifferentialCollector: Collector {
     type Identifier: Eq + std::hash::Hash + serde::Serialize + serde::de::DeserializeOwned + Send + 'static;
 
     fn kind(&self) -> &'static str;
-
+    
     fn partition(&self, namespace: Option<&'static str>) -> String {
         if let Some(ns) = namespace {
             format!("collector::{ns}::{}", self.kind())

@@ -5,16 +5,19 @@ api_key = "xxx"
 name = "Citation Needed"
 homepage = "https://citationneeded.news/"
 url = "https://citationneeded.news/rss/"
+cron = "@daily"
 
 [[workflows.rss]]
 name = "SRE Weekly"
 homepage = "https://sreweekly.com/"
 url = "https://sreweekly.com/feed/"
+cron = "@daily"
 
 [[workflows.rss]]
 name = "Tailscale Releases"
 homepage = "https://tailscale.com/changelog/"
 url = "https://tailscale.com/changelog/index.xml"
+cron = "0 */6 * * *"
 
 [[workflows.rss]]
 name = "Word of the Day"

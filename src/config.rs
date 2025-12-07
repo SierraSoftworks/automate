@@ -35,7 +35,7 @@ impl Config {
     }
 }
 
-#[derive(Clone, Deserialize)]
+#[derive(Default, Clone, Deserialize)]
 pub struct ConnectionConfigs {
     pub todoist: TodoistConfig,
 }

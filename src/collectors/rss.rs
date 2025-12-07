@@ -1,6 +1,6 @@
 use std::borrow::Cow;
 
-use crate::collectors::incremental::IncrementalCollector;
+use crate::collectors::{Collector, incremental::IncrementalCollector};
 use human_errors::ResultExt;
 use feed_rs::{model::Entry, parser::parse};
 use chrono::{DateTime, Utc};
@@ -17,8 +17,16 @@ impl RssCollector {
     }
 }
 
-impl IncrementalCollector for RssCollector {
+#[async_trait::async_trait]
+impl Collector for RssCollector {
     type Item = Entry;
+
+    async fn list(&self, services: &(impl crate::services::Services + Send + Sync + 'static)) -> Result<Vec<Self::Item>, human_errors::Error> {
+        self.fetch(services).await
+    }
+}
+
+impl IncrementalCollector for RssCollector {
     type Watermark = DateTime<Utc>;
 
     fn kind(&self) -> &'static str {
