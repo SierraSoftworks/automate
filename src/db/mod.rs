@@ -1,27 +1,38 @@
+use std::{borrow::Cow, pin::Pin};
+
 use human_errors as errors;
+
+mod cache;
 mod sqlite;
+//mod sync;
 
-pub fn open(path: &str) -> Result<impl KeyValueStore + Queue, errors::Error> {
-    sqlite::SqliteDatabase::open(path)
-}
+pub use sqlite::SqliteDatabase;
 
+#[async_trait::async_trait]
 pub trait KeyValueStore {
-    fn get<T: serde::de::DeserializeOwned>(&self, partition: &str, key: &str) -> Result<Option<T>, errors::Error>;
+    async fn get<P: Into<Cow<'static, str>> + Send, K: Into<Cow<'static, str>> + Send, T: serde::de::DeserializeOwned + Send + 'static>(&self, partition: P, key: K) -> Result<Option<T>, errors::Error>;
 
-    fn list<T: serde::de::DeserializeOwned>(&self, partition: &str) -> Result<Vec<(String, T)>, errors::Error>;
+    async fn list<P: Into<Cow<'static, str>> + Send, T: serde::de::DeserializeOwned + Send + 'static>(&self, partition: P) -> Result<Vec<(String, T)>, errors::Error>;
 
-    fn set<T: serde::Serialize>(&self, partition: &str, key: &str, value: T) -> Result<(), errors::Error>;
-
-    fn remove(&self, partition: &str, key: &str) -> Result<(), errors::Error>;
-
+    async fn set<P: Into<Cow<'static, str>> + Send, K: Into<Cow<'static, str>> + Send, T: serde::Serialize + Send + 'static>(&self, partition: P, key: K, value: T) -> Result<(), errors::Error>;
+    async fn remove<P: Into<Cow<'static, str>> + Send, K: Into<Cow<'static, str>> + Send>(&self, partition: P, key: K) -> Result<(), errors::Error>;
 }
 
+#[async_trait::async_trait]
 pub trait Queue {
-    fn enqueue<T: serde::Serialize>(&self, partition: &str, job: T, delay: Option<chrono::Duration>) -> Result<(), errors::Error>;
+    async fn enqueue<P: Into<Cow<'static, str>> + Send, T: serde::Serialize + Send + 'static>(&self, partition: P, job: T, delay: Option<chrono::Duration>) -> Result<(), errors::Error>;
 
-    fn dequeue<T: serde::de::DeserializeOwned>(&self, partition: &str, reserve_for: chrono::Duration) -> Result<Vec<QueueMessage<T>>, errors::Error>;
+    async fn dequeue<P: Into<Cow<'static, str>> + Send, T: serde::de::DeserializeOwned + Send + 'static>(&self, partition: P, reserve_for: chrono::Duration) -> Result<Vec<QueueMessage<T>>, errors::Error>;
 
-    fn complete<T>(&self, partition: &str, msg: QueueMessage<T>) -> Result<(), errors::Error>;
+    async fn complete<P: Into<Cow<'static, str>> + Send, T: Send + 'static>(&self, partition: P, msg: QueueMessage<T>) -> Result<(), errors::Error>;
+}
+
+#[async_trait::async_trait]
+pub trait Cache {
+    async fn cached<P: Into<Cow<'static, str>> + Send, K: Into<Cow<'static, str>> + Send, T, B>(&self, partition: P, key: K, builder: B, ttl: chrono::Duration) -> Result<T, human_errors::Error>
+    where
+        T: serde::de::DeserializeOwned + serde::Serialize + Clone + Send + 'static,
+        B: FnOnce() -> Pin<Box<dyn Future<Output = Result<T, human_errors::Error>> + Sync + Send>> + Sync + Send;
 }
 
 pub struct QueueMessage<T> {

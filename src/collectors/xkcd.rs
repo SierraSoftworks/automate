@@ -5,32 +5,32 @@ use human_errors::ResultExt;
 use feed_rs::{model::Entry, parser::parse};
 use chrono::{DateTime, Utc};
 
-pub struct RssCollector {
+pub struct XkcdCollector {
     pub feed_url: String,
 }
 
-impl RssCollector {
-    pub fn new(feed_url: impl ToString) -> Self {
-        Self {
-            feed_url: feed_url.to_string(),
-        }
-    }
+pub struct XkcdItem {
+    pub title: String,
+    pub url: String,
+    pub published: DateTime<Utc>,
+    pub image_url: Option<String>,
+    pub image_alt: Option<String>,
 }
 
-impl IncrementalCollector for RssCollector {
-    type Item = Entry;
+impl IncrementalCollector for XkcdCollector {
+    type Item = XkcdItem;
     type Watermark = DateTime<Utc>;
 
     fn kind(&self) -> &'static str {
-        "rss"
+        "xkcd"
     }
 
     fn key(&self) -> Cow<'static, str> {
-        Cow::Owned(self.feed_url.clone())
+        Cow::Borrowed("xkcd")
     }
 
     fn watermark(&self, item: &Self::Item) -> Self::Watermark {
-        item.published.unwrap_or_else(|| DateTime::UNIX_EPOCH)
+        item.published
     }
 
     async fn fetch_since(
@@ -40,24 +40,67 @@ impl IncrementalCollector for RssCollector {
         let content = reqwest::get(&self.feed_url).await.wrap_err_as_user(
             format!("Failed to fetch RSS feed from URL '{}'.", &self.feed_url),
             &[
-                "Check that the URL is correct and that the server is reachable.",
                 "Check that your network connection is working properly.",
+                "Try again later, as the server may be temporarily unavailable.",
             ],
         )?.bytes().await.wrap_err_as_user(
             format!("Failed to read the content of the RSS feed from URL '{}'.", &self.feed_url),
             &[
-                "Check that the URL is correct and that the server is reachable.",
                 "Check that your network connection is working properly.",
+                "Try again later, as the server may be temporarily unavailable.",
             ],
         )?;
 
         parse(&content[..]).wrap_err_as_user(
-            format!("Failed to parse RSS feed information from URL '{}'.", self.feed_url), 
+            format!("Failed to parse RSS feed information from URL '{}'.", &self.feed_url), 
             &[
                 "Ensure that the content at the URL is a valid RSS feed.",
+                "Try again later, as the server may be temporarily unavailable.",
             ],
         ).map(|feed| feed.entries.into_iter()
+            .map(Self::parse_xkcd_entry)
             .filter(|item| watermark.map(|wm| wm < self.watermark(item)).unwrap_or(true)).collect())
+    }
+}
+
+impl XkcdCollector {
+    pub fn new(feed_url: impl ToString) -> Self {
+        Self {
+            feed_url: feed_url.to_string(),
+        }
+    }
+
+    fn parse_xkcd_entry(entry: Entry) -> XkcdItem {
+        let title = entry.title.as_ref().map(|t| urlencoding::decode(t.content.as_str()).unwrap_or_default().to_string()).unwrap_or_default();
+        let url = entry.links.first().map(|l| urlencoding::decode(l.href.as_str()).unwrap_or_default().to_string()).unwrap_or_default();
+        let published = entry.published.unwrap_or_else(|| DateTime::UNIX_EPOCH);
+
+        if let Some(content) = entry.summary.as_ref()
+            .map(|c| c.content.clone())
+            .map(|body| html_escape::decode_html_entities(body.as_str()).to_string())
+            .map(|body| scraper::Html::parse_fragment(body.as_ref())) {
+            let img_selector = scraper::Selector::parse("img").unwrap();
+
+            if let Some(img_element) = content.select(&img_selector).next() {
+                let src = img_element.value().attr("src").map(|s| s.to_string());
+                let alt = img_element.value().attr("alt").map(|s| s.to_string());
+                return XkcdItem {
+                    title,
+                    url,
+                    published,
+                    image_url: src,
+                    image_alt: alt,
+                };
+            }
+        }
+
+        XkcdItem {
+            title,
+            url,
+            published,
+            image_url: None,
+            image_alt: None,
+        }
     }
 }
 
@@ -77,14 +120,17 @@ mod tests {
             .mount(&mock_server)
             .await;
 
-        let collector = RssCollector {
+        let collector: XkcdCollector = XkcdCollector {
             feed_url: mock_server.uri(),
         };
 
         let items = collector.fetch_since(None).await.unwrap();
         assert_eq!(items.len(), 4, "Expected to fetch 4 RSS items from test data");
-        assert_eq!(items[0].title.as_ref().unwrap().content, "Eclipse Clouds");
-        assert_eq!(items[3].title.as_ref().unwrap().content, "Cursive Letters");
+        assert_eq!(items[0].title, "Eclipse Clouds");
+        assert_eq!(items[0].url, "https://xkcd.com/2915/");
+        assert_eq!(items[0].image_url, Some("https://imgs.xkcd.com/comics/eclipse_clouds.png".into()));
+        assert_eq!(items[0].image_alt, Some("The rare compound solar-lunar-nephelogical eclipse".into()));
+        assert_eq!(items[3].title, "Cursive Letters");
     }
 
     #[tokio::test]
@@ -97,7 +143,7 @@ mod tests {
             .mount(&mock_server)
             .await;
 
-        let collector = RssCollector {
+        let collector = XkcdCollector {
             feed_url: mock_server.uri(),
         };
 
@@ -110,6 +156,6 @@ mod tests {
         let items = collector.fetch_since(watermark).await.unwrap();
         
         assert_eq!(items.len(), 1, "Expected only items after watermark");
-        assert_eq!(items[0].title.as_ref().unwrap().content, "Eclipse Clouds");
+        assert_eq!(items[0].title, "Eclipse Clouds");
     }
 }

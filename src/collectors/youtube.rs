@@ -11,7 +11,7 @@ pub struct YouTubeCollector {
 }
 
 impl YouTubeCollector {
-    pub fn new(channel_id: &str) -> Self {
+    pub fn new(channel_id: impl ToString) -> Self {
         Self {
             channel_id: channel_id.to_string(),
             base_url: "https://www.youtube.com/feeds/videos.xml?channel_id=".into(),
@@ -31,8 +31,12 @@ impl IncrementalCollector for YouTubeCollector {
     type Item = Entry;
     type Watermark = DateTime<Utc>;
 
-    fn key(&self) -> (String, String) {
-        ("youtube_collector".to_string(), self.channel_id.clone())
+    fn kind(&self) -> &'static str {
+        "youtube"
+    }
+
+    fn key(&self) -> Cow<'static, str> {
+        Cow::Owned(self.channel_id.clone())
     }
 
     fn watermark(&self, item: &Self::Item) -> Self::Watermark {

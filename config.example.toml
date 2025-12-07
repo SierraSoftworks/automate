@@ -1,0 +1,72 @@
+[connections.todoist]
+api_key = "xxx"
+
+[[workflows.rss]]
+name = "Citation Needed"
+homepage = "https://citationneeded.news/"
+url = "https://citationneeded.news/rss/"
+
+[[workflows.rss]]
+name = "SRE Weekly"
+homepage = "https://sreweekly.com/"
+url = "https://sreweekly.com/feed/"
+
+[[workflows.rss]]
+name = "Tailscale Releases"
+homepage = "https://tailscale.com/changelog/"
+url = "https://tailscale.com/changelog/index.xml"
+
+[[workflows.rss]]
+name = "Word of the Day"
+homepage = "https://www.merriam-webster.com/word"
+url = "https://www.merriam-webster.com/word/feed/rss2"
+
+[[workflows.rss]]
+name = "YNAB Updates"
+homepage = "https://www.youneedabudget.com/blog/"
+url = "https://www.youneedabudget.com/blog/feed/"
+
+[[workflows.youtube]]
+name = "Alexander the Ok"
+channel_id = "UC9XjwCMWhes6R3jtOzZx50A"
+
+[[workflows.youtube]]
+name = "Dakar"
+channel_id = "UCJVKwvv58Xo3Rt4rF3NiL9w"
+filter = "title contains \"extended highlights\""
+
+[[workflows.youtube]]
+name = "Formula 1"
+channel_id = "UCB_qr75-ydFVKSF9Dmo6izg"
+filter = "title contains \"highlights | \" && !(title contains \"f2 \")"
+
+[[workflows.youtube]]
+name = "FortNine"
+channel_id = "UCNSMdQtn1SuFzCZjfK2C7dQ"
+
+[[workflows.youtube]]
+name = "Last Week Tonight"
+channel_id = "UC3XTzVzaHQEd30rQbuvCtTQ"
+
+[[workflows.youtube]]
+name = "Common Tread XP"
+channel_id = "UCLQZTXj_AnL7fDC8sLrTGMw"
+filter = "title endswith \"| common tread xp\" || title endswith \"| ctxp\""
+
+[[workflows.youtube]]
+name = "Daily Rider"
+channel_id = "UCLQZTXj_AnL7fDC8sLrTGMw"
+filter = "title endswith \"| daily rider\""
+
+[[workflows.youtube]]
+name = "The Shop Manual"
+channel_id = "UCLQZTXj_AnL7fDC8sLrTGMw"
+filter = "title endswith \"| the shop manual\""
+
+[[workflows.youtube]]
+name = "Visual Investigations"
+channel_id = "UCqnbDFdCpuN8CMEg0VuEBqA"
+filter = "title endswith \"| visual investigations\""
+
+[workflows.xkcd]
+cron = "0 8 * * *"

@@ -1,4 +1,4 @@
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 pub fn get_test_file_path<P: AsRef<str>>(name: P) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))

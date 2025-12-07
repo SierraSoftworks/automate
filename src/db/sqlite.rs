@@ -1,5 +1,7 @@
+use std::borrow::Cow;
+
 use human_errors::{self as errors, ResultExt};
-use rusqlite::{Connection, OptionalExtension, Result};
+use tokio_rusqlite::{Connection, OptionalExtension};
 
 use crate::db::{KeyValueStore, Queue};
 
@@ -17,76 +19,85 @@ const ADVICE_REPORT_DEV: &[&str] = &[
 ];
 
 impl SqliteDatabase {
-    pub fn open(path: &str) -> Result<Self, errors::Error> {
-        let connection = Connection::open(path).wrap_err_as_user(
+    pub async fn open(path: &str) -> Result<Self, errors::Error> {
+        let connection = Connection::open(path).await.wrap_err_as_user(
             format!("Unable to open SQLite database file '{path}'."),
             &["Make sure the file path is correct and accessible."],
         )?;
 
         let mut db = Self { connection };
-        db.initialize()?;
+        db.initialize().await?;
 
         Ok(db)
     }
 
     #[cfg(test)]
-    pub fn open_in_memory() -> Result<Self, errors::Error> {
-        let connection = Connection::open_in_memory().map_err_as_system(&[
+    pub async fn open_in_memory() -> Result<Self, errors::Error> {
+        let connection = Connection::open_in_memory().await.map_err_as_system(&[
             "Make sure that there is enough memory available to create an in-memory database.",
         ])?;
 
         let mut db = Self { connection };
-        db.initialize()?;
+        db.initialize().await?;
 
         Ok(db)
     }
 
-    fn initialize(&mut self) -> Result<(), errors::Error> {
-        self.connection
-            .execute(
+    async fn initialize(&mut self) -> Result<(), errors::Error> {
+        self.connection.call(|c| 
+            c.execute(
                 "CREATE TABLE IF NOT EXISTS migrations (
-                id INTEGER PRIMARY KEY
-            )",
+                    id INTEGER PRIMARY KEY
+                )",
                 [],
-            )
+            )).await
             .wrap_err_as_system(
                 "Failed to initialize the migrations table.",
                 ADVICE_DB_ERROR,
             )?;
 
         let latest_migration: usize =
-            self.connection
-                .query_one("SELECT COALESCE(MAX(id), 0) FROM migrations", [], |r| {
+            self.connection.call(|c|
+                c.query_one("SELECT COALESCE(MAX(id), 0) FROM migrations", [], |r| {
                     r.get(0)
-                }).wrap_err_as_system(
-                    "Failed to determine the latest database migration version.", 
-                    ADVICE_DB_ERROR,
-                )?;
+                })
+            ).await
+            .wrap_err_as_system(
+                "Failed to determine the latest database migration version.", 
+                ADVICE_DB_ERROR,
+            )?;
 
         for (i, migration) in MIGRATIONS.iter().enumerate().skip(latest_migration) {
-            let transaction = self.connection.transaction().map_err_as_system(ADVICE_DB_ERROR)?;
-            transaction.execute(migration, []).wrap_err_as_system(
+            self.connection.call(move |c| {
+                let transaction = c.transaction()?;
+                transaction.execute(migration, [])?;
+                transaction.execute("INSERT INTO migrations (id) VALUES (?1)", [i + 1])?;
+
+                transaction.commit()
+            }).await.wrap_err_as_system(
                 format!("Failed to apply database migration v{}.", i+1),
                 ADVICE_REPORT_DEV,
             )?;
-            transaction.execute("INSERT INTO migrations (id) VALUES (?1)", [i + 1]).map_err_as_system(ADVICE_DB_ERROR)?;
-
-            transaction.commit().map_err_as_system(ADVICE_DB_ERROR)?;
+            
         }
 
         Ok(())
     }
 }
 
+#[async_trait::async_trait]
 impl KeyValueStore for SqliteDatabase {
-    fn get<T: serde::de::DeserializeOwned>(
+    async fn get<P: Into<Cow<'static, str>> + Send, K: Into<Cow<'static, str>> + Send, T: serde::de::DeserializeOwned + Send + 'static>(
         &self,
-        partition: &str,
-        key: &str,
+        partition: P,
+        key: K,
     ) -> std::result::Result<Option<T>, errors::Error> {
+        let key = key.into();
+        let partition = partition.into();
+        
         Ok(self
             .connection
-            .query_one(
+            .call(|c| c.query_one(
                 "SELECT value FROM kv WHERE partition = ?1 AND key = ?2",
                 [partition, key],
                 |r| {
@@ -100,43 +111,39 @@ impl KeyValueStore for SqliteDatabase {
                     })?;
                     Ok(deserialized)
                 },
-            )
-            .optional().map_err_as_system(ADVICE_REPORT_DEV)?)
+            ).optional()).await
+            .map_err_as_system(ADVICE_REPORT_DEV)?)
     }
 
-    fn list<T: serde::de::DeserializeOwned>(
+    async fn list<P: Into<Cow<'static, str>> + Send, T: serde::de::DeserializeOwned + Send + 'static>(
         &self,
-        partition: &str,
+        partition: P,
     ) -> std::result::Result<Vec<(String, T)>, errors::Error> {
-        let mut stmt = self
-            .connection
-            .prepare("SELECT key, value FROM kv WHERE partition = ?1")
-            .map_err_as_system(ADVICE_REPORT_DEV)?;
-        let rows = stmt.query_map([partition], |r| {
-            let key: String = r.get(0)?;
-            let value: String = r.get(1)?;
-            let deserialized: T = serde_json::from_str(&value).map_err(|e| {
-                rusqlite::Error::FromSqlConversionFailure(
-                    1,
-                    rusqlite::types::Type::Text,
-                    Box::new(e),
-                )
-            })?;
-            Ok((key, deserialized))
-        }).map_err_as_system(ADVICE_DB_ERROR)?;
-
-        let mut results = Vec::new();
-        for row in rows {
-            results.push(row.map_err_as_system(ADVICE_DB_ERROR)?);
-        }
-
-        Ok(results)
+        let partition = partition.into();
+        self.connection.call(move |c| {
+            let mut stmt = c.prepare("SELECT key, value FROM kv WHERE partition = ?1").map_err_as_system(ADVICE_DB_ERROR)?;
+            
+            let query_iter = stmt.query_map([&partition], |r| {
+                let key: String = r.get(0)?;
+                let value: String = r.get(1)?;
+                let deserialized: T = serde_json::from_str(&value).map_err(|e| {
+                    rusqlite::Error::FromSqlConversionFailure(
+                        1,
+                        rusqlite::types::Type::Text,
+                        Box::new(e),
+                    )
+                })?;
+                Ok((key, deserialized))
+            }).map_err_as_system(ADVICE_DB_ERROR)?;
+            
+            query_iter.collect::<Result<Vec<_>, _>>().map_err_as_system(ADVICE_DB_ERROR)
+        }).await.map_err_as_system(ADVICE_DB_ERROR)
     }
 
-    fn set<T: serde::Serialize>(
+    async fn set<P: Into<Cow<'static, str>> + Send, K: Into<Cow<'static, str>> + Send, T: serde::Serialize + Send + 'static>(
         &self,
-        partition: &str,
-        key: &str,
+        partition: P,
+        key: K,
         value: T,
     ) -> std::result::Result<(), errors::Error> {
         let serialized = serde_json::to_string(&value).wrap_err_as_system(
@@ -144,31 +151,38 @@ impl KeyValueStore for SqliteDatabase {
             ADVICE_REPORT_DEV,
         )?;
 
-        self.connection.execute(
+        let partition = partition.into();
+        let key = key.into();
+
+        self.connection.call(move |c| c.execute(
             "INSERT INTO kv (partition, key, value) VALUES (?1, ?2, ?3)
              ON CONFLICT(partition, key) DO UPDATE SET value = excluded.value",
-            [partition, key, &serialized],
-        ).map_err_as_system(ADVICE_DB_ERROR)?;
-
+            (partition, key, serialized),
+        )).await.map_err_as_system(ADVICE_DB_ERROR)?;
         Ok(())
     }
 
-    fn remove(&self, partition: &str, key: &str) -> std::result::Result<(), errors::Error> {
-        self.connection.execute(
+    async fn remove<P: Into<Cow<'static, str>> + Send, K: Into<Cow<'static, str>> + Send>(&self, partition: P, key: K) -> std::result::Result<(), errors::Error> {
+        let partition = partition.into();
+        let key = key.into();
+
+        self.connection.call(move |c| c.execute(
             "DELETE FROM kv WHERE partition = ?1 AND key = ?2",
-            [partition, key],
-        ).map_err_as_system(ADVICE_DB_ERROR)?;
+            (partition, key),
+        )).await.map_err_as_system(ADVICE_DB_ERROR)?;
         Ok(())
     }
 }
 
+#[async_trait::async_trait]
 impl Queue for SqliteDatabase {
-    fn enqueue<T: serde::Serialize>(
+    async fn enqueue<P: Into<Cow<'static, str>> + Send, T: serde::Serialize + Send + 'static>(
         &self,
-        partition: &str,
+        partition: P,
         job: T,
         delay: Option<chrono::Duration>,
     ) -> std::result::Result<(), errors::Error> {
+        let partition = partition.into();
         let serialized = serde_json::to_string(&job).wrap_err_as_system(
             "Failed to serialize the queue message for storage.",
             ADVICE_REPORT_DEV,
@@ -177,66 +191,73 @@ impl Queue for SqliteDatabase {
             .map(|d| chrono::Utc::now() + d)
             .unwrap_or_else(|| chrono::DateTime::UNIX_EPOCH);
 
-        self.connection.execute(
-            "INSERT INTO queues (partition, payload, hiddenUntil) VALUES (?1, ?2, ?3)",
-            (partition, &serialized, &hidden_until),
-        ).map_err_as_system(ADVICE_DB_ERROR)?;
+        self.connection.call(move |c| {
+            c.execute(
+                "INSERT INTO queues (partition, payload, hiddenUntil) VALUES (?1, ?2, ?3)",
+                (partition, &serialized, &hidden_until),
+            )
+        }).await.map_err_as_system(ADVICE_DB_ERROR)?;
 
         Ok(())
     }
 
-    fn dequeue<T: serde::de::DeserializeOwned>(
+    async fn dequeue<P: Into<Cow<'static, str>> + Send, T: serde::de::DeserializeOwned + Send + 'static>(
         &self,
-        partition: &str,
+        partition: P,
         reserve_for: chrono::Duration,
     ) -> std::result::Result<Vec<super::QueueMessage<T>>, errors::Error> {
         let reservation_id = uuid::Uuid::new_v4().to_string();
         let reserved_until = chrono::Utc::now() + reserve_for;
 
-        self.connection.execute(
-            "UPDATE queues
-             SET reservedBy = ?1, hiddenUntil = ?2
-             WHERE partition = ?3 AND hiddenUntil < CURRENT_TIMESTAMP",
-            (&reservation_id, &reserved_until, partition),
-        ).map_err_as_system(ADVICE_DB_ERROR)?;
+        let partition = partition.into();
 
-        let mut stmt = self.connection.prepare(
-            "SELECT id, payload, scheduledAt FROM queues
-             WHERE partition = ?1 AND reservedBy = ?2 AND hiddenUntil <= ?3",
-        ).map_err_as_system(ADVICE_DB_ERROR)?;
-        let queue_iter = stmt.query_map((partition, &reservation_id, &reserved_until), |row| {
-            let id: usize = row.get(0)?;
-            let payload_str: String = row.get(1)?;
-            let scheduled_at: chrono::DateTime<chrono::Utc> = row.get(2)?;
+        self.connection.call(move |c| {
+            c.execute(
+                "UPDATE queues
+                SET reservedBy = ?1, hiddenUntil = ?2
+                WHERE partition = ?3 AND hiddenUntil < CURRENT_TIMESTAMP",
+                (&reservation_id, &reserved_until, &partition),
+            ).map_err_as_system(ADVICE_DB_ERROR)?;
 
-            let payload: T = serde_json::from_str(&payload_str).map_err(|e| {
-                rusqlite::Error::FromSqlConversionFailure(
-                    1,
-                    rusqlite::types::Type::Text,
-                    Box::new(e),
-                )
-            })?;
+            let mut stmt = c.prepare(
+                "SELECT id, payload, scheduledAt FROM queues
+                WHERE partition = ?1 AND reservedBy = ?2 AND hiddenUntil <= ?3",
+            ).map_err_as_system(ADVICE_DB_ERROR)?;
+            let queue_iter = stmt.query_map((&partition, &reservation_id, &reserved_until), |row| {
+                let id: usize = row.get(0)?;
+                let payload_str: String = row.get(1)?;
+                let scheduled_at: chrono::DateTime<chrono::Utc> = row.get(2)?;
 
-            Ok(super::QueueMessage {
-                id,
-                reservation_id: reservation_id.clone(),
-                payload,
-                scheduled_at,
-            })
-        }).map_err_as_system(ADVICE_DB_ERROR)?;
+                let payload: T = serde_json::from_str(&payload_str).map_err(|e| {
+                    rusqlite::Error::FromSqlConversionFailure(
+                        1,
+                        rusqlite::types::Type::Text,
+                        Box::new(e),
+                    )
+                })?;
 
-        Ok(queue_iter.collect::<Result<Vec<super::QueueMessage<T>>, _>>().map_err_as_system(ADVICE_DB_ERROR)?)
+                Ok(super::QueueMessage {
+                    id,
+                    reservation_id: reservation_id.clone(),
+                    payload,
+                    scheduled_at,
+                })
+            }).map_err_as_system(ADVICE_DB_ERROR)?;
+
+            queue_iter.collect::<Result<Vec<super::QueueMessage<T>>, _>>().map_err_as_system(ADVICE_DB_ERROR)
+        }).await.map_err_as_system(ADVICE_DB_ERROR)
     }
 
-    fn complete<T>(
+    async fn complete<P: Into<Cow<'static, str>> + Send, T: Send + 'static>(
         &self,
-        partition: &str,
+        partition: P,
         msg: super::QueueMessage<T>,
     ) -> std::result::Result<(), errors::Error> {
-        self.connection.execute(
+        let partition = partition.into();
+        self.connection.call(move |c| c.execute(
             "DELETE FROM queues WHERE partition = ?1 AND id = ?2 AND reservedBy = ?3",
             (partition, &msg.id, &msg.reservation_id),
-        ).map_err_as_system(ADVICE_DB_ERROR)?;
+        )).await.map_err_as_system(ADVICE_DB_ERROR)?;
         Ok(())
     }
 }
@@ -265,34 +286,35 @@ mod tests {
 
     use super::*;
 
-    #[test]
-    fn test_key_value_store_basic() {
-        let db = SqliteDatabase::open_in_memory().unwrap();
+    #[tokio::test]
+    async fn test_key_value_store_basic() {
+        let db = SqliteDatabase::open_in_memory().await.unwrap();
 
         assert_eq!(
-            None,
-            db.get::<String>("test_partition", "non_existent_key")
+            Option::<String>::None,
+            db.get("test_partition", "non_existent_key")
+                .await
                 .unwrap()
         );
 
-        db.set("test_partition", "test_key", "test_value").unwrap();
-        let value: String = db.get("test_partition", "test_key").unwrap().unwrap();
+        db.set("test_partition", "test_key", "test_value").await.unwrap();
+        let value: String = db.get("test_partition", "test_key").await.unwrap().unwrap();
         assert_eq!(value, "test_value");
 
-        let list: Vec<(String, String)> = db.list("test_partition").unwrap();
+        let list: Vec<(String, String)> = db.list("test_partition").await.unwrap();
         assert_eq!(list.len(), 1);
         assert_eq!(list[0], ("test_key".to_string(), "test_value".to_string()));
 
-        db.remove("test_partition", "test_key").unwrap();
-        let result: Option<String> = db.get("test_partition", "test_key").unwrap();
+        db.remove("test_partition", "test_key").await.unwrap();
+        let result: Option<String> = db.get("test_partition", "test_key").await.unwrap();
         assert_eq!(result, None);
     }
 
-    #[test]
-    fn test_key_value_store_json() {
-        let db = SqliteDatabase::open_in_memory().unwrap();
+    #[tokio::test]
+    async fn test_key_value_store_json() {
+        let db = SqliteDatabase::open_in_memory().await.unwrap();
 
-        #[derive(serde::Serialize, serde::Deserialize, PartialEq, Debug)]
+        #[derive(serde::Serialize, serde::Deserialize, PartialEq, Debug, Clone)]
         struct TestStruct {
             field1: String,
             field2: i32,
@@ -303,41 +325,48 @@ mod tests {
             field2: 42,
         };
 
-        db.set("test_partition", "test_key", &test_value).unwrap();
-        let value: Option<TestStruct> = db.get("test_partition", "test_key").unwrap();
+        db.set("test_partition", "test_key", test_value.clone()).await.unwrap();
+        let value: Option<TestStruct> = db.get("test_partition", "test_key").await.unwrap();
         assert_eq!(value, Some(test_value));
     }
 
-    #[test]
-    fn test_queue_basic() {
-        let db = SqliteDatabase::open_in_memory().unwrap();
+    #[tokio::test]
+    async fn test_queue_basic() {
+        let db = SqliteDatabase::open_in_memory().await.unwrap();
 
-        db.enqueue("test_queue", "job1", None).unwrap();
+        db.enqueue("test_queue", "job1", None).await.unwrap();
 
-        db.connection
-            .query_one("SELECT COUNT(*) FROM queues", [], |r| {
-                let count: i64 = r.get(0)?;
-                assert_eq!(count, 1);
-                Ok(())
-            })
+        db.connection.call(|c| {
+            c.query_one(
+                "SELECT COUNT(*) FROM queues WHERE partition = ?1",
+                ["test_queue"],
+                |r| {
+                    let count: i64 = r.get(0)?;
+                    assert_eq!(count, 1);
+                    Ok(())
+                },
+            )
+        })
+            .await
             .unwrap();
 
         let jobs: Vec<QueueMessage<String>> = db
             .dequeue("test_queue", chrono::Duration::seconds(60))
+            .await
             .unwrap();
         assert_eq!(jobs.len(), 1);
         assert_eq!(jobs[0].payload, "job1");
 
         for job in jobs.into_iter() {
-            db.complete("test_queue", job).unwrap();
+            db.complete("test_queue", job).await.unwrap();
         }
 
-        db.connection
-            .query_one("SELECT COUNT(*) FROM queues", [], |r| {
+        db.connection.call(|c| {
+            c.query_one("SELECT COUNT(*) FROM queues", [], |r| {
                 let count: i64 = r.get(0)?;
                 assert_eq!(count, 0);
                 Ok(())
             })
-            .unwrap();
+        }).await.unwrap();
     }
 }
