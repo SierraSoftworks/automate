@@ -1,9 +1,9 @@
 use std::borrow::Cow;
 
 use crate::collectors::{Collector, incremental::IncrementalCollector};
-use human_errors::ResultExt;
-use feed_rs::{model::Entry, parser::parse};
 use chrono::{DateTime, Utc};
+use feed_rs::{model::Entry, parser::parse};
+use human_errors::ResultExt;
 
 pub struct RssCollector {
     pub feed_url: String,
@@ -21,7 +21,10 @@ impl RssCollector {
 impl Collector for RssCollector {
     type Item = Entry;
 
-    async fn list(&self, services: &(impl crate::services::Services + Send + Sync + 'static)) -> Result<Vec<Self::Item>, human_errors::Error> {
+    async fn list(
+        &self,
+        services: &(impl crate::services::Services + Send + Sync + 'static),
+    ) -> Result<Vec<Self::Item>, human_errors::Error> {
         self.fetch(services).await
     }
 }
@@ -46,35 +49,54 @@ impl IncrementalCollector for RssCollector {
         watermark: Option<Self::Watermark>,
         _services: &impl crate::services::Services,
     ) -> Result<Vec<Self::Item>, human_errors::Error> {
-        let content = reqwest::get(&self.feed_url).await.wrap_err_as_user(
-            format!("Failed to fetch RSS feed from URL '{}'.", &self.feed_url),
-            &[
-                "Check that the URL is correct and that the server is reachable.",
-                "Check that your network connection is working properly.",
-            ],
-        )?.bytes().await.wrap_err_as_user(
-            format!("Failed to read the content of the RSS feed from URL '{}'.", &self.feed_url),
-            &[
-                "Check that the URL is correct and that the server is reachable.",
-                "Check that your network connection is working properly.",
-            ],
-        )?;
+        let content = reqwest::get(&self.feed_url)
+            .await
+            .wrap_err_as_user(
+                format!("Failed to fetch RSS feed from URL '{}'.", &self.feed_url),
+                &[
+                    "Check that the URL is correct and that the server is reachable.",
+                    "Check that your network connection is working properly.",
+                ],
+            )?
+            .bytes()
+            .await
+            .wrap_err_as_user(
+                format!(
+                    "Failed to read the content of the RSS feed from URL '{}'.",
+                    &self.feed_url
+                ),
+                &[
+                    "Check that the URL is correct and that the server is reachable.",
+                    "Check that your network connection is working properly.",
+                ],
+            )?;
 
-        parse(&content[..]).wrap_err_as_user(
-            format!("Failed to parse RSS feed information from URL '{}'.", self.feed_url), 
-            &[
-                "Ensure that the content at the URL is a valid RSS feed.",
-            ],
-        ).map(|feed| feed.entries.into_iter()
-            .filter(|item| watermark.map(|wm| wm < self.watermark(item)).unwrap_or(true)).collect())
+        parse(&content[..])
+            .wrap_err_as_user(
+                format!(
+                    "Failed to parse RSS feed information from URL '{}'.",
+                    self.feed_url
+                ),
+                &["Ensure that the content at the URL is a valid RSS feed."],
+            )
+            .map(|feed| {
+                feed.entries
+                    .into_iter()
+                    .filter(|item| {
+                        watermark
+                            .map(|wm| wm < self.watermark(item))
+                            .unwrap_or(true)
+                    })
+                    .collect()
+            })
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use wiremock::{MockServer, Mock, ResponseTemplate};
     use wiremock::matchers::method;
+    use wiremock::{Mock, MockServer, ResponseTemplate};
 
     #[tokio::test]
     async fn test_rss_collector_fetch() {
@@ -92,7 +114,11 @@ mod tests {
         let services = crate::testing::mock_services().await.unwrap();
 
         let items = collector.fetch_since(None, &services).await.unwrap();
-        assert_eq!(items.len(), 4, "Expected to fetch 4 RSS items from test data");
+        assert_eq!(
+            items.len(),
+            4,
+            "Expected to fetch 4 RSS items from test data"
+        );
         assert_eq!(items[0].title.as_ref().unwrap().content, "Eclipse Clouds");
         assert_eq!(items[3].title.as_ref().unwrap().content, "Cursive Letters");
     }
@@ -116,10 +142,10 @@ mod tests {
         let watermark = Some(
             DateTime::parse_from_rfc2822("Mon, 01 Apr 2024 04:00:00 -0000")
                 .unwrap()
-                .with_timezone(&Utc)
+                .with_timezone(&Utc),
         );
         let items = collector.fetch_since(watermark, &services).await.unwrap();
-        
+
         assert_eq!(items.len(), 1, "Expected only items after watermark");
         assert_eq!(items[0].title.as_ref().unwrap().content, "Eclipse Clouds");
     }

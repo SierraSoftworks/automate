@@ -2,7 +2,7 @@ use std::iter::Peekable;
 
 use human_errors::{Error, ResultExt};
 
-use super::{expr::Expr, token::Token, FilterValue};
+use super::{FilterValue, expr::Expr, token::Token};
 
 pub struct Parser<'a, I: Iterator<Item = Result<Token<'a>, Error>>> {
     tokens: Peekable<I>,
@@ -116,44 +116,52 @@ impl<'a, I: Iterator<Item = Result<Token<'a>, Error>>> Parser<'a, I> {
                     Ok(expr)
                 } else {
                     Err(human_errors::user(
-                        format!("When attempting to parse a grouped filter expression starting at {}, we didn't find the closing ')' where we expected to.", start.location()),
+                        format!(
+                            "When attempting to parse a grouped filter expression starting at {}, we didn't find the closing ')' where we expected to.",
+                            start.location()
+                        ),
                         &["Make sure that you have balanced your parentheses correctly."],
                     ))
                 }
             }
             Some(Ok(Token::LeftBracket(..))) => {
-              let start = self.tokens.next().unwrap()?;
-              let mut items = Vec::new();
-              while !matches!(self.tokens.peek(), Some(Ok(Token::RightBracket(..)))) {
-                  items.push(self.literal()?);
-                  if matches!(self.tokens.peek(), Some(Ok(Token::Comma(..)))) {
-                      self.tokens.next();
-                  } else {
-                      break;
-                  }
-              }
+                let start = self.tokens.next().unwrap()?;
+                let mut items = Vec::new();
+                while !matches!(self.tokens.peek(), Some(Ok(Token::RightBracket(..)))) {
+                    items.push(self.literal()?);
+                    if matches!(self.tokens.peek(), Some(Ok(Token::Comma(..)))) {
+                        self.tokens.next();
+                    } else {
+                        break;
+                    }
+                }
 
-              if let Some(Ok(Token::RightBracket(..))) = self.tokens.next() {
-                Ok(Expr::Literal(items.into()))
-              } else {
-                Err(human_errors::user(
-                    format!("When attempting to parse a list filter expression starting at {}, we didn't find the closing ']' where we expected to.", start.location()),
-                    &["Make sure that you have closed your tuple brackets correctly."],
-                ))
-              }
+                if let Some(Ok(Token::RightBracket(..))) = self.tokens.next() {
+                    Ok(Expr::Literal(items.into()))
+                } else {
+                    Err(human_errors::user(
+                        format!(
+                            "When attempting to parse a list filter expression starting at {}, we didn't find the closing ']' where we expected to.",
+                            start.location()
+                        ),
+                        &["Make sure that you have closed your tuple brackets correctly."],
+                    ))
+                }
             }
             Some(Ok(Token::Property(..))) => {
-              if let Some(Ok(Token::Property(.., p))) = self.tokens.next() {
-                Ok(Expr::Property(p))
-              } else {
-                unreachable!()
-              }
-            },
+                if let Some(Ok(Token::Property(.., p))) = self.tokens.next() {
+                    Ok(Expr::Property(p))
+                } else {
+                    unreachable!()
+                }
+            }
             Some(Ok(..)) => self.literal().map(Expr::Literal),
             Some(Err(..)) => Err(self.tokens.next().unwrap().unwrap_err()),
             None => Err(human_errors::user(
                 "We reached the end of your filter expression while waiting for a [true, false, \"string\", number, (group), or property.name].",
-                &["Make sure that you have written a valid filter query and that you haven't forgotten part of it."],
+                &[
+                    "Make sure that you have written a valid filter query and that you haven't forgotten part of it.",
+                ],
             )),
         }
     }
@@ -185,7 +193,7 @@ impl<'a, I: Iterator<Item = Result<Token<'a>, Error>>> Parser<'a, I> {
 mod tests {
     use rstest::rstest;
 
-    use crate::filter::{location::Loc, FilterValue};
+    use crate::filter::{FilterValue, location::Loc};
 
     use super::*;
 
@@ -255,16 +263,16 @@ mod tests {
         "Your filter expression contained an unexpected 'false' at line 1, column 6."
     )]
     #[case(
-      "true ==",
-      "We reached the end of your filter expression while waiting for a [true, false, \"string\", number, (group), or property.name]."
+        "true ==",
+        "We reached the end of your filter expression while waiting for a [true, false, \"string\", number, (group), or property.name]."
     )]
     #[case(
-      "(true",
-      "When attempting to parse a grouped filter expression starting at line 1, column 1, we didn't find the closing ')' where we expected to."
+        "(true",
+        "When attempting to parse a grouped filter expression starting at line 1, column 1, we didn't find the closing ')' where we expected to."
     )]
     #[case(
-      "[true, false",
-      "When attempting to parse a list filter expression starting at line 1, column 1, we didn't find the closing ']' where we expected to."
+        "[true, false",
+        "When attempting to parse a list filter expression starting at line 1, column 1, we didn't find the closing ']' where we expected to."
     )]
     #[case(
         ")",

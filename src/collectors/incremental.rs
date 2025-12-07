@@ -19,9 +19,16 @@ pub trait IncrementalCollector: Collector {
 
     fn watermark(&self, item: &Self::Item) -> Self::Watermark;
 
-    async fn fetch_since(&self, watermark: Option<Self::Watermark>, services: &impl Services) -> Result<Vec<Self::Item>, human_errors::Error>;
-    
-    async fn fetch(&self, services: &impl Services) -> Result<Vec<Self::Item>, human_errors::Error> {
+    async fn fetch_since(
+        &self,
+        watermark: Option<Self::Watermark>,
+        services: &impl Services,
+    ) -> Result<Vec<Self::Item>, human_errors::Error>;
+
+    async fn fetch(
+        &self,
+        services: &impl Services,
+    ) -> Result<Vec<Self::Item>, human_errors::Error> {
         let partition = self.partition(None);
         let key = self.key();
 

@@ -1,6 +1,5 @@
 use human_errors as errors;
-use chrono::DateTime;
-use icalendar::{Calendar, CalendarComponent, CalendarDateTime, Component, DatePerhapsTime, Event};
+use icalendar::{CalendarDateTime, Component, DatePerhapsTime, Event};
 
 pub enum DateOrTime {
     Date(chrono::NaiveDate),
@@ -71,6 +70,8 @@ where
 
 #[cfg(test)]
 mod tests {
+    use icalendar::{Calendar, CalendarComponent};
+
     use super::*;
     use crate::testing::get_test_file_contents;
 

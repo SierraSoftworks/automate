@@ -1,4 +1,7 @@
-use htmd::{Element, element_handler::{HandlerResult, Handlers}};
+use htmd::{
+    Element,
+    element_handler::{HandlerResult, Handlers},
+};
 use reqwest::Url;
 
 pub fn html_to_markdown(html: &str, base_url: Url) -> String {
@@ -11,19 +14,28 @@ pub fn html_to_markdown(html: &str, base_url: Url) -> String {
             code_block_fence: htmd::options::CodeBlockFence::Backticks,
             ..Default::default()
         })
-        .add_handler(vec!["a"], move |handlers: &dyn Handlers, element: Element| {
-            if let Some(href) = element.attrs.iter().find(|a| a.name.local.to_string() == "href") {
-                let new_url = base_url.join(&href.value.to_string()).unwrap_or_else(|_| base_url.clone());
-                let content = handlers.walk_children(element.node).content;
+        .add_handler(
+            vec!["a"],
+            move |handlers: &dyn Handlers, element: Element| {
+                if let Some(href) = element
+                    .attrs
+                    .iter()
+                    .find(|a| a.name.local.to_string() == "href")
+                {
+                    let new_url = base_url
+                        .join(&href.value.to_string())
+                        .unwrap_or_else(|_| base_url.clone());
+                    let content = handlers.walk_children(element.node).content;
 
-                Some(HandlerResult {
-                    content: format!("[{}]({})", content, new_url),
-                    markdown_translated: true,
-                })
-            } else {
-                handlers.fallback(element)
-            }
-        })
+                    Some(HandlerResult {
+                        content: format!("[{}]({})", content, new_url),
+                        markdown_translated: true,
+                    })
+                } else {
+                    handlers.fallback(element)
+                }
+            },
+        )
         .build()
         .convert(html)
         .unwrap_or_default()

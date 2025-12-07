@@ -71,7 +71,10 @@ impl<'a> Scanner<'a> {
         }
 
         Err(human_errors::user(
-            format!("Reached the end of the filter without finding the closing quote for a string starting at {}.", start_loc),
+            format!(
+                "Reached the end of the filter without finding the closing quote for a string starting at {}.",
+                start_loc
+            ),
             &["Make sure that you have terminated your string with a '\"' character."],
         ))
     }
@@ -166,10 +169,15 @@ impl<'a> Iterator for Scanner<'a> {
                         ))))
                     } else {
                         Some(Err(human_errors::user(
-                            format!("Filter included an orphaned '&' at {} which is not a valid operator.", Loc::new(self.line, 1 + idx - self.line_start)),
-                            &["Ensure that you are using the '&&' operator to implement a logical AND within your filter."]
+                            format!(
+                                "Filter included an orphaned '&' at {} which is not a valid operator.",
+                                Loc::new(self.line, 1 + idx - self.line_start)
+                            ),
+                            &[
+                                "Ensure that you are using the '&&' operator to implement a logical AND within your filter.",
+                            ],
                         )))
-                    }
+                    };
                 }
                 '|' => {
                     return if self.match_char('|') {
@@ -179,10 +187,15 @@ impl<'a> Iterator for Scanner<'a> {
                         ))))
                     } else {
                         Some(Err(human_errors::user(
-                            format!("Filter included an orphaned '|' at {} which is not a valid operator.", Loc::new(self.line, 1 + idx - self.line_start)),
-                            &["Ensure that you are using the '||' operator to implement a logical OR within your filter."]
+                            format!(
+                                "Filter included an orphaned '|' at {} which is not a valid operator.",
+                                Loc::new(self.line, 1 + idx - self.line_start)
+                            ),
+                            &[
+                                "Ensure that you are using the '||' operator to implement a logical OR within your filter.",
+                            ],
                         )))
-                    }
+                    };
                 }
                 '=' => {
                     return if self.match_char('=') {
@@ -192,10 +205,15 @@ impl<'a> Iterator for Scanner<'a> {
                         ))))
                     } else {
                         Some(Err(human_errors::user(
-                            format!("Filter included an orphaned '=' at {} which is not a valid operator.", Loc::new(self.line, 1 + idx - self.line_start)),
-                            &["Ensure that you are using the '==' operator to implement a logical equality within your filter."]
+                            format!(
+                                "Filter included an orphaned '=' at {} which is not a valid operator.",
+                                Loc::new(self.line, 1 + idx - self.line_start)
+                            ),
+                            &[
+                                "Ensure that you are using the '==' operator to implement a logical equality within your filter.",
+                            ],
                         )))
-                    }
+                    };
                 }
                 '!' => {
                     return if self.match_char('=') {
@@ -208,7 +226,7 @@ impl<'a> Iterator for Scanner<'a> {
                             self.line,
                             1 + idx - self.line_start,
                         ))))
-                    }
+                    };
                 }
                 '>' => {
                     return if self.match_char('=') {
@@ -221,7 +239,7 @@ impl<'a> Iterator for Scanner<'a> {
                             self.line,
                             idx - self.line_start,
                         ))))
-                    }
+                    };
                 }
                 '<' => {
                     return if self.match_char('=') {
@@ -234,7 +252,7 @@ impl<'a> Iterator for Scanner<'a> {
                             self.line,
                             idx - self.line_start,
                         ))))
-                    }
+                    };
                 }
                 '"' => {
                     return Some(self.read_string(idx));

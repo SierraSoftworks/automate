@@ -1,11 +1,18 @@
 use std::fmt::Display;
 
-use serde::{Deserialize};
+use serde::{Deserialize, Serialize};
 
-use crate::{collectors::{Collector, XkcdCollector, XkcdItem}, filter::{Filter, Filterable}, publishers::{Publisher, PublisherConfig, TodoistConfig, TodoistPublisher}, services::Services, workflows::Workflow};
+use crate::prelude::*;
+use crate::publishers::{TodoistCreateTask, TodoistCreateTaskPayload};
+use crate::{
+    collectors::{Collector, XkcdCollector},
+    config::TodoistConfig,
+    filter::Filter,
+    services::Services,
+};
 
-#[derive(Clone, Deserialize)]
-pub struct Xkcd {
+#[derive(Clone, Serialize, Deserialize)]
+pub struct XkcdConfig {
     #[serde(default)]
     pub filter: Filter,
 
@@ -20,65 +27,61 @@ fn default_cron() -> croner::Cron {
     "@hourly".parse().unwrap()
 }
 
-fn default_todoist_config() -> TodoistConfig {
-    TodoistConfig {
-        project: Some("Hobbies".into()),
-        section: Some("Reading".into()),
-        priority: Some(2),
-        ..Default::default()
+impl CronWorkflow for XkcdConfig {
+    fn schedule(&self) -> croner::Cron {
+        self.cron.clone()
     }
 }
 
-impl Display for Xkcd {
+impl Display for XkcdConfig {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "xkcd")
     }
 }
 
-impl<S: Services + Clone + Send + Sync + 'static> Workflow<S> for Xkcd {
-    async fn run(self, services: S) -> Result<(), human_errors::Error> {
-        let Xkcd{ filter, cron, todoist } = self.clone();
+pub struct XkcdToTodoistWorkflow;
 
-        let todoist = services.connections().todoist.merge(&default_todoist_config()).merge(&todoist);
+impl<S: Services + Clone + Send + Sync + 'static> Job<S> for XkcdToTodoistWorkflow {
+    type JobType = XkcdConfig;
 
-        crate::engines::cron(format!("{}", &self), cron, services, async move |services| {
-            let collector = XkcdCollector::new();
-            let publisher = TodoistPublisher;
+    fn partition() -> &'static str {
+        "workflow/xkcd-todoist"
+    }
 
-            let items = collector.list(&services).await?;
+    async fn handle(&self, job: &Self::JobType, services: S) -> Result<(), human_errors::Error> {
+        let collector = XkcdCollector::new();
 
-            for item in items.into_iter() {
-                match filter.matches(&XkcdEntryFilter(&item)) {
-                    Ok(false) => continue,
-                    Err(err) => {
-                        return Err(err);
-                    }
-                    _ => {}
+        let items = collector.list(&services).await?;
+
+        for item in items.into_iter() {
+            match job.filter.matches(&item) {
+                Ok(false) => continue,
+                Err(err) => {
+                    return Err(err);
                 }
-
-                publisher.publish(todoist_api::CreateTaskArgs {
-                    content: format!("[XKCD]({}): {}", &item.url, item.title),
-                    description: item.image_url.map(|url| format!("![XKCD]({})\n\n*{}*", url, item.image_alt.unwrap_or_default())),
-                    due_string: Some("today".into()),
-                    ..Default::default()
-                }, todoist.clone(), &services).await?;
+                _ => {}
             }
 
-            Ok(())
-        }).await
-    }
-}
-
-struct XkcdEntryFilter<'a>(&'a XkcdItem);
-
-impl<'a> Filterable for XkcdEntryFilter<'a> {
-    fn get(&self, key: &str) -> crate::filter::FilterValue {
-        match key {
-            "title" => self.0.title.clone().into(),
-            "published" => self.0.published.to_rfc3339().into(),
-            "link" => self.0.url.clone().into(),
-            "has_image" => self.0.image_url.is_some().into(),       
-            _ => crate::filter::FilterValue::Null,
+            TodoistCreateTask::dispatch(
+                TodoistCreateTaskPayload {
+                    title: format!("[XKCD]({}): {}", &item.url, item.title),
+                    description: item.image_url.map(|url| {
+                        format!(
+                            "![XKCD]({})\n\n*{}*",
+                            url,
+                            item.image_alt.unwrap_or_default()
+                        )
+                    }),
+                    due: crate::publishers::TodoistDueDate::Today,
+                    config: job.todoist.clone(),
+                    ..Default::default()
+                },
+                None,
+                &services,
+            )
+            .await?;
         }
+
+        Ok(())
     }
 }

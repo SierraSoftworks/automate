@@ -71,5 +71,5 @@ name = "Visual Investigations"
 channel_id = "UCqnbDFdCpuN8CMEg0VuEBqA"
 filter = "title endswith \"| visual investigations\""
 
-[workflows.xkcd]
+[[workflows.xkcd]]
 cron = "0 8 * * *"

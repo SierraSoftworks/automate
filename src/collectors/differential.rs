@@ -2,11 +2,17 @@ use std::borrow::Cow;
 
 use crate::{collectors::Collector, db::KeyValueStore, services::Services};
 
+#[allow(dead_code)]
 pub trait DifferentialCollector: Collector {
-    type Identifier: Eq + std::hash::Hash + serde::Serialize + serde::de::DeserializeOwned + Send + 'static;
+    type Identifier: Eq
+        + std::hash::Hash
+        + serde::Serialize
+        + serde::de::DeserializeOwned
+        + Send
+        + 'static;
 
     fn kind(&self) -> &'static str;
-    
+
     fn partition(&self, namespace: Option<&'static str>) -> String {
         if let Some(ns) = namespace {
             format!("collector::{ns}::{}", self.kind())
@@ -26,7 +32,11 @@ pub trait DifferentialCollector: Collector {
         let key = self.key();
 
         let new_items = self.fetch().await?;
-        let known_identifiers: Vec<Self::Identifier> = services.kv().get(partition.clone(), key.clone()).await?.unwrap_or_default();
+        let known_identifiers: Vec<Self::Identifier> = services
+            .kv()
+            .get(partition.clone(), key.clone())
+            .await?
+            .unwrap_or_default();
         let known_set: std::collections::HashSet<_> = known_identifiers.into_iter().collect();
         let filtered_items: Vec<_> = new_items
             .into_iter()

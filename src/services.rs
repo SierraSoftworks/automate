@@ -2,20 +2,25 @@ use std::sync::Arc;
 
 use crate::config::ConnectionConfigs;
 
-pub trait Services {
-    fn kv(&self) -> Arc<impl crate::db::KeyValueStore + Send + Sync>;
-    fn queue(&self) -> Arc<impl crate::db::Queue + Send + Sync>;
-    fn cache(&self) -> Arc<impl crate::db::Cache + Send + Sync>;
-
+pub trait Services
+where
+    Self: Sized,
+{
     fn connections(&self) -> Arc<ConnectionConfigs>;
+
+    fn kv(&self) -> impl crate::db::KeyValueStore + Clone + Send + Sync + 'static;
+    fn queue(&self) -> impl crate::db::Queue + Clone + Send + Sync + 'static;
+    fn cache(&self) -> impl crate::db::Cache + Clone + Send + Sync + 'static;
 }
 
 pub struct ServicesContainer<D: crate::db::KeyValueStore + crate::db::Queue + crate::db::Cache> {
-    pub database: Arc<D>,
+    pub database: D,
     pub connections: Arc<ConnectionConfigs>,
 }
 
-impl<D: crate::db::KeyValueStore + crate::db::Queue + crate::db::Cache> Clone for ServicesContainer<D> {
+impl<D: crate::db::KeyValueStore + crate::db::Queue + crate::db::Cache + Clone> Clone
+    for ServicesContainer<D>
+{
     fn clone(&self) -> Self {
         Self {
             database: self.database.clone(),
@@ -24,13 +29,13 @@ impl<D: crate::db::KeyValueStore + crate::db::Queue + crate::db::Cache> Clone fo
     }
 }
 
-impl <D> ServicesContainer<D>
+impl<D> ServicesContainer<D>
 where
     D: crate::db::KeyValueStore + crate::db::Queue + crate::db::Cache,
 {
     pub fn new(database: D, connections: ConnectionConfigs) -> Self {
         Self {
-            database: Arc::new(database),
+            database,
             connections: Arc::new(connections),
         }
     }
@@ -47,17 +52,23 @@ impl ServicesContainer<crate::db::SqliteDatabase> {
 
 impl<D> Services for ServicesContainer<D>
 where
-    D: crate::db::KeyValueStore + crate::db::Queue + crate::db::Cache + Send + Sync,
+    D: crate::db::KeyValueStore
+        + crate::db::Queue
+        + crate::db::Cache
+        + Clone
+        + Send
+        + Sync
+        + 'static,
 {
-    fn kv(&self) -> Arc<impl crate::db::KeyValueStore + Send + Sync> {
+    fn kv(&self) -> impl crate::db::KeyValueStore + Clone + Send + Sync + 'static {
         self.database.clone()
     }
 
-    fn queue(&self) -> Arc<impl crate::db::Queue + Send + Sync> {
+    fn queue(&self) -> impl crate::db::Queue + Clone + Send + Sync + 'static {
         self.database.clone()
     }
 
-    fn cache(&self) -> Arc<impl crate::db::Cache + Send + Sync> {
+    fn cache(&self) -> impl crate::db::Cache + Clone + Send + Sync + 'static {
         self.database.clone()
     }
 

@@ -1,14 +1,16 @@
 use std::fmt::Display;
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
-use super::{Workflow, Services};
-use crate::collectors::*;
-use crate::filter::{Filter, Filterable};
-use crate::publishers::*;
+use crate::{
+    collectors::YouTubeCollector,
+    config::TodoistConfig,
+    prelude::*,
+    publishers::{TodoistCreateTask, TodoistCreateTaskPayload},
+};
 
-#[derive(Clone, Deserialize)]
-pub struct YouTube {
+#[derive(Clone, Serialize, Deserialize)]
+pub struct YouTubeConfig {
     pub name: String,
     pub channel_id: String,
 
@@ -26,64 +28,63 @@ fn default_cron() -> croner::Cron {
     "@hourly".parse().unwrap()
 }
 
-
-fn default_todoist_config() -> TodoistConfig {
-    TodoistConfig {
-        project: Some("Hobbies".into()),
-        section: Some("Movies and Series".into()),
-        priority: Some(2),
-        ..Default::default()
+impl CronWorkflow for YouTubeConfig {
+    fn schedule(&self) -> croner::Cron {
+        self.cron.clone()
     }
 }
 
-impl Display for YouTube {
+impl Display for YouTubeConfig {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "youtube/{}", self.name)
     }
 }
 
-impl<S: Services + Clone + Send + Sync + 'static> Workflow<S> for YouTube {
-    async fn run(self, services: S) -> Result<(), human_errors::Error> {
-        let YouTube{ name, channel_id, cron, filter, todoist } = self.clone();
-        let todoist = services.connections().todoist.merge(&default_todoist_config()).merge(&todoist);
+pub struct YouTubeToTodoistWorkflow;
 
-        crate::engines::cron(format!("{}", &self), cron, services, async move |services| {
-            let collector = YouTubeCollector::new(&channel_id);
-            let publisher = TodoistPublisher;
+impl<S: Services + Clone + Send + Sync + 'static> Job<S> for YouTubeToTodoistWorkflow {
+    type JobType = YouTubeConfig;
 
-            let items = collector.list(&services).await?;
+    fn partition() -> &'static str {
+        "workflow/youtube-todoist"
+    }
 
-            for item in items.into_iter() {
-                match filter.matches(&YouTubeEntryFilter(&item)) {
-                    Ok(false) => continue,
-                    Err(err) => {
-                        return Err(err);
-                    }
-                    _ => {}
+    async fn handle(&self, job: &Self::JobType, services: S) -> Result<(), human_errors::Error> {
+        let collector = YouTubeCollector::new(&job.channel_id);
+
+        let items = collector.list(&services).await?;
+
+        for item in items.into_iter() {
+            match job.filter.matches(&item) {
+                Ok(false) => continue,
+                Err(err) => {
+                    return Err(err);
                 }
-
-                publisher.publish(todoist_api::CreateTaskArgs {
-                    content: format!("[{}]({}): {}", if item.channel.is_empty() { &name } else { &item.channel }, item.link, item.title),
-                    due_string: Some("today".into()),
-                    ..Default::default()
-                }, todoist.clone(), &services).await?;
+                _ => {}
             }
 
-            Ok(())
-        }).await
-    }
-}
-
-
-struct YouTubeEntryFilter<'a>(&'a YouTubeItem);
-
-impl<'a> Filterable for YouTubeEntryFilter<'a> {
-    fn get(&self, key: &str) -> crate::filter::FilterValue {
-        match key {
-            "channel" => self.0.channel.clone().into(),
-            "title" => self.0.title.clone().into(),
-            "link" => self.0.link.clone().into(),
-            _ => crate::filter::FilterValue::Null,
+            TodoistCreateTask::dispatch(
+                TodoistCreateTaskPayload {
+                    title: format!(
+                        "[{}]({}): {}",
+                        if item.channel.is_empty() {
+                            &job.name
+                        } else {
+                            &item.channel
+                        },
+                        item.link,
+                        item.title
+                    ),
+                    due: crate::publishers::TodoistDueDate::Today,
+                    config: job.todoist.clone(),
+                    ..Default::default()
+                },
+                None,
+                &services,
+            )
+            .await?;
         }
+
+        Ok(())
     }
 }

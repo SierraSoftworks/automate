@@ -1,9 +1,10 @@
 mod collectors;
 mod config;
 mod db;
-mod engines;
 mod filter;
+mod job;
 mod parsers;
+mod prelude;
 mod publishers;
 mod services;
 mod workflows;
@@ -13,7 +14,7 @@ mod testing;
 
 use clap::Parser;
 
-use crate::config::Config;
+use crate::prelude::*;
 
 #[derive(Parser)]
 #[command(version, about, long_about = None)]
@@ -39,7 +40,6 @@ async fn main() {
     } else {
         telemetry.shutdown();
     }
-
 }
 
 async fn run() -> Result<(), human_errors::Error> {
@@ -50,7 +50,13 @@ async fn run() -> Result<(), human_errors::Error> {
     let db = db::SqliteDatabase::open("database.sqlite").await.unwrap();
     let services = services::ServicesContainer::new(db, config.connections);
 
-    config.workflows.run_all(services).await?;
+    tokio::try_join!(
+        crate::workflows::GitHubReleasesToTodoistWorkflow.run(services.clone()),
+        crate::workflows::RssToTodoistWorkflow.run(services.clone()),
+        crate::publishers::TodoistCreateTask.run(services.clone()),
+        config.workflows.run_all(services)
+    )
+    .map_err_as_user(&[])?;
 
     Ok(())
 }
