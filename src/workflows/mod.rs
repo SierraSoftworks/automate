@@ -4,8 +4,8 @@ use crate::{db::Queue, job::Job, services::Services};
 
 mod github_releases_to_todoist;
 mod rss_to_todoist;
-mod xkcd;
-mod youtube;
+mod xkcd_to_todoist;
+mod youtube_to_todoist;
 
 use chrono::Utc;
 pub use github_releases_to_todoist::{GitHubReleasesConfig, GitHubReleasesToTodoistWorkflow};
@@ -13,8 +13,8 @@ use human_errors::ResultExt;
 pub use rss_to_todoist::{RssConfig, RssToTodoistWorkflow};
 use serde::{Serialize, de::DeserializeOwned};
 use tracing_batteries::prelude::*;
-pub use xkcd::{XkcdConfig, XkcdToTodoistWorkflow};
-pub use youtube::{YouTubeConfig, YouTubeToTodoistWorkflow};
+pub use xkcd_to_todoist::{XkcdConfig, XkcdToTodoistWorkflow};
+pub use youtube_to_todoist::{YouTubeConfig, YouTubeToTodoistWorkflow};
 
 pub trait CronWorkflow:
     Display + Clone + Serialize + DeserializeOwned + Send + Sync + 'static
