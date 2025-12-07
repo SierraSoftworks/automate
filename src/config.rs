@@ -37,7 +37,9 @@ impl Config {
 
 #[derive(Default, Clone, Deserialize)]
 pub struct ConnectionConfigs {
+    #[serde(default)]
     pub todoist: TodoistConfig,
+    #[serde(default)]
     pub github: GitHubConfig,
 }
 
@@ -67,7 +69,7 @@ impl WorkflowConfigs {
             info!("Registered workflow {}", &workflow);
             join_handles.push(tokio::spawn(workflow.run(services.clone())));
         }
-        
+
         if let Some(xkcd_workflow) = self.xkcd {
             info!("Registered workflow {}", &xkcd_workflow);
             join_handles.push(tokio::spawn(xkcd_workflow.run(services.clone())));
