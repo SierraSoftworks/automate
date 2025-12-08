@@ -1,11 +1,15 @@
 use std::path::PathBuf;
 
-use human_errors::ResultExt;
 use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Deserialize)]
+use crate::prelude::*;
+use crate::webhooks::*;
+use crate::workflows::*;
+
+#[derive(Clone, Deserialize, Default)]
 pub struct Config {
     pub connections: ConnectionConfigs,
+    pub webhooks: WebhookConfigs,
     pub workflows: WorkflowConfigs,
 }
 
@@ -42,24 +46,33 @@ pub struct ConnectionConfigs {
     pub github: GitHubConfig,
 }
 
-#[derive(Clone, Deserialize)]
+#[derive(Clone, Deserialize, Default)]
+pub struct WebhookConfigs {
+    #[serde(default)]
+    pub honeycomb: HoneycombConfig,
+}
+
+#[derive(Clone, Deserialize, Default)]
 pub struct WorkflowConfigs {
-    pub github_releases: Vec<crate::workflows::CronJobConfig<crate::workflows::GitHubReleasesWorkflow>>,
-    pub rss: Vec<crate::workflows::CronJobConfig<crate::workflows::RssWorkflow>>,
-    pub youtube: Vec<crate::workflows::CronJobConfig<crate::workflows::YouTubeWorkflow>>,
-    pub xkcd: Vec<crate::workflows::CronJobConfig<crate::workflows::XkcdWorkflow>>,
+    pub github_releases: Vec<CronJobConfig<GitHubReleasesWorkflow>>,
+    pub rss: Vec<CronJobConfig<RssWorkflow>>,
+    pub youtube: Vec<CronJobConfig<YouTubeWorkflow>>,
+    pub xkcd: Vec<CronJobConfig<XkcdWorkflow>>,
 }
 
 #[derive(Default, Clone, Deserialize)]
 pub struct GitHubConfig {
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub api_key: Option<String>,
 }
 
 #[derive(Clone, Serialize, Deserialize, Default)]
 pub struct TodoistConfig {
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub api_key: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub project: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub section: Option<String>,
 }
 

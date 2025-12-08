@@ -1,12 +1,12 @@
 use std::sync::Arc;
 
-use crate::config::ConnectionConfigs;
+use crate::config::Config;
 
 pub trait Services
 where
     Self: Sized,
 {
-    fn connections(&self) -> Arc<ConnectionConfigs>;
+    fn config(&self) -> &crate::config::Config;
 
     fn kv(&self) -> impl crate::db::KeyValueStore + Clone + Send + Sync + 'static;
     fn queue(&self) -> impl crate::db::Queue + Clone + Send + Sync + 'static;
@@ -14,8 +14,8 @@ where
 }
 
 pub struct ServicesContainer<D: crate::db::KeyValueStore + crate::db::Queue + crate::db::Cache> {
+    pub config: Arc<Config>,
     pub database: D,
-    pub connections: Arc<ConnectionConfigs>,
 }
 
 impl<D: crate::db::KeyValueStore + crate::db::Queue + crate::db::Cache + Clone> Clone
@@ -23,8 +23,8 @@ impl<D: crate::db::KeyValueStore + crate::db::Queue + crate::db::Cache + Clone> 
 {
     fn clone(&self) -> Self {
         Self {
+            config: self.config.clone(),
             database: self.database.clone(),
-            connections: self.connections.clone(),
         }
     }
 }
@@ -33,10 +33,10 @@ impl<D> ServicesContainer<D>
 where
     D: crate::db::KeyValueStore + crate::db::Queue + crate::db::Cache,
 {
-    pub fn new(database: D, connections: ConnectionConfigs) -> Self {
+    pub fn new(config: crate::config::Config, database: D) -> Self {
         Self {
+            config: Arc::new(config),
             database,
-            connections: Arc::new(connections),
         }
     }
 }
@@ -45,8 +45,8 @@ where
 impl ServicesContainer<crate::db::SqliteDatabase> {
     pub async fn new_mock() -> Result<Self, human_errors::Error> {
         let database = crate::db::SqliteDatabase::open_in_memory().await?;
-        let connections = ConnectionConfigs::default();
-        Ok(Self::new(database, connections))
+        let config = Config::default();
+        Ok(Self::new(config, database))
     }
 }
 
@@ -60,6 +60,10 @@ where
         + Sync
         + 'static,
 {
+    fn config(&self) -> &crate::config::Config {
+        todo!("Implement config retrieval for ServicesContainer")
+    }
+
     fn kv(&self) -> impl crate::db::KeyValueStore + Clone + Send + Sync + 'static {
         self.database.clone()
     }
@@ -70,9 +74,5 @@ where
 
     fn cache(&self) -> impl crate::db::Cache + Clone + Send + Sync + 'static {
         self.database.clone()
-    }
-
-    fn connections(&self) -> Arc<ConnectionConfigs> {
-        self.connections.clone()
     }
 }

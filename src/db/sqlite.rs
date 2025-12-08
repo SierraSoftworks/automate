@@ -249,7 +249,7 @@ impl Queue for SqliteDatabase {
                     "INSERT INTO queues (partition, key, payload, hiddenUntil) VALUES (?1, ?2, ?3, ?4)
                         ON CONFLICT (partition, key)
                         DO UPDATE
-                        SET payload = ?3, hiddenUntil = ?4, reservedBy = NULL",
+                        SET payload = ?3, hiddenUntil = ?4, scheduledAt = CURRENT_TIMESTAMP, reservedBy = NULL",
                     (partition, &key, &serialized, &hidden_until),
                 )
             })

@@ -2,6 +2,14 @@ use serde::Deserialize;
 
 use crate::{prelude::*, publishers::{TodoistCreateTask, TodoistCreateTaskPayload, TodoistDueDate}};
 
+#[derive(Clone, Deserialize, Default)]
+pub struct HoneycombConfig {
+    pub trusted_secrets: Vec<String>,
+
+    #[serde(default = "default_todoist_config")]
+    pub todoist: crate::config::TodoistConfig,
+}
+
 fn default_todoist_config() -> crate::config::TodoistConfig {
     crate::config::TodoistConfig {
         project: Some("Life".into()),
@@ -20,7 +28,17 @@ impl Job for HoneycombWebhook {
     }
 
     async fn handle(&self, job: &Self::JobType, services: impl Services + Send + Sync + 'static) -> Result<(), human_errors::Error> {
-        // TODO: Validate the Honeycomb webhook signature header (X-Honeycomb-Webhook-Token) matches expected value
+        if let Some(secret) = job.headers.get("X-Honeycomb-Webhook-Token") {
+            if !services.config().webhooks.honeycomb.trusted_secrets.contains(secret) {
+                warn!("Received Honeycomb webhook with untrusted secret '{}'; rejecting request.", secret);
+                return Ok(());
+            }
+        } else if services.config().webhooks.honeycomb.trusted_secrets.is_empty() {
+            debug!("No Honeycomb webhook secret configured; skipping verification.");
+        } else {
+            warn!("Received Honeycomb webhook without secret, but secrets are configured; rejecting request.");
+            return Ok(());
+        }
         
         let event: HoneycombAlertEventPayload = job.json()?;
 
@@ -39,7 +57,7 @@ impl Job for HoneycombWebhook {
                 description: event.description,
                 due: TodoistDueDate::DateTime(chrono::Utc::now()),
                 priority: Some(4),
-                config: default_todoist_config(),
+                config: services.config().webhooks.honeycomb.todoist.clone(),
                 ..Default::default()
             },
             None,

@@ -91,7 +91,7 @@ impl IncrementalCollector for GitHubReleasesCollector {
         let mut headers = reqwest::header::HeaderMap::new();
         headers.insert("X-GitHub-Api-Version", "2022-11-28".parse().unwrap());
 
-        if let Some(api_key) = services.connections().github.api_key.as_ref() {
+        if let Some(api_key) = services.config().connections.github.api_key.as_ref() {
             headers.insert(
                 reqwest::header::AUTHORIZATION,
                 reqwest::header::HeaderValue::from_str(&format!("Bearer {}", api_key))

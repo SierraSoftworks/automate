@@ -52,12 +52,12 @@ async fn run() -> Result<(), human_errors::Error> {
     let config = Config::load(args.config.unwrap_or_else(|| "config.toml".into()))?;
 
     let db = db::SqliteDatabase::open("database.sqlite").await.unwrap();
-    let services = services::ServicesContainer::new(db, config.connections);
+    let services = services::ServicesContainer::new(config, db);
 
-    CronJob::setup(config.workflows.github_releases, services.clone()).await?;
-    CronJob::setup(config.workflows.rss, services.clone()).await?;
-    CronJob::setup(config.workflows.xkcd, services.clone()).await?;
-    CronJob::setup(config.workflows.youtube, services.clone()).await?; 
+    CronJob::setup(&services.config().workflows.github_releases, services.clone()).await?;
+    CronJob::setup(&services.config().workflows.rss, services.clone()).await?;
+    CronJob::setup(&services.config().workflows.xkcd, services.clone()).await?;
+    CronJob::setup(&services.config().workflows.youtube, services.clone()).await?; 
 
     (
         crate::web::run_web_server(services.clone()),

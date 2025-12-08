@@ -6,7 +6,7 @@ use crate::prelude::*;
 mod honeycomb;
 mod tailscale;
 
-pub use honeycomb::HoneycombWebhook;
+pub use honeycomb::{HoneycombConfig, HoneycombWebhook};
 pub use tailscale::TailscaleWebhook;
 
 #[derive(Clone, Serialize, Deserialize)]

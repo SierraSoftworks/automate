@@ -12,20 +12,6 @@ pub struct CronJobConfig<J: Job> {
     pub cron: croner::Cron,
 }
 
-impl<J: Job> From<CronJobConfig<J>> for CronJobTask
-where
-    J::JobType: serde::Serialize + Display,
-{
-    fn from(config: CronJobConfig<J>) -> Self {
-        CronJobTask {
-            cron: config.cron,
-            kind: J::partition().to_string(),
-            idempotency_key: Some(format!("{}", config.job)),
-            task: serde_json::to_value(&config.job).unwrap(),
-        }
-    }
-}
-
 #[derive(serde::Deserialize, serde::Serialize, Clone)]
 pub struct CronJobTask {
     pub cron: croner::Cron,
@@ -34,15 +20,34 @@ pub struct CronJobTask {
     pub task: serde_json::Value,
 }
 
+impl<J: Job> From<&CronJobConfig<J>> for CronJobTask
+where
+    J::JobType: serde::Serialize + Display,
+{
+    fn from(config: &CronJobConfig<J>) -> Self {
+        CronJobTask {
+            cron: config.cron.clone(),
+            kind: J::partition().to_string(),
+            idempotency_key: Some(format!("{}", config.job)),
+            task: serde_json::to_value(&config.job).unwrap(),
+        }
+    }
+}
+
 pub struct CronJob;
 
 impl CronJob {
-    pub async fn setup(jobs: Vec<impl Into<CronJobTask>>, services: impl Services + Send + Sync + 'static) -> Result<(), human_errors::Error> {
+    pub async fn setup<J: Job>(
+        jobs: &[CronJobConfig<J>],
+        services: impl Services + Send + Sync + 'static,
+    ) -> Result<(), human_errors::Error>
+    where
+        J::JobType: serde::Serialize + Display,
+    {
         let queue = services.queue();
 
-        for job in jobs.into_iter() {
+        for job in jobs.iter() {
             let job: CronJobTask = job.into();
-
             let now = Utc::now();
             let next_run = job.cron.find_next_occurrence(&now, false)
                 .wrap_err_as_user("We could not determine the next time at which this cron job should be dispatched.", &[
@@ -50,7 +55,14 @@ impl CronJob {
                 ])?
                 ;
 
-            queue.enqueue("cron", job.clone(), job.idempotency_key.map(|k| k.into()), Some(next_run - now)).await?;
+            queue
+                .enqueue(
+                    "cron",
+                    job.clone(),
+                    job.idempotency_key.map(|k| k.into()),
+                    Some(next_run - now),
+                )
+                .await?;
         }
 
         Ok(())
@@ -64,17 +76,29 @@ impl Job for CronJob {
         "cron"
     }
 
-    async fn handle(&self, job: &Self::JobType, services: impl Services + Send + Sync + 'static) -> Result<(), human_errors::Error> {
+    async fn handle(
+        &self,
+        job: &Self::JobType,
+        services: impl Services + Send + Sync + 'static,
+    ) -> Result<(), human_errors::Error> {
         let now = Utc::now();
-        let next_run = job.cron.find_next_occurrence(&now, false)
-            .wrap_err_as_user("We could not determine the next time at which this cron job should be dispatched.", &[
-                "Please ensure the cron schedule is valid.",
-            ])?;
-        
+        let next_run = job
+            .cron
+            .find_next_occurrence(&now, false)
+            .wrap_err_as_user(
+                "We could not determine the next time at which this cron job should be dispatched.",
+                &["Please ensure the cron schedule is valid."],
+            )?;
+
         // Enqueue the job to be run at the next scheduled time
         services
             .queue()
-            .enqueue("cron", job.clone(), job.idempotency_key.as_ref().map(|k| k.clone().into()), Some(next_run - now))
+            .enqueue(
+                "cron",
+                job.clone(),
+                job.idempotency_key.as_ref().map(|k| k.clone().into()),
+                Some(next_run - now),
+            )
             .await?;
 
         // Enqueue the actual task to be run immediately

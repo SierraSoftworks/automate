@@ -59,7 +59,7 @@ impl Job for TodoistCreateTask {
     }
 
     async fn handle(&self, job: &Self::JobType, services: impl Services + Send + Sync + 'static) -> Result<(), human_errors::Error> {
-        let config = services.connections().todoist.merge(&job.config);
+        let config = services.config().connections.todoist.merge(&job.config);
 
         let client = get_client(&config)?;
 
