@@ -65,6 +65,7 @@ pub trait Queue {
         &self,
         partition: P,
         job: T,
+        idempotency_key: Option<Cow<'static, str>>,
         delay: Option<chrono::Duration>,
     ) -> Result<(), errors::Error>;
 
@@ -122,7 +123,7 @@ pub trait Cache {
 }
 
 pub struct QueueMessage<T> {
-    pub id: usize,
+    pub key: String,
     pub reservation_id: String,
     pub payload: T,
     pub scheduled_at: chrono::DateTime<chrono::Utc>,

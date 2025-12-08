@@ -9,6 +9,7 @@ mod publishers;
 mod services;
 mod ui;
 mod web;
+mod webhooks;
 mod workflows;
 
 #[cfg(test)]
@@ -17,7 +18,7 @@ mod testing;
 use clap::Parser;
 use futures_concurrency::future::Race;
 
-use crate::prelude::*;
+use crate::{prelude::*, workflows::CronJob};
 
 #[derive(Parser)]
 #[command(version, about, long_about = None)]
@@ -53,15 +54,25 @@ async fn run() -> Result<(), human_errors::Error> {
     let db = db::SqliteDatabase::open("database.sqlite").await.unwrap();
     let services = services::ServicesContainer::new(db, config.connections);
 
+    CronJob::setup(config.workflows.github_releases, services.clone()).await?;
+    CronJob::setup(config.workflows.rss, services.clone()).await?;
+    CronJob::setup(config.workflows.xkcd, services.clone()).await?;
+    CronJob::setup(config.workflows.youtube, services.clone()).await?; 
+
     (
         crate::web::run_web_server(services.clone()),
 
-        crate::workflows::GitHubReleasesToTodoistWorkflow.run(services.clone()),
-        crate::workflows::HoneycombAlertsToTodoistWorkflow.run(services.clone()),
-        crate::workflows::RssToTodoistWorkflow.run(services.clone()),
-        crate::workflows::TailscaleAlertsToTodoistWorkflow.run(services.clone()),
         crate::publishers::TodoistCreateTask.run(services.clone()),
-        config.workflows.run_all(services)
+
+        crate::workflows::CronJob.run(services.clone()),
+        
+        crate::webhooks::HoneycombWebhook.run(services.clone()),
+        crate::webhooks::TailscaleWebhook.run(services.clone()),
+
+        crate::workflows::GitHubReleasesWorkflow.run(services.clone()),
+        crate::workflows::RssWorkflow.run(services.clone()),
+        crate::workflows::XkcdWorkflow.run(services.clone()),
+        crate::workflows::YouTubeWorkflow.run(services.clone()),
     ).race().await
     .map_err_as_user(&[])?;
 

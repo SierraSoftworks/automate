@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use actix_web::{Responder, web};
 use tracing_batteries::prelude::error;
 
-use crate::{db::Queue, prelude::Services, workflows::WebhookEvent};
+use crate::{db::Queue, prelude::Services, webhooks::WebhookEvent};
 
 pub async fn handle<S: Services>(req: actix_web::HttpRequest, kind: web::Path<String>, body: web::Payload, services: web::Data<S>) -> impl Responder {
     let body = match body.to_bytes().await {
@@ -28,7 +28,7 @@ pub async fn handle<S: Services>(req: actix_web::HttpRequest, kind: web::Path<St
         }
     });
     
-    if let Err(err) = services.get_ref().queue().enqueue(format!("webhooks/{kind}"), event, None).await {
+    if let Err(err) = services.get_ref().queue().enqueue(format!("webhooks/{kind}"), event, None, None).await {
         error!("Failed to enqueue webhook payload: {}", err);
         return actix_web::HttpResponse::InternalServerError().finish();
     }

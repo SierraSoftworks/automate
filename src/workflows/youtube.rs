@@ -14,24 +14,11 @@ pub struct YouTubeConfig {
     pub name: String,
     pub channel_id: String,
 
-    #[serde(default = "default_cron")]
-    pub cron: croner::Cron,
-
     #[serde(default)]
     filter: Filter,
 
     #[serde(default)]
     pub todoist: TodoistConfig,
-}
-
-fn default_cron() -> croner::Cron {
-    "@hourly".parse().unwrap()
-}
-
-impl CronWorkflow for YouTubeConfig {
-    fn schedule(&self) -> croner::Cron {
-        self.cron.clone()
-    }
 }
 
 impl Display for YouTubeConfig {
@@ -40,16 +27,17 @@ impl Display for YouTubeConfig {
     }
 }
 
-pub struct YouTubeToTodoistWorkflow;
+#[derive(Clone)]
+pub struct YouTubeWorkflow;
 
-impl<S: Services + Clone + Send + Sync + 'static> Job<S> for YouTubeToTodoistWorkflow {
+impl Job for YouTubeWorkflow {
     type JobType = YouTubeConfig;
 
     fn partition() -> &'static str {
         "workflow/youtube-todoist"
     }
 
-    async fn handle(&self, job: &Self::JobType, services: S) -> Result<(), human_errors::Error> {
+    async fn handle(&self, job: &Self::JobType, services: impl Services + Send + Sync + 'static) -> Result<(), human_errors::Error> {
         let collector = YouTubeCollector::new(&job.channel_id);
 
         let items = collector.list(&services).await?;

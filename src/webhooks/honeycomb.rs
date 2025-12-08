@@ -10,16 +10,16 @@ fn default_todoist_config() -> crate::config::TodoistConfig {
     }
 }
 
-pub struct HoneycombAlertsToTodoistWorkflow;
+pub struct HoneycombWebhook;
 
-impl<S: Services + Clone + Send + Sync + 'static> Job<S> for HoneycombAlertsToTodoistWorkflow {
+impl Job for HoneycombWebhook {
     type JobType = super::WebhookEvent;
 
     fn partition() -> &'static str {
         "webhooks/honeycomb"
     }
 
-    async fn handle(&self, job: &Self::JobType, services: S) -> Result<(), human_errors::Error> {
+    async fn handle(&self, job: &Self::JobType, services: impl Services + Send + Sync + 'static) -> Result<(), human_errors::Error> {
         // TODO: Validate the Honeycomb webhook signature header (X-Honeycomb-Webhook-Token) matches expected value
         
         let event: HoneycombAlertEventPayload = job.json()?;

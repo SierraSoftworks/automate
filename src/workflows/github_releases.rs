@@ -13,15 +13,8 @@ pub struct GitHubReleasesConfig {
     #[serde(default)]
     pub filter: Filter,
 
-    #[serde(default = "default_cron")]
-    pub cron: croner::Cron,
-
     #[serde(default)]
     pub todoist: TodoistConfig,
-}
-
-fn default_cron() -> croner::Cron {
-    "@hourly".parse().unwrap()
 }
 
 impl Display for GitHubReleasesConfig {
@@ -30,22 +23,17 @@ impl Display for GitHubReleasesConfig {
     }
 }
 
-impl CronWorkflow for GitHubReleasesConfig {
-    fn schedule(&self) -> croner::Cron {
-        self.cron.clone()
-    }
-}
+#[derive(Clone)]
+pub struct GitHubReleasesWorkflow;
 
-pub struct GitHubReleasesToTodoistWorkflow;
-
-impl<S: Services + Clone + Send + Sync + 'static> Job<S> for GitHubReleasesToTodoistWorkflow {
+impl Job for GitHubReleasesWorkflow {
     type JobType = GitHubReleasesConfig;
 
     fn partition() -> &'static str {
         "workflow/github-releases-todoist"
     }
 
-    async fn handle(&self, job: &Self::JobType, services: S) -> Result<(), human_errors::Error> {
+    async fn handle(&self, job: &Self::JobType, services: impl Services + Send + Sync + 'static) -> Result<(), human_errors::Error> {
         let collector = GitHubReleasesCollector::new(&job.repository);
 
         let items = collector.list(&services).await?;

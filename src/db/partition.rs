@@ -56,9 +56,10 @@ impl<D: Queue, T: serde::Serialize + serde::de::DeserializeOwned + Send + 'stati
     pub async fn enqueue(
         &self,
         item: T,
+        idempotency_key: Option<Cow<'static, str>>,
         delay: Option<chrono::Duration>,
     ) -> Result<(), human_errors::Error> {
-        self.db.enqueue(self.name.clone(), item, delay).await
+        self.db.enqueue(self.name.clone(), item, idempotency_key, delay).await
     }
 
     pub async fn dequeue(

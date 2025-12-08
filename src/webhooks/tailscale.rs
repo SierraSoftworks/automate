@@ -11,16 +11,17 @@ fn default_todoist_config() -> crate::config::TodoistConfig {
     }
 }
 
-pub struct TailscaleAlertsToTodoistWorkflow;
+#[derive(Clone)]
+pub struct TailscaleWebhook;
 
-impl<S: Services + Clone + Send + Sync + 'static> Job<S> for TailscaleAlertsToTodoistWorkflow {
+impl Job for TailscaleWebhook {
     type JobType = super::WebhookEvent;
 
     fn partition() -> &'static str {
         "webhooks/tailscale"
     }
 
-    async fn handle(&self, job: &Self::JobType, services: S) -> Result<(), human_errors::Error> {
+    async fn handle(&self, job: &Self::JobType, services: impl Services + Send + Sync + 'static) -> Result<(), human_errors::Error> {
         // TODO: Validate the Tailscale webhook signature header
         // https://tailscale.com/kb/1213/webhooks#verifying-an-event-signature
 

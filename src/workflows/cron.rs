@@ -1,0 +1,88 @@
+use std::fmt::Display;
+
+use chrono::Utc;
+
+use crate::prelude::*;
+
+#[derive(serde::Deserialize, Clone)]
+pub struct CronJobConfig<J: Job> {
+    #[serde(flatten)]
+    pub job: J::JobType,
+
+    pub cron: croner::Cron,
+}
+
+impl<J: Job> From<CronJobConfig<J>> for CronJobTask
+where
+    J::JobType: serde::Serialize + Display,
+{
+    fn from(config: CronJobConfig<J>) -> Self {
+        CronJobTask {
+            cron: config.cron,
+            kind: J::partition().to_string(),
+            idempotency_key: Some(format!("{}", config.job)),
+            task: serde_json::to_value(&config.job).unwrap(),
+        }
+    }
+}
+
+#[derive(serde::Deserialize, serde::Serialize, Clone)]
+pub struct CronJobTask {
+    pub cron: croner::Cron,
+    pub kind: String,
+    pub idempotency_key: Option<String>,
+    pub task: serde_json::Value,
+}
+
+pub struct CronJob;
+
+impl CronJob {
+    pub async fn setup(jobs: Vec<impl Into<CronJobTask>>, services: impl Services + Send + Sync + 'static) -> Result<(), human_errors::Error> {
+        let queue = services.queue();
+
+        for job in jobs.into_iter() {
+            let job: CronJobTask = job.into();
+
+            let now = Utc::now();
+            let next_run = job.cron.find_next_occurrence(&now, false)
+                .wrap_err_as_user("We could not determine the next time at which this cron job should be dispatched.", &[
+                    "Please ensure the cron schedule is valid.",
+                ])?
+                ;
+
+            queue.enqueue("cron", job.clone(), job.idempotency_key.map(|k| k.into()), Some(next_run - now)).await?;
+        }
+
+        Ok(())
+    }
+}
+
+impl Job for CronJob {
+    type JobType = CronJobTask;
+
+    fn partition() -> &'static str {
+        "cron"
+    }
+
+    async fn handle(&self, job: &Self::JobType, services: impl Services + Send + Sync + 'static) -> Result<(), human_errors::Error> {
+        let now = Utc::now();
+        let next_run = job.cron.find_next_occurrence(&now, false)
+            .wrap_err_as_user("We could not determine the next time at which this cron job should be dispatched.", &[
+                "Please ensure the cron schedule is valid.",
+            ])?;
+        
+        // Enqueue the job to be run at the next scheduled time
+        services
+            .queue()
+            .enqueue("cron", job.clone(), job.idempotency_key.as_ref().map(|k| k.clone().into()), Some(next_run - now))
+            .await?;
+
+        // Enqueue the actual task to be run immediately
+        services
+            .queue()
+            .enqueue(job.kind.clone(), job.task.clone(), None, None)
+            .await?;
+
+        Ok(())
+    }
+}

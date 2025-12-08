@@ -3,8 +3,6 @@ use std::path::PathBuf;
 use human_errors::ResultExt;
 use serde::{Deserialize, Serialize};
 
-use crate::workflows::schedule;
-
 #[derive(Clone, Deserialize)]
 pub struct Config {
     pub connections: ConnectionConfigs,
@@ -46,38 +44,10 @@ pub struct ConnectionConfigs {
 
 #[derive(Clone, Deserialize)]
 pub struct WorkflowConfigs {
-    pub github_releases: Vec<crate::workflows::GitHubReleasesConfig>,
-    pub rss: Vec<crate::workflows::RssConfig>,
-    pub youtube: Vec<crate::workflows::YouTubeConfig>,
-    pub xkcd: Vec<crate::workflows::XkcdConfig>,
-}
-
-impl WorkflowConfigs {
-    pub async fn run_all(
-        self,
-        services: impl crate::services::Services + Clone + Send + Sync + 'static,
-    ) -> Result<(), human_errors::Error> {
-        tokio::try_join!(
-            schedule(
-                &self.github_releases,
-                crate::workflows::GitHubReleasesToTodoistWorkflow,
-                &services
-            ),
-            schedule(&self.rss, crate::workflows::RssToTodoistWorkflow, &services),
-            schedule(
-                &self.youtube,
-                crate::workflows::YouTubeToTodoistWorkflow,
-                &services
-            ),
-            schedule(
-                &self.xkcd,
-                crate::workflows::XkcdToTodoistWorkflow,
-                &services
-            ),
-        )?;
-
-        Ok(())
-    }
+    pub github_releases: Vec<crate::workflows::CronJobConfig<crate::workflows::GitHubReleasesWorkflow>>,
+    pub rss: Vec<crate::workflows::CronJobConfig<crate::workflows::RssWorkflow>>,
+    pub youtube: Vec<crate::workflows::CronJobConfig<crate::workflows::YouTubeWorkflow>>,
+    pub xkcd: Vec<crate::workflows::CronJobConfig<crate::workflows::XkcdWorkflow>>,
 }
 
 #[derive(Default, Clone, Deserialize)]

@@ -1,18 +1,20 @@
+use std::borrow::Cow;
+
 use chrono::{TimeDelta, Utc};
 
 use crate::prelude::*;
 
-pub trait Job<S: Services + Clone> {
+pub trait Job {
     type JobType: serde::Serialize + serde::de::DeserializeOwned + Send + 'static;
 
     async fn dispatch(
         job: Self::JobType,
-        delay: Option<TimeDelta>,
-        services: &S,
+        idempotency_key: Option<Cow<'static, str>>,
+        services: &impl Services,
     ) -> Result<(), human_errors::Error> {
         let queue = services.queue().partition(Self::partition());
 
-        queue.enqueue(job, delay).await?;
+        queue.enqueue(job, idempotency_key, None).await?;
 
         Ok(())
     }
@@ -23,9 +25,9 @@ pub trait Job<S: Services + Clone> {
         TimeDelta::minutes(5)
     }
 
-    async fn handle(&self, job: &Self::JobType, services: S) -> Result<(), human_errors::Error>;
+    async fn handle(&self, job: &Self::JobType, services: impl Services + Send + Sync + 'static) -> Result<(), human_errors::Error>;
 
-    async fn run(&self, services: S) -> Result<(), human_errors::Error> {
+    async fn run(&self, services: impl Services + Clone + Send + Sync + 'static) -> Result<(), human_errors::Error> {
         let queue = services.queue().partition(Self::partition().to_string());
 
         loop {

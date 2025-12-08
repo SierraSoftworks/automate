@@ -51,14 +51,14 @@ impl TodoistDueDate {
 
 pub struct TodoistCreateTask;
 
-impl<S: Services + Send + Sync + Clone + 'static> Job<S> for TodoistCreateTask {
+impl Job for TodoistCreateTask {
     type JobType = TodoistCreateTaskPayload;
 
     fn partition() -> &'static str {
         "todoist/create-task"
     }
 
-    async fn handle(&self, job: &Self::JobType, services: S) -> Result<(), human_errors::Error> {
+    async fn handle(&self, job: &Self::JobType, services: impl Services + Send + Sync + 'static) -> Result<(), human_errors::Error> {
         let config = services.connections().todoist.merge(&job.config);
 
         let client = get_client(&config)?;

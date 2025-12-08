@@ -229,6 +229,7 @@ impl Queue for SqliteDatabase {
         &self,
         partition: P,
         job: T,
+        idempotency_key: Option<Cow<'static, str>>,
         delay: Option<chrono::Duration>,
     ) -> std::result::Result<(), errors::Error> {
         let partition = partition.into();
@@ -240,11 +241,16 @@ impl Queue for SqliteDatabase {
             .map(|d| chrono::Utc::now() + d)
             .unwrap_or_else(|| chrono::DateTime::UNIX_EPOCH);
 
+        let key = idempotency_key.unwrap_or_else(|| uuid::Uuid::new_v4().to_string().into());
+
         self.connection
             .call(move |c| {
                 c.execute(
-                    "INSERT INTO queues (partition, payload, hiddenUntil) VALUES (?1, ?2, ?3)",
-                    (partition, &serialized, &hidden_until),
+                    "INSERT INTO queues (partition, key, payload, hiddenUntil) VALUES (?1, ?2, ?3, ?4)
+                        ON CONFLICT (partition, key)
+                        DO UPDATE
+                        SET payload = ?3, hiddenUntil = ?4, reservedBy = NULL",
+                    (partition, &key, &serialized, &hidden_until),
                 )
             })
             .await
@@ -269,8 +275,8 @@ impl Queue for SqliteDatabase {
         self.connection.call(move |c| {
             let tx = c.transaction().map_err_as_system(ADVICE_DB_ERROR)?;
 
-            let message = tx.query_one("SELECT id, payload, scheduledAt FROM queues WHERE partition = ?1 AND hiddenUntil < CURRENT_TIMESTAMP LIMIT 1", [&partition], |row| {
-                let id: usize = row.get(0)?;
+            let message = tx.query_one("SELECT key, payload, scheduledAt FROM queues WHERE partition = ?1 AND hiddenUntil < CURRENT_TIMESTAMP LIMIT 1", [&partition], |row| {
+                let key: String = row.get(0)?;
                 let payload_str: String = row.get(1)?;
                 let scheduled_at: chrono::DateTime<chrono::Utc> = row.get(2)?;
 
@@ -283,7 +289,7 @@ impl Queue for SqliteDatabase {
                 })?;
 
                 Ok(super::QueueMessage {
-                    id,
+                    key,
                     reservation_id: reservation_id.clone(),
                     payload,
                     scheduled_at,
@@ -294,8 +300,8 @@ impl Queue for SqliteDatabase {
                 tx.execute(
                     "UPDATE queues
                     SET reservedBy = ?1, hiddenUntil = ?2
-                    WHERE partition = ?3 AND id = ?4",
-                    (&reservation_id, &reserved_until, &partition, msg.id),
+                    WHERE partition = ?3 AND key = ?4",
+                    (&reservation_id, &reserved_until, &partition, &msg.key),
                 ).map_err_as_system(ADVICE_DB_ERROR)?;
             }
 
@@ -314,8 +320,8 @@ impl Queue for SqliteDatabase {
         self.connection
             .call(move |c| {
                 c.execute(
-                    "DELETE FROM queues WHERE partition = ?1 AND id = ?2 AND reservedBy = ?3",
-                    (partition, &msg.id, &msg.reservation_id),
+                    "DELETE FROM queues WHERE partition = ?1 AND key = ?2 AND reservedBy = ?3",
+                    (partition, &msg.key, &msg.reservation_id),
                 )
             })
             .await
@@ -333,11 +339,12 @@ const MIGRATIONS: &[&str] = &[
     )",
     "CREATE TABLE IF NOT EXISTS queues (
         partition TEXT NOT NULL,
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        payload TEXT NOT NULL,
+        key TEXT NOT NULL,
+        payload TEXT,
         scheduledAt DATETIME DEFAULT CURRENT_TIMESTAMP,
         hiddenUntil DATETIME DEFAULT CURRENT_TIMESTAMP,
-        reservedBy TEXT
+        reservedBy TEXT,
+        PRIMARY KEY (partition, key)
     )",
     "CREATE INDEX IF NOT EXISTS idx_queues_partition_hidden ON queues (partition, hiddenUntil)",
 ];
@@ -398,7 +405,7 @@ mod tests {
     async fn test_queue_basic() {
         let db = SqliteDatabase::open_in_memory().await.unwrap();
 
-        db.enqueue("test_queue", "job1", None).await.unwrap();
+        db.enqueue("test_queue", "job1", None, None).await.unwrap();
 
         db.connection
             .call(|c| {

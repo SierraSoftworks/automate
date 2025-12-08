@@ -15,18 +15,11 @@ pub struct RssConfig {
     pub homepage: String,
     pub url: String,
 
-    #[serde(default = "default_cron")]
-    pub cron: croner::Cron,
-
     #[serde(default)]
     pub filter: Filter,
 
     #[serde(default = "default_todoist_config")]
     pub todoist: TodoistConfig,
-}
-
-fn default_cron() -> croner::Cron {
-    "@hourly".parse().unwrap()
 }
 
 fn default_todoist_config() -> TodoistConfig {
@@ -37,28 +30,23 @@ fn default_todoist_config() -> TodoistConfig {
     }
 }
 
-impl CronWorkflow for RssConfig {
-    fn schedule(&self) -> croner::Cron {
-        self.cron.clone()
-    }
-}
-
 impl Display for RssConfig {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "rss/{}", self.name)
     }
 }
 
-pub struct RssToTodoistWorkflow;
+#[derive(Clone)]
+pub struct RssWorkflow;
 
-impl<S: Services + Clone + Send + Sync + 'static> Job<S> for RssToTodoistWorkflow {
+impl Job for RssWorkflow {
     type JobType = RssConfig;
 
     fn partition() -> &'static str {
         "workflow/rss-todoist"
     }
 
-    async fn handle(&self, job: &Self::JobType, services: S) -> Result<(), human_errors::Error> {
+    async fn handle(&self, job: &Self::JobType, services: impl Services + Send + Sync + 'static) -> Result<(), human_errors::Error> {
         let base_url: reqwest::Url = job.homepage.parse().wrap_err_as_user(
             format!("The feed URL you provided could not be parsed as a valid URL ({}).", &job.homepage),
             &[

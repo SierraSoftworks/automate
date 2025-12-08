@@ -16,21 +16,8 @@ pub struct XkcdConfig {
     #[serde(default)]
     pub filter: Filter,
 
-    #[serde(default = "default_cron")]
-    pub cron: croner::Cron,
-
     #[serde(default)]
     pub todoist: TodoistConfig,
-}
-
-fn default_cron() -> croner::Cron {
-    "@hourly".parse().unwrap()
-}
-
-impl CronWorkflow for XkcdConfig {
-    fn schedule(&self) -> croner::Cron {
-        self.cron.clone()
-    }
 }
 
 impl Display for XkcdConfig {
@@ -39,16 +26,17 @@ impl Display for XkcdConfig {
     }
 }
 
-pub struct XkcdToTodoistWorkflow;
+#[derive(Clone)]
+pub struct XkcdWorkflow;
 
-impl<S: Services + Clone + Send + Sync + 'static> Job<S> for XkcdToTodoistWorkflow {
+impl Job for XkcdWorkflow {
     type JobType = XkcdConfig;
 
     fn partition() -> &'static str {
         "workflow/xkcd-todoist"
     }
 
-    async fn handle(&self, job: &Self::JobType, services: S) -> Result<(), human_errors::Error> {
+    async fn handle(&self, job: &Self::JobType, services: impl Services + Send + Sync + 'static) -> Result<(), human_errors::Error> {
         let collector = XkcdCollector::new();
 
         let items = collector.list(&services).await?;
