@@ -8,8 +8,11 @@ use crate::workflows::*;
 
 #[derive(Clone, Deserialize, Default)]
 pub struct Config {
+    #[serde(default)]
     pub connections: ConnectionConfigs,
+    #[serde(default)]
     pub webhooks: WebhookConfigs,
+    #[serde(default)]
     pub workflows: WorkflowConfigs,
 }
 

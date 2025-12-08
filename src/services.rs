@@ -6,7 +6,7 @@ pub trait Services
 where
     Self: Sized,
 {
-    fn config(&self) -> &crate::config::Config;
+    fn config(&self) -> Arc<crate::config::Config>;
 
     fn kv(&self) -> impl crate::db::KeyValueStore + Clone + Send + Sync + 'static;
     fn queue(&self) -> impl crate::db::Queue + Clone + Send + Sync + 'static;
@@ -60,8 +60,8 @@ where
         + Sync
         + 'static,
 {
-    fn config(&self) -> &crate::config::Config {
-        todo!("Implement config retrieval for ServicesContainer")
+    fn config(&self) -> Arc<crate::config::Config> {
+        self.config.clone()
     }
 
     fn kv(&self) -> impl crate::db::KeyValueStore + Clone + Send + Sync + 'static {
