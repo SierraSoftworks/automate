@@ -52,7 +52,10 @@ pub struct ConnectionConfigs {
 #[derive(Clone, Deserialize, Default)]
 pub struct WebhookConfigs {
     #[serde(default)]
-    pub honeycomb: HoneycombConfig,
+    pub honeycomb: HoneycombWebhookConfig,
+
+    #[serde(default)]
+    pub tailscale: TailscaleWebhookConfig,
 }
 
 #[derive(Clone, Deserialize, Default)]

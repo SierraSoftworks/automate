@@ -1,5 +1,3 @@
-use yew::prelude::*;
-
 mod helpers;
 mod page;
 

@@ -39,21 +39,3 @@ pub async fn not_found() -> impl actix_web::Responder {
         .content_type("text/html; charset=utf-8")
         .body(format!("<!DOCTYPE html>{}", rendered))
 }
-
-pub async fn internal_server_error() -> impl actix_web::Responder {
-    let renderer = ServerRenderer::<crate::ui::Page>::with_props(|| crate::ui::PageProps {
-        title: None,
-        children: html! {
-            <crate::ui::Center>
-                <h1><strong>{ "500" }</strong> { " Internal Server Error" }</h1>
-                <p>{ "An unexpected error occurred while processing your request." }</p>
-            </crate::ui::Center>
-        },
-    });
-
-    let rendered = renderer.render().await;
-
-    actix_web::HttpResponse::InternalServerError()
-        .content_type("text/html; charset=utf-8")
-        .body(format!("<!DOCTYPE html>{}", rendered))
-}

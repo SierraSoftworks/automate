@@ -3,7 +3,7 @@ use serde::Deserialize;
 use crate::{prelude::*, publishers::{TodoistCreateTask, TodoistCreateTaskPayload, TodoistDueDate}};
 
 #[derive(Clone, Deserialize, Default)]
-pub struct HoneycombConfig {
+pub struct HoneycombWebhookConfig {
     pub trusted_secrets: Vec<String>,
 
     #[serde(default = "default_todoist_config")]

@@ -6,8 +6,8 @@ use crate::prelude::*;
 mod honeycomb;
 mod tailscale;
 
-pub use honeycomb::{HoneycombConfig, HoneycombWebhook};
-pub use tailscale::TailscaleWebhook;
+pub use honeycomb::{HoneycombWebhook, HoneycombWebhookConfig};
+pub use tailscale::{TailscaleWebhook, TailscaleWebhookConfig};
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct WebhookEvent {

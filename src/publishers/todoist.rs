@@ -2,7 +2,7 @@ use crate::prelude::*;
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
-use todoist_api::{CreateTaskArgs, TodoistWrapper, UpdateTaskArgs};
+use todoist_api::TodoistWrapper;
 
 #[derive(Serialize, Deserialize, Default)]
 pub struct TodoistCreateTaskPayload {

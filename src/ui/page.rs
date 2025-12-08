@@ -1,7 +1,7 @@
 use chrono::{Datelike, Utc};
 use yew::prelude::*;
 
-const defaultStyles: &str = include_str!("styles.css");
+const DEFAULT_STYLES: &str = include_str!("styles.css");
 
 #[derive(Properties, PartialEq)]
 pub struct PageProps {
@@ -37,7 +37,7 @@ pub fn page(props: &PageProps) -> Html {
                     type="image/x-icon"
                 />
 
-                <style>{ defaultStyles }</style>
+                <style>{ DEFAULT_STYLES }</style>
             </head>
 
             <body>

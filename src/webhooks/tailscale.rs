@@ -3,6 +3,14 @@ use serde::Deserialize;
 
 use crate::{prelude::*, publishers::{TodoistCreateTask, TodoistCreateTaskPayload, TodoistDueDate}};
 
+#[derive(Clone, Deserialize, Default)]
+pub struct TailscaleWebhookConfig {
+    pub secret: String,
+
+    #[serde(default = "default_todoist_config")]
+    pub todoist: crate::config::TodoistConfig,
+}
+
 fn default_todoist_config() -> crate::config::TodoistConfig {
     crate::config::TodoistConfig {
         project: Some("Life".into()),
@@ -61,7 +69,7 @@ impl Job for TailscaleWebhook {
 
                     _ => 3
                 }),
-                config: default_todoist_config(),
+                config: services.config().webhooks.tailscale.todoist.clone(),
                 ..Default::default()
             },
             None,
