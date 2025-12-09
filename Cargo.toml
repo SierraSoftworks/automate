@@ -6,6 +6,7 @@ edition = "2024"
 [dependencies]
 actix-web = "4.12.1"
 async-trait = "0.1.89"
+calcard = "0.3.1"
 chrono = { version = "0.4.40", features = ["serde"] }
 clap = { version = "4.5.53", features = ["cargo", "derive", "string"] }
 cron = "0.15.0"
@@ -16,7 +17,6 @@ futures-concurrency = "7.6.3"
 htmd = "0.5.0"
 html-escape = "0.2.13"
 human-errors = "0.2.1"
-icalendar = "0.16.13"
 inventory = "0.3.21"
 reqwest = { version = "0.12.15", features = ["blocking"] }
 rstest = "0.25.0"
@@ -24,6 +24,7 @@ rusqlite = { version = "0.37.0", features = ["bundled", "chrono"] }
 scraper = "0.24.0"
 serde = { version = "1.0.219", features = ["alloc", "derive"] }
 serde_json = { version = "1.0.140", features = ["alloc"] }
+sha256 = "1.6.0"
 todoist-api = "0.3.0"
 tokio = { version = "1.44.1", features = ["net", "io-std", "rt-multi-thread", "time", "fs"] }
 tokio-rusqlite = "0.7.0"

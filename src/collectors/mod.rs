@@ -1,15 +1,17 @@
 mod differential;
 mod incremental;
 
+mod calendar;
 mod github_releases;
 mod rss;
 mod xkcd;
 mod youtube;
 
 #[allow(dead_code)]
-pub use differential::DifferentialCollector;
+pub use differential::{DifferentialCollector, Diff};
 pub use incremental::IncrementalCollector;
 
+pub use calendar::CalendarCollector;
 pub use github_releases::GitHubReleasesCollector;
 pub use rss::RssCollector;
 pub use xkcd::XkcdCollector;

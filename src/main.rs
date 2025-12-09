@@ -54,6 +54,7 @@ async fn run() -> Result<(), human_errors::Error> {
     let db = db::SqliteDatabase::open("database.sqlite").await.unwrap();
     let services = services::ServicesContainer::new(config, db);
 
+    CronJob::setup(&services.config().workflows.calendars, services.clone()).await?;
     CronJob::setup(&services.config().workflows.github_releases, services.clone()).await?;
     CronJob::setup(&services.config().workflows.rss, services.clone()).await?;
     CronJob::setup(&services.config().workflows.xkcd, services.clone()).await?;
@@ -63,12 +64,15 @@ async fn run() -> Result<(), human_errors::Error> {
         crate::web::run_web_server(services.clone()),
 
         crate::publishers::TodoistCreateTask.run(services.clone()),
+        crate::publishers::TodoistUpsertTask.run(services.clone()),
+        crate::publishers::TodoistCompleteTask.run(services.clone()),
 
         crate::workflows::CronJob.run(services.clone()),
         
         crate::webhooks::HoneycombWebhook.run(services.clone()),
         crate::webhooks::TailscaleWebhook.run(services.clone()),
 
+        crate::workflows::CalendarWorkflow.run(services.clone()),
         crate::workflows::GitHubReleasesWorkflow.run(services.clone()),
         crate::workflows::RssWorkflow.run(services.clone()),
         crate::workflows::XkcdWorkflow.run(services.clone()),

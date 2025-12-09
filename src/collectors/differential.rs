@@ -1,6 +1,11 @@
-use std::borrow::Cow;
+use std::{borrow::Cow, collections::HashSet};
 
 use crate::{collectors::Collector, db::KeyValueStore, services::Services};
+
+pub enum Diff<ID, V> {
+    Added(ID, V),
+    Removed(ID),
+}
 
 #[allow(dead_code)]
 pub trait DifferentialCollector: Collector {
@@ -8,6 +13,7 @@ pub trait DifferentialCollector: Collector {
         + std::hash::Hash
         + serde::Serialize
         + serde::de::DeserializeOwned
+        + Clone
         + Send
         + 'static;
 
@@ -27,32 +33,44 @@ pub trait DifferentialCollector: Collector {
 
     async fn fetch(&self) -> Result<Vec<Self::Item>, human_errors::Error>;
 
-    async fn list(&self, services: &impl Services) -> Result<Vec<Self::Item>, human_errors::Error> {
+    async fn diff(&self, services: &impl Services) -> Result<Vec<Diff<Self::Identifier, Self::Item>>, human_errors::Error> {
         let partition = self.partition(None);
         let key = self.key();
 
-        let new_items = self.fetch().await?;
-        let known_identifiers: Vec<Self::Identifier> = services
+        let items = self.fetch().await?;
+        
+        let old_identifiers: Vec<Self::Identifier> = services
             .kv()
             .get(partition.clone(), key.clone())
             .await?
             .unwrap_or_default();
-        let known_set: std::collections::HashSet<_> = known_identifiers.into_iter().collect();
-        let filtered_items: Vec<_> = new_items
-            .into_iter()
-            .filter(|item| {
-                let id = self.identifier(item);
-                !known_set.contains(&id)
-            })
-            .collect();
+        
+        let mut new_identifiers = HashSet::new();
+        let mut output = Vec::new();
 
-        let new_identifiers: Vec<_> = filtered_items
-            .iter()
-            .map(|item| self.identifier(item))
+        for item in items.into_iter() {
+            let id = self.identifier(&item);
+            new_identifiers.insert(id.clone());
+
+            if !old_identifiers.contains(&id) {
+                output.push(Diff::Added(id.clone(), item));
+            }
+        }
+
+        let removed_identifiers = old_identifiers
+            .into_iter()
+            .filter(|id| !new_identifiers.contains(id));
+
+        for id in removed_identifiers {
+            output.push(Diff::Removed(id));
+        }
+
+        let new_identifiers: Vec<_> = new_identifiers
+            .into_iter()
             .collect();
 
         services.kv().set(partition, key, new_identifiers).await?;
 
-        Ok(filtered_items)
+        Ok(output)
     }
 }

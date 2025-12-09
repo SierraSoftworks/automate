@@ -63,4 +63,15 @@ pub trait Job {
             }
         }
     }
+
+    fn job_hash(&self, job: &Self::JobType) -> Result<String, human_errors::Error> {
+        let serialized = serde_json::to_string(job).wrap_err_as_system(
+            "Failed to serialize job for hashing.",
+            &[
+                "Please report this issue to the dev team on GitHub.",
+            ],
+        )?;
+
+        Ok(sha256::digest(serialized))
+    }
 }

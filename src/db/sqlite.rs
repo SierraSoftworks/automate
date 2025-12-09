@@ -99,13 +99,11 @@ impl SqliteDatabase {
 #[async_trait::async_trait]
 impl KeyValueStore for SqliteDatabase {
     async fn get<
-        P: Into<Cow<'static, str>> + Send,
-        K: Into<Cow<'static, str>> + Send,
         T: serde::de::DeserializeOwned + Send + 'static,
     >(
         &self,
-        partition: P,
-        key: K,
+        partition: impl Into<Cow<'static, str>> + Send,
+        key: impl Into<Cow<'static, str>> + Send,
     ) -> std::result::Result<Option<T>, errors::Error> {
         let key = key.into();
         let partition = partition.into();
@@ -135,11 +133,10 @@ impl KeyValueStore for SqliteDatabase {
     }
 
     async fn list<
-        P: Into<Cow<'static, str>> + Send,
         T: serde::de::DeserializeOwned + Send + 'static,
     >(
         &self,
-        partition: P,
+        partition: impl Into<Cow<'static, str>> + Send,
     ) -> std::result::Result<Vec<(String, T)>, errors::Error> {
         let partition = partition.into();
         self.connection
@@ -172,13 +169,11 @@ impl KeyValueStore for SqliteDatabase {
     }
 
     async fn set<
-        P: Into<Cow<'static, str>> + Send,
-        K: Into<Cow<'static, str>> + Send,
         T: serde::Serialize + Send + 'static,
     >(
         &self,
-        partition: P,
-        key: K,
+        partition: impl Into<Cow<'static, str>> + Send,
+        key: impl Into<Cow<'static, str>> + Send,
         value: T,
     ) -> std::result::Result<(), errors::Error> {
         let serialized = serde_json::to_string(&value).wrap_err_as_system(
@@ -202,10 +197,10 @@ impl KeyValueStore for SqliteDatabase {
         Ok(())
     }
 
-    async fn remove<P: Into<Cow<'static, str>> + Send, K: Into<Cow<'static, str>> + Send>(
+    async fn remove(
         &self,
-        partition: P,
-        key: K,
+        partition: impl Into<Cow<'static, str>> + Send,
+        key: impl Into<Cow<'static, str>> + Send,
     ) -> std::result::Result<(), errors::Error> {
         let partition = partition.into();
         let key = key.into();

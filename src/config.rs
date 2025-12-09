@@ -60,9 +60,15 @@ pub struct WebhookConfigs {
 
 #[derive(Clone, Deserialize, Default)]
 pub struct WorkflowConfigs {
+    #[serde(default)]
+    pub calendars: Vec<CronJobConfig<CalendarWorkflow>>,
+    #[serde(default)]
     pub github_releases: Vec<CronJobConfig<GitHubReleasesWorkflow>>,
+    #[serde(default)]
     pub rss: Vec<CronJobConfig<RssWorkflow>>,
+    #[serde(default)]
     pub youtube: Vec<CronJobConfig<YouTubeWorkflow>>,
+    #[serde(default)]
     pub xkcd: Vec<CronJobConfig<XkcdWorkflow>>,
 }
 

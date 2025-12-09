@@ -13,38 +13,33 @@ pub use sqlite::SqliteDatabase;
 #[async_trait::async_trait]
 pub trait KeyValueStore {
     async fn get<
-        P: Into<Cow<'static, str>> + Send,
-        K: Into<Cow<'static, str>> + Send,
         T: serde::de::DeserializeOwned + Send + 'static,
     >(
         &self,
-        partition: P,
-        key: K,
+        partition: impl Into<Cow<'static, str>> + Send,
+        key: impl Into<Cow<'static, str>> + Send,
     ) -> Result<Option<T>, errors::Error>;
 
     async fn list<
-        P: Into<Cow<'static, str>> + Send,
         T: serde::de::DeserializeOwned + Send + 'static,
     >(
         &self,
-        partition: P,
+        partition: impl Into<Cow<'static, str>> + Send,
     ) -> Result<Vec<(String, T)>, errors::Error>;
 
     async fn set<
-        P: Into<Cow<'static, str>> + Send,
-        K: Into<Cow<'static, str>> + Send,
         T: serde::Serialize + Send + 'static,
     >(
         &self,
-        partition: P,
-        key: K,
+        partition: impl Into<Cow<'static, str>> + Send,
+        key: impl Into<Cow<'static, str>> + Send,
         value: T,
     ) -> Result<(), errors::Error>;
 
-    async fn remove<P: Into<Cow<'static, str>> + Send, K: Into<Cow<'static, str>> + Send>(
+    async fn remove(
         &self,
-        partition: P,
-        key: K,
+        partition: impl Into<Cow<'static, str>> + Send,
+        key: impl Into<Cow<'static, str>> + Send,
     ) -> Result<(), errors::Error>;
 
     fn partition<T: serde::Serialize + serde::de::DeserializeOwned + Send + 'static>(
