@@ -21,6 +21,7 @@ pub struct TodoistUpsertTask;
 pub struct TodoistUpsertTaskState {
     pub id: String,
     pub hash: String,
+    pub title: Option<String>,
 }
 
 impl Job for TodoistUpsertTask {
@@ -45,7 +46,7 @@ impl Job for TodoistUpsertTask {
                 return Ok(());
             }
 
-            client.0.update_task(&existing_task.id, &todoist_api::UpdateTaskArgs {
+            let task = client.0.update_task(&existing_task.id, &todoist_api::UpdateTaskArgs {
                 content: Some(TodoistClient::escape_content(&job.title).into_owned()),
                 description: job.description.clone(),
                 due_date: job.due.due_date(),
@@ -64,12 +65,23 @@ impl Job for TodoistUpsertTask {
                 ],
             )?;
 
+            if task.is_completed {
+                client.0.reopen_task(&existing_task.id).await.wrap_err_as_user(
+                    format!("Failed to reopen completed Todoist task '{}'.", job.title),
+                    &[
+                        "Check that your Todoist API token is valid and has the necessary permissions.",
+                        "Ensure that you have specified the correct Todoist project and section names.",
+                    ],
+                )?;
+            }
+
             services.kv().set(
                 "todoist/task",
                 job.unique_key.clone(),
                 TodoistUpsertTaskState {
                     id: existing_task.id.clone(),
                     hash: hash,
+                    title: Some(job.title.clone()),
                 },
             ).await?;
         } else {
@@ -116,6 +128,7 @@ impl Job for TodoistUpsertTask {
                 TodoistUpsertTaskState {
                     id: task.id.clone(),
                     hash: hash,
+                    title: Some(job.title.clone()),
                 },
             ).await?;
         }

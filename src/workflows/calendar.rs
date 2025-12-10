@@ -43,6 +43,7 @@ impl Job for CalendarWorkflow {
         for item in items.into_iter() {
             match item {
                 Diff::Added(id, item) if job.filter.matches(&item).unwrap_or_default() => {
+                    info!("Calendar item '{}' matched filter, creating Todoist task", item.summary);
                     let identifier_string = serde_json::to_string(&id).map_err_as_system(&[
                         "Report this issue to the development team on GitHub."
                     ])?;
@@ -52,7 +53,11 @@ impl Job for CalendarWorkflow {
                             title: item.summary,
                             description: item.description,
                             priority: job.priority,
-                            due: crate::publishers::TodoistDueDate::DateTime(item.start.clone()),
+                            due: if item.all_day {
+                                crate::publishers::TodoistDueDate::Date(item.start.date_naive())
+                            } else {
+                                crate::publishers::TodoistDueDate::DateTime(item.start.clone())
+                            },
                             duration: Some(item.end - item.start),
                             config: job.todoist.clone(),
                         },
@@ -60,7 +65,21 @@ impl Job for CalendarWorkflow {
                         &services
                     ).await?;
                 },
-                Diff::Added(id, _) | Diff::Removed(id) => {
+                Diff::Added(id, item) => {
+                    info!("Calendar item '{}' did not match filter, skipping Todoist creation", item.summary);
+                    let identifier_string = serde_json::to_string(&id).map_err_as_system(&[
+                        "Report this issue to the development team on GitHub."
+                    ])?;
+                    crate::publishers::TodoistCompleteTask::dispatch(
+                        crate::publishers::TodoistCompleteTaskPayload {
+                            unique_key: identifier_string,
+                            config: job.todoist.clone(),
+                        },
+                        None,
+                        &services
+                    ).await?;
+                }
+                Diff::Removed(id) => {
                     let identifier_string = serde_json::to_string(&id).map_err_as_system(&[
                         "Report this issue to the development team on GitHub."
                     ])?;

@@ -2,6 +2,7 @@ use std::str::FromStr;
 use chrono::{DateTime, Utc};
 use human_errors as errors;
 use calcard::{Entry, icalendar::{ICalendar, ICalendarClassification, ICalendarStatus, ICalendarValue}};
+use serde::{Deserialize, Serialize};
 
 use crate::filter::Filterable;
 
@@ -23,6 +24,23 @@ macro_rules! property_value {
                     ],
                 )
             })
+    };
+    ($value:expr, custom $prop:expr, $v:ident => $val:expr) => {
+        match $value.property(&calcard::icalendar::ICalendarProperty::Other($prop.into())) {
+            Some(prop) => {
+                prop.values.first()
+                    .map(|$v| $val)
+                    .ok_or_else(|| {
+                        errors::user(
+                            concat!("Could not parse the ", stringify!($prop), " field for calendar entry."),
+                            &[
+                                concat!("Make sure that the calendar entry has a valid ", stringify!($prop), " field."),
+                            ],
+                        )
+                    })
+            },
+            None => Ok(None),
+        }
     };
     ($value:expr, optional $prop:ident, $v:ident => $val:expr) => {
         match $value.property(&calcard::icalendar::ICalendarProperty::$prop) {
@@ -64,10 +82,13 @@ impl Calendar {
                         ICalendarValue::Classification(ICalendarClassification::Private | ICalendarClassification::Confidential) => true,
                         _ => false,
                     },
+                    all_day: property_value!(value, custom "X-MICROSOFT-CDO-ALLDAYEVENT", v => v.as_boolean())?.unwrap_or_default(),
                     status: match property_value!(value, Status, v => Some(v))? {
                         ICalendarValue::Status(status) => status.clone(),
                         _ => ICalendarStatus::Tentative,
                     },
+                    busy_status: property_value!(value, custom "X-MICROSOFT-CDO-BUSYSTATUS", v => v.as_text())?.map(|s| s.into()).unwrap_or(BusyStatus::Busy),
+                    intended_status: property_value!(value, custom "X-MICROSOFT-CDO-INTENDEDSTATUS", v => v.as_text())?.map(|s| s.into()).unwrap_or(BusyStatus::Busy),
                 })
             } else {
                 unreachable!("Event component with ID {} not found", event.comp_id);
@@ -126,6 +147,9 @@ pub struct CalendarEvent {
     pub end: DateTime<Utc>,
 
     pub status: ICalendarStatus,
+    pub busy_status: BusyStatus,
+    pub intended_status: BusyStatus,
+    pub all_day: bool,
     pub private: bool,
 }
 
@@ -151,9 +175,46 @@ impl Filterable for CalendarEvent {
                 ICalendarStatus::Final => "final".into(),
                 ICalendarStatus::Failed => "failed".into(),
             },
+
+            "busy_status" => match self.busy_status {
+                BusyStatus::Free => "free".into(),
+                BusyStatus::Tentative => "tentative".into(),
+                BusyStatus::Busy => "busy".into(),
+                BusyStatus::OutOfOffice => "oof".into(),
+            },
+
+            "intended_status" => match self.intended_status {
+                BusyStatus::Free => "free".into(),
+                BusyStatus::Tentative => "tentative".into(),
+                BusyStatus::Busy => "busy".into(),
+                BusyStatus::OutOfOffice => "oof".into(),
+            },
+
             "is_private" => self.private.into(),
+            "is_all_day" => self.all_day.into(),
 
             _ => crate::filter::FilterValue::Null,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum BusyStatus {
+    Free,
+    Tentative,
+    Busy,
+    OutOfOffice,
+}
+
+impl From<&str> for BusyStatus {
+    fn from(value: &str) -> Self {
+        match value {
+            "FREE" => BusyStatus::Free,
+            "TENTATIVE" => BusyStatus::Tentative,
+            "BUSY" => BusyStatus::Busy,
+            "OOF" => BusyStatus::OutOfOffice,
+            _ => BusyStatus::Busy, // Default to busy if unrecognized
         }
     }
 }
