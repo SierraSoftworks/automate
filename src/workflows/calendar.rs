@@ -73,7 +73,6 @@ impl Job for CalendarWorkflow {
                         &services
                     ).await?;
                 }
-                _ => { }
             }
         }
 
