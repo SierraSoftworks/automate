@@ -74,7 +74,12 @@ impl Job for TailscaleWebhook {
         let secret = &services.config().webhooks.tailscale.secret;
         
         if !secret.is_empty() {
-            if let Some(signature) = job.headers.get("x-tailscale-signature") {
+            // HTTP headers are case-insensitive, so we need to search for the header with case-insensitive comparison
+            let signature = job.headers.iter()
+                .find(|(key, _)| key.eq_ignore_ascii_case("x-tailscale-signature"))
+                .map(|(_, value)| value.as_str());
+            
+            if let Some(signature) = signature {
                 Self::verify_signature(secret, &job.body, signature)?;
             } else {
                 warn!("Received Tailscale webhook without signature, but secret is configured; rejecting request.");
@@ -149,6 +154,7 @@ mod tests {
     use super::*;
     use hmac::{Hmac, Mac};
     use sha2::Sha256;
+    use std::collections::HashMap;
 
     /// Helper function to generate a valid signature for testing
     fn generate_signature(secret: &str, body: &str) -> String {
@@ -218,5 +224,39 @@ mod tests {
 
         let result = TailscaleWebhook::verify_signature(secret, body, &signature);
         assert!(result.is_ok(), "Empty body with valid signature should verify successfully");
+    }
+
+    #[test]
+    fn test_header_lookup_case_insensitive() {
+        // Test that header lookup works with different case variations
+        let body = r#"{"version":1,"timestamp":"2024-01-01T00:00:00Z","type":"test","tailnet":"example.com","message":"Test","data":{}}"#;
+        let signature = generate_signature("secret", body);
+        
+        // Test with lowercase
+        let mut headers = HashMap::new();
+        headers.insert("x-tailscale-signature".to_string(), signature.clone());
+        
+        let found = headers.iter()
+            .find(|(key, _)| key.eq_ignore_ascii_case("x-tailscale-signature"))
+            .map(|(_, value)| value.as_str());
+        assert!(found.is_some(), "Should find lowercase header");
+        
+        // Test with uppercase
+        let mut headers = HashMap::new();
+        headers.insert("X-TAILSCALE-SIGNATURE".to_string(), signature.clone());
+        
+        let found = headers.iter()
+            .find(|(key, _)| key.eq_ignore_ascii_case("x-tailscale-signature"))
+            .map(|(_, value)| value.as_str());
+        assert!(found.is_some(), "Should find uppercase header");
+        
+        // Test with mixed case
+        let mut headers = HashMap::new();
+        headers.insert("X-Tailscale-Signature".to_string(), signature.clone());
+        
+        let found = headers.iter()
+            .find(|(key, _)| key.eq_ignore_ascii_case("x-tailscale-signature"))
+            .map(|(_, value)| value.as_str());
+        assert!(found.is_some(), "Should find mixed case header");
     }
 }
