@@ -11,6 +11,8 @@ pub struct Config {
     #[serde(default)]
     pub connections: ConnectionConfigs,
     #[serde(default)]
+    pub web: WebConfig,
+    #[serde(default)]
     pub webhooks: WebhookConfigs,
     #[serde(default)]
     pub workflows: WorkflowConfigs,
@@ -48,6 +50,19 @@ pub struct ConnectionConfigs {
 
     #[serde(default)]
     pub github: GitHubConfig,
+}
+
+#[derive(Clone, Deserialize, Default)]
+pub struct WebConfig {
+    #[serde(default = "default_listen_address")]
+    pub address: String,
+
+    #[serde(default)]
+    pub admin_acl: Filter,
+}
+
+fn default_listen_address() -> String {
+    "localhost:8080".to_string()
 }
 
 #[derive(Clone, Deserialize, Default)]
