@@ -75,6 +75,9 @@ pub struct WebhookConfigs {
 
     #[serde(default)]
     pub tailscale: TailscaleWebhookConfig,
+
+    #[serde(default)]
+    pub terraform: TerraformWebhookConfig,
 }
 
 #[derive(Clone, Deserialize, Default)]

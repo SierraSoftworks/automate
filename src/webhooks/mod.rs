@@ -6,10 +6,12 @@ use crate::prelude::*;
 mod azure_monitor;
 mod honeycomb;
 mod tailscale;
+mod terraform;
 
 pub use azure_monitor::{AzureMonitorWebhook, AzureMonitorWebhookConfig};
 pub use honeycomb::{HoneycombWebhook, HoneycombWebhookConfig};
 pub use tailscale::{TailscaleWebhook, TailscaleWebhookConfig};
+pub use terraform::{TerraformWebhook, TerraformWebhookConfig};
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct WebhookEvent {

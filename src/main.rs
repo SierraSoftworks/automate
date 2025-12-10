@@ -71,14 +71,13 @@ async fn run() -> Result<(), human_errors::Error> {
             crate::publishers::TodoistCompleteTask.run(services.clone()),
         ).race(),
 
-
         (
             crate::webhooks::AzureMonitorWebhook.run(services.clone()),
             // TODO: GrafanaAlertsWebhook
             crate::webhooks::HoneycombWebhook.run(services.clone()),
             // TODO: SentryAlertsWebhook
             crate::webhooks::TailscaleWebhook.run(services.clone()),
-            // TODO: TerraformAlertsWebhook
+            crate::webhooks::TerraformWebhook.run(services.clone()),
         ).race(),
 
         (
