@@ -14,7 +14,9 @@ croner = { version = "3.0.1", features = ["serde"] }
 feed-rs = "2.3.1"
 fjall = "2.8.0"
 futures-concurrency = "7.6.3"
+hex = "0.4.3"
 htmd = "0.5.0"
+hmac = "0.12.1"
 html-escape = "0.2.13"
 human-errors = "0.2.1"
 inventory = "0.3.21"
@@ -25,6 +27,7 @@ rusqlite = { version = "0.37.0", features = ["bundled", "chrono"] }
 scraper = "0.24.0"
 serde = { version = "1.0.219", features = ["alloc", "derive"] }
 serde_json = { version = "1.0.140", features = ["alloc"] }
+sha2 = "0.10.8"
 sha256 = "1.6.0"
 todoist-api = "0.3.0"
 tokio = { version = "1.44.1", features = ["net", "io-std", "rt-multi-thread", "time", "fs"] }
