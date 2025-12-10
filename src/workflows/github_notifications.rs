@@ -71,9 +71,6 @@ impl Job for GitHubNotificationsWorkflow {
                 }
             }
 
-
-            
-
             Ok(())
 
         } else {
