@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::collectors::GitHubNotificationsCollector;
 use crate::prelude::*;
-use crate::publishers::{TodoistCreateTask, TodoistCreateTaskPayload, TodoistDueDate};
+use crate::publishers::{TodoistCompleteTask, TodoistCompleteTaskPayload, TodoistDueDate, TodoistUpsertTask, TodoistUpsertTaskPayload};
 use crate::{config::TodoistConfig, filter::Filter};
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -28,6 +28,27 @@ impl Display for GitHubNotificationsConfig {
 #[derive(Clone)]
 pub struct GitHubNotificationsWorkflow;
 
+impl GitHubNotificationsWorkflow {
+    fn build_task(&self, event: &<GitHubNotificationsCollector as Collector>::Item, job: &GitHubNotificationsConfig) -> TodoistUpsertTaskPayload {
+        // Still open, create a Todoist task for it (since it's not being automatically resolved)
+        let subject_html_url = event.subject.url.as_ref().map(|url| {
+            url.replace("api.github.com/repos/", "github.com/").replace("/pulls/", "/pull/")
+        });
+        
+        TodoistUpsertTaskPayload {
+            unique_key: event.id.clone(),
+            title: format!(
+                "[github:{}]({}): [{}]({}) ({})",
+                &event.repository.full_name, &event.repository.html_url, event.subject.title, subject_html_url.unwrap_or_default(), serde_json::to_string(&event.reason).unwrap_or_default()
+            ),
+            due: TodoistDueDate::DateTime(event.updated_at),
+            config: job.todoist.clone(),
+            priority: Some(event.reason.priority()),
+            ..Default::default()
+        }
+    }
+}
+
 impl Job for GitHubNotificationsWorkflow {
     type JobType = GitHubNotificationsConfig;
 
@@ -44,22 +65,8 @@ impl Job for GitHubNotificationsWorkflow {
 
             match subject_state {
                 crate::collectors::GitHubNotificationsSubjectState::Open => {
-                    // Still open, create a Todoist task for it (since it's not being automatically resolved)
-                    let subject_html_url = event.subject.url.as_ref().map(|url| {
-                        url.replace("api.github.com/repos/", "github.com/").replace("/pulls/", "/pull/")
-                    });
-
-                    TodoistCreateTask::dispatch(
-                        TodoistCreateTaskPayload {
-                            title: format!(
-                                "[github:{}]({}): [{}]({}) ({})",
-                                &event.repository.full_name, &event.repository.html_url, event.subject.title, subject_html_url.unwrap_or_default(), serde_json::to_string(&event.reason).unwrap_or_default()
-                            ),
-                            due: TodoistDueDate::DateTime(event.updated_at),
-                            config: job.todoist.clone(),
-                            priority: Some(event.reason.priority()),
-                            ..Default::default()
-                        },
+                    TodoistUpsertTask::dispatch(
+                        self.build_task(&event, job),
                         None,
                         &services,
                     )
@@ -68,6 +75,15 @@ impl Job for GitHubNotificationsWorkflow {
                 _ => {
                     // Closed/Resolved/Merged/etc., mark as done
                     collector.mark_as_done(&event.id, &services).await?;
+                    TodoistCompleteTask::dispatch(
+                        TodoistCompleteTaskPayload {
+                            unique_key: event.id.clone(),
+                            config: job.todoist.clone(),
+                            ..Default::default()
+                        },
+                        None,
+                        &services,
+                    ).await?;
                 }
             }
 
@@ -87,12 +103,16 @@ impl Job for GitHubNotificationsWorkflow {
                     _ => {}
                 }
 
+                if item.reason.priority() >= 3 {
+                    TodoistUpsertTask::dispatch(self.build_task(&item, job), None, &services).await?;
+                }
+
                 let id = item.id.clone();
                 Self::dispatch_delayed(GitHubNotificationsConfig {
                     event: Some(item),
                     filter: job.filter.clone(),
                     todoist: job.todoist.clone(),
-                }, Some(id.into()), TimeDelta::hours(1), &services).await?;
+                }, Some(id.into()), TimeDelta::minutes(30), &services).await?;
             }
             Ok(())
         }

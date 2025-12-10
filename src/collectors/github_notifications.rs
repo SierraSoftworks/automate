@@ -326,15 +326,13 @@ impl GitHubNotificationsReason {
             GitHubNotificationsReason::SecurityAlert => 4,
 
             GitHubNotificationsReason::ApprovalRequested => 3,
-            GitHubNotificationsReason::Assign => 3,
-            GitHubNotificationsReason::Mention => 3,
-            GitHubNotificationsReason::TeamMention => 3,
             GitHubNotificationsReason::ReviewRequested => 3,
             
+            GitHubNotificationsReason::TeamMention => 2,
+            GitHubNotificationsReason::Mention => 2,
             GitHubNotificationsReason::Subscribed => 2,
-            GitHubNotificationsReason::Comment => 2,
             GitHubNotificationsReason::Author => 2,
-
+            
             _ => 1
         }
     }
