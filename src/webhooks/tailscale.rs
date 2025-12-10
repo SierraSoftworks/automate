@@ -152,13 +152,11 @@ struct TailscaleAlertEventPayload {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use hmac::{Hmac, Mac};
-    use sha2::Sha256;
     use std::collections::HashMap;
 
     /// Helper function to generate a valid signature for testing
     fn generate_signature(secret: &str, body: &str) -> String {
-        let mut mac = Hmac::<Sha256>::new_from_slice(secret.as_bytes()).unwrap();
+        let mut mac = HmacSha256::new_from_slice(secret.as_bytes()).unwrap();
         mac.update(body.as_bytes());
         let result = mac.finalize();
         hex::encode(result.into_bytes())
