@@ -45,12 +45,16 @@ impl Config {
 pub struct ConnectionConfigs {
     #[serde(default)]
     pub todoist: TodoistConfig,
+
     #[serde(default)]
     pub github: GitHubConfig,
 }
 
 #[derive(Clone, Deserialize, Default)]
 pub struct WebhookConfigs {
+    #[serde(default)]
+    pub azure_monitor: AzureMonitorWebhookConfig,
+
     #[serde(default)]
     pub honeycomb: HoneycombWebhookConfig,
 

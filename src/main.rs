@@ -73,7 +73,7 @@ async fn run() -> Result<(), human_errors::Error> {
 
 
         (
-            // TODO: AzureAlertsWebhook
+            crate::webhooks::AzureMonitorWebhook.run(services.clone()),
             // TODO: GrafanaAlertsWebhook
             crate::webhooks::HoneycombWebhook.run(services.clone()),
             // TODO: SentryAlertsWebhook
@@ -84,6 +84,7 @@ async fn run() -> Result<(), human_errors::Error> {
         (
             crate::workflows::CalendarWorkflow.run(services.clone()),
             crate::workflows::GitHubNotificationsWorkflow.run(services.clone()),
+            // TODO: GitHubNotificationsCleanupWorkflow (close out old notifications where the subject has been closed)
             crate::workflows::GitHubReleasesWorkflow.run(services.clone()),
             crate::workflows::RssWorkflow.run(services.clone()),
             crate::workflows::XkcdWorkflow.run(services.clone()),

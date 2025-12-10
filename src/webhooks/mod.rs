@@ -3,9 +3,11 @@ use serde::{Deserialize, Serialize};
 
 use crate::prelude::*;
 
+mod azure_monitor;
 mod honeycomb;
 mod tailscale;
 
+pub use azure_monitor::{AzureMonitorWebhook, AzureMonitorWebhookConfig};
 pub use honeycomb::{HoneycombWebhook, HoneycombWebhookConfig};
 pub use tailscale::{TailscaleWebhook, TailscaleWebhookConfig};
 
