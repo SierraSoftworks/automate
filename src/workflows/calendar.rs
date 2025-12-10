@@ -60,7 +60,7 @@ impl Job for CalendarWorkflow {
                         &services
                     ).await?;
                 },
-                Diff::Removed(id) => {
+                Diff::Added(id, _) | Diff::Removed(id) => {
                     let identifier_string = serde_json::to_string(&id).map_err_as_system(&[
                         "Report this issue to the development team on GitHub."
                     ])?;
