@@ -42,7 +42,7 @@ impl Job for TodoistCreateTask {
 
         client.0
             .create_task(&todoist_api::CreateTaskArgs {
-                content: job.title.clone(),
+                content: TodoistClient::escape_content(&job.title).into_owned(),
                 description: job.description.clone(),
                 due_date: job.due.due_date(),
                 due_datetime: job.due.due_datetime(),

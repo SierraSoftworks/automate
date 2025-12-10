@@ -1,3 +1,4 @@
+use chrono::Utc;
 use human_errors::ResultExt;
 use serde::Deserialize;
 
@@ -6,7 +7,8 @@ use crate::filter::Filterable;
 use super::{Collector, IncrementalCollector};
 
 pub struct GitHubReleasesCollector {
-    url: String,
+    api_url: String,
+    repo: String,
 }
 
 #[allow(dead_code)]
@@ -44,14 +46,16 @@ impl Filterable for GitHubReleaseItem {
 impl GitHubReleasesCollector {
     pub fn new(repo: impl ToString) -> Self {
         Self {
-            url: format!("https://api.github.com/repos/{}/releases", repo.to_string()),
+            api_url: "https://api.github.com".into(),
+            repo: repo.to_string(),
         }
     }
 
     #[cfg(test)]
-    pub fn new_with_url(url: impl ToString) -> Self {
+    pub fn new_with_url(url: impl ToString, repo: impl ToString) -> Self {
         Self {
-            url: url.to_string(),
+            api_url: url.to_string(),
+            repo: repo.to_string(),
         }
     }
 }
@@ -76,18 +80,13 @@ impl IncrementalCollector for GitHubReleasesCollector {
     }
 
     fn key(&self) -> std::borrow::Cow<'static, str> {
-        std::borrow::Cow::Owned(self.url.clone())
+        std::borrow::Cow::Owned(self.api_url.clone())
     }
-
-    fn watermark(&self, item: &Self::Item) -> Self::Watermark {
-        item.published_at
-    }
-
     async fn fetch_since(
         &self,
         watermark: Option<Self::Watermark>,
         services: &impl crate::services::Services,
-    ) -> Result<Vec<Self::Item>, human_errors::Error> {
+    ) -> Result<(Vec<Self::Item>, Self::Watermark), human_errors::Error> {
         let mut headers = reqwest::header::HeaderMap::new();
         headers.insert("X-GitHub-Api-Version", "2022-11-28".parse().unwrap());
 
@@ -105,7 +104,7 @@ impl IncrementalCollector for GitHubReleasesCollector {
             .build()
             .map_err_as_system(&["Report the issue to the development team on GitHub."])?;
 
-        let response = client.get(&self.url)
+        let response = client.get(format!("{}/repos/{}/releases", self.api_url, self.repo))
             .send().await.wrap_err_as_user("We were unable to fetch GitHub releases from GitHub.", &[
                 "Make sure that your network connection is working properly.",
                 "Check https://www.githubstatus.com/ for any ongoing issues with GitHub's services.",
@@ -157,7 +156,7 @@ impl IncrementalCollector for GitHubReleasesCollector {
         let releases: Vec<GitHubReleaseItem> = response.json().await.wrap_err_as_user(
             format!(
                 "Failed to read the content of the GitHub Releases from URL '{}'.",
-                &self.url
+                &self.api_url
             ),
             &[
                 "Check that the URL is correct and that the server is reachable.",
@@ -165,13 +164,14 @@ impl IncrementalCollector for GitHubReleasesCollector {
             ],
         )?;
 
+        let latest_release = releases.iter().map(|item| item.published_at).max().unwrap_or(Utc::now());
         if let Some(watermark) = watermark {
-            Ok(releases
+            Ok((releases
                 .into_iter()
                 .filter(|item| item.published_at > watermark)
-                .collect())
+                .collect(), latest_release))
         } else {
-            Ok(releases)
+            Ok((releases, latest_release))
         }
     }
 }

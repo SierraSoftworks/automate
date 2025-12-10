@@ -18,6 +18,7 @@ htmd = "0.5.0"
 html-escape = "0.2.13"
 human-errors = "0.2.1"
 inventory = "0.3.21"
+regex = "1.12.2"
 reqwest = { version = "0.12.15", features = ["blocking"] }
 rstest = "0.25.0"
 rusqlite = { version = "0.37.0", features = ["bundled", "chrono"] }

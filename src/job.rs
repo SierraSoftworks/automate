@@ -19,6 +19,19 @@ pub trait Job {
         Ok(())
     }
 
+    async fn dispatch_delayed(
+        job: Self::JobType,
+        idempotency_key: Option<Cow<'static, str>>,
+        delay: TimeDelta,
+        services: &impl Services,
+    ) -> Result<(), human_errors::Error> {
+        let queue = services.queue().partition(Self::partition());
+
+        queue.enqueue(job, idempotency_key, Some(delay)).await?;
+
+        Ok(())
+    }
+
     fn partition() -> &'static str;
 
     fn timeout(&self) -> TimeDelta {

@@ -55,6 +55,7 @@ async fn run() -> Result<(), human_errors::Error> {
     let services = services::ServicesContainer::new(config, db);
 
     CronJob::setup(&services.config().workflows.calendars, services.clone()).await?;
+    CronJob::setup(&services.config().workflows.github_notifications, services.clone()).await?;
     CronJob::setup(&services.config().workflows.github_releases, services.clone()).await?;
     CronJob::setup(&services.config().workflows.rss, services.clone()).await?;
     CronJob::setup(&services.config().workflows.xkcd, services.clone()).await?;
@@ -62,21 +63,32 @@ async fn run() -> Result<(), human_errors::Error> {
 
     (
         crate::web::run_web_server(services.clone()),
-
-        crate::publishers::TodoistCreateTask.run(services.clone()),
-        crate::publishers::TodoistUpsertTask.run(services.clone()),
-        crate::publishers::TodoistCompleteTask.run(services.clone()),
-
         crate::workflows::CronJob.run(services.clone()),
-        
-        crate::webhooks::HoneycombWebhook.run(services.clone()),
-        crate::webhooks::TailscaleWebhook.run(services.clone()),
 
-        crate::workflows::CalendarWorkflow.run(services.clone()),
-        crate::workflows::GitHubReleasesWorkflow.run(services.clone()),
-        crate::workflows::RssWorkflow.run(services.clone()),
-        crate::workflows::XkcdWorkflow.run(services.clone()),
-        crate::workflows::YouTubeWorkflow.run(services.clone()),
+        (
+            crate::publishers::TodoistCreateTask.run(services.clone()),
+            crate::publishers::TodoistUpsertTask.run(services.clone()),
+            crate::publishers::TodoistCompleteTask.run(services.clone()),
+        ).race(),
+
+
+        (
+            // TODO: AzureAlertsWebhook
+            // TODO: GrafanaAlertsWebhook
+            crate::webhooks::HoneycombWebhook.run(services.clone()),
+            // TODO: SentryAlertsWebhook
+            crate::webhooks::TailscaleWebhook.run(services.clone()),
+            // TODO: TerraformAlertsWebhook
+        ).race(),
+
+        (
+            crate::workflows::CalendarWorkflow.run(services.clone()),
+            crate::workflows::GitHubNotificationsWorkflow.run(services.clone()),
+            crate::workflows::GitHubReleasesWorkflow.run(services.clone()),
+            crate::workflows::RssWorkflow.run(services.clone()),
+            crate::workflows::XkcdWorkflow.run(services.clone()),
+            crate::workflows::YouTubeWorkflow.run(services.clone()),
+        ).race()
     ).race().await
     .map_err_as_user(&[])?;
 

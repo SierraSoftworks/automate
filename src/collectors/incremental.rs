@@ -17,13 +17,11 @@ pub trait IncrementalCollector: Collector {
 
     fn key(&self) -> Cow<'static, str>;
 
-    fn watermark(&self, item: &Self::Item) -> Self::Watermark;
-
     async fn fetch_since(
         &self,
         watermark: Option<Self::Watermark>,
         services: &impl Services,
-    ) -> Result<Vec<Self::Item>, human_errors::Error>;
+    ) -> Result<(Vec<Self::Item>, Self::Watermark), human_errors::Error>;
 
     async fn fetch(
         &self,
@@ -34,10 +32,8 @@ pub trait IncrementalCollector: Collector {
 
         let current_watermark = services.kv().get(partition.clone(), key.clone()).await?;
 
-        let new_items = self.fetch_since(current_watermark, services).await?;
-        if let Some(new_watermark) = new_items.iter().map(|item| self.watermark(item)).max() {
-            services.kv().set(partition, key, new_watermark).await?;
-        }
+        let (new_items, new_watermark) = self.fetch_since(current_watermark, services).await?;
+        services.kv().set(partition, key, new_watermark).await?;
 
         Ok(new_items)
     }

@@ -46,7 +46,7 @@ impl Job for TodoistUpsertTask {
             }
 
             client.0.update_task(&existing_task.id, &todoist_api::UpdateTaskArgs {
-                content: Some(job.title.clone()),
+                content: Some(TodoistClient::escape_content(&job.title).into_owned()),
                 description: job.description.clone(),
                 due_date: job.due.due_date(),
                 due_datetime: job.due.due_datetime(),

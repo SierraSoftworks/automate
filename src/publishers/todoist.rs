@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{borrow::Cow, sync::Arc};
 
 use serde::{Deserialize, Serialize};
 use todoist_api::TodoistWrapper;
@@ -16,6 +16,19 @@ impl TodoistClient {
         })?;
 
         Ok(Self(Arc::new(TodoistWrapper::new(api_token))))
+    }
+
+    pub fn escape_content(content: &str) -> Cow<'_, str> {
+        if !content.contains('@') && !content.contains('#') {
+            Cow::Borrowed(content)
+        } else {
+            if let Ok(re) = regex::Regex::new(r#"(@[^\s]+)"#) {
+                let result = re.replace_all(content, r"`$1`");
+                Cow::Owned(result.into_owned())
+            } else {
+                Cow::Borrowed(content)
+            }
+        }
     }
 
     pub async fn get_project_id(

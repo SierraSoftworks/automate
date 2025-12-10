@@ -2,6 +2,7 @@ mod differential;
 mod incremental;
 
 mod calendar;
+mod github_notifications;
 mod github_releases;
 mod rss;
 mod xkcd;
@@ -12,6 +13,7 @@ pub use differential::{DifferentialCollector, Diff};
 pub use incremental::IncrementalCollector;
 
 pub use calendar::CalendarCollector;
+pub use github_notifications::{GitHubNotificationsCollector, GitHubNotificationsSubjectState};
 pub use github_releases::GitHubReleasesCollector;
 pub use rss::RssCollector;
 pub use xkcd::XkcdCollector;

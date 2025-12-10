@@ -40,15 +40,11 @@ impl IncrementalCollector for RssCollector {
         Cow::Owned(self.feed_url.clone())
     }
 
-    fn watermark(&self, item: &Self::Item) -> Self::Watermark {
-        item.published.unwrap_or_else(|| DateTime::UNIX_EPOCH)
-    }
-
     async fn fetch_since(
         &self,
         watermark: Option<Self::Watermark>,
         _services: &impl crate::services::Services,
-    ) -> Result<Vec<Self::Item>, human_errors::Error> {
+    ) -> Result<(Vec<Self::Item>, Self::Watermark), human_errors::Error> {
         let content = reqwest::get(&self.feed_url)
             .await
             .wrap_err_as_user(
@@ -71,7 +67,7 @@ impl IncrementalCollector for RssCollector {
                 ],
             )?;
 
-        parse(&content[..])
+        let items: Vec<Entry> = parse(&content[..])
             .wrap_err_as_user(
                 format!(
                     "Failed to parse RSS feed information from URL '{}'.",
@@ -84,11 +80,18 @@ impl IncrementalCollector for RssCollector {
                     .into_iter()
                     .filter(|item| {
                         watermark
-                            .map(|wm| wm < self.watermark(item))
+                            .map(|wm| wm < item.published.unwrap_or(DateTime::UNIX_EPOCH))
                             .unwrap_or(true)
                     })
                     .collect()
-            })
+            })?;
+
+        let new_watermark = items.iter().filter_map(|item| item.published).max().unwrap_or(Utc::now());
+
+        Ok((
+            items,
+            new_watermark,
+        ))
     }
 }
 
@@ -113,7 +116,7 @@ mod tests {
         };
         let services = crate::testing::mock_services().await.unwrap();
 
-        let items = collector.fetch_since(None, &services).await.unwrap();
+        let (items, _) = collector.fetch_since(None, &services).await.unwrap();
         assert_eq!(
             items.len(),
             4,
@@ -144,7 +147,7 @@ mod tests {
                 .unwrap()
                 .with_timezone(&Utc),
         );
-        let items = collector.fetch_since(watermark, &services).await.unwrap();
+        let (items, _) = collector.fetch_since(watermark, &services).await.unwrap();
 
         assert_eq!(items.len(), 1, "Expected only items after watermark");
         assert_eq!(items[0].title.as_ref().unwrap().content, "Eclipse Clouds");
