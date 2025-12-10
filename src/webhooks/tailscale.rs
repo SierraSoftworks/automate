@@ -1,4 +1,4 @@
-use chrono::DateTime;
+use chrono::{DateTime, Utc};
 use hmac::{Hmac, Mac};
 use serde::Deserialize;
 use sha2::Sha256;
@@ -27,6 +27,51 @@ fn default_todoist_config() -> crate::config::TodoistConfig {
 pub struct TailscaleWebhook;
 
 impl TailscaleWebhook {
+    fn parse_signature(header: &str) -> Result<(chrono::DateTime<Utc>, Vec<u8>), human_errors::Error> {
+        let mut timestamp = None;
+        let mut signature = None;
+
+        for (key, value) in header.split(',').filter_map(|s| s.split_once('=')) {
+            match key {
+                "t" => timestamp = Some(value),
+                "v1" => signature = Some(value),
+                _ => {} // Ignore unknown fields
+            }
+        }
+
+        match (timestamp, signature) {
+            (Some(timestamp), Some(signature)) => {
+                let timestamp = timestamp.parse().ok()
+                    .and_then(|ts| chrono::DateTime::from_timestamp(ts, 0))
+                    .ok_or_else(|| human_errors::user(
+                        "The timestamp in the Tailscale-Webhook-Signature header is invalid.",
+                        &[
+                            "Ensure that you are only sending Tailscale webhooks to this endpoint.",
+                            "Check that the webhook is configured correctly at https://login.tailscale.com/admin/settings/webhooks"
+                        ]
+                    ))?;
+
+                let signature = hex::decode(signature).map_err_as_user(&[
+                    "The signature in the Tailscale-Webhook-Signature header is not valid hex.",
+                    "Ensure that you are only sending Tailscale webhooks to this endpoint.",
+                    "Check that the webhook is configured correctly at https://login.tailscale.com/admin/settings/webhooks"
+                ])?;
+
+                Ok((timestamp, signature))
+
+            },
+            _ => Err(
+                human_errors::user(
+                    "The X-Tailscale-Webhook-Signature header did not contain a valid signature.",
+                    &[
+                        "Ensure that you are only sending Tailscale webhooks to this endpoint.",
+                        "Check that the webhook is configured correctly at https://login.tailscale.com/admin/settings/webhooks"
+                    ]
+                )
+            )
+        }
+    }
+
     /// Verifies the Tailscale webhook signature.
     /// 
     /// According to https://tailscale.com/kb/1213/webhooks#verifying-an-event-signature,
@@ -34,70 +79,38 @@ impl TailscaleWebhook {
     /// the signature in the Tailscale-Webhook-Signature header in the format:
     /// `t=<timestamp>,v1=<hex_signature>`
     fn verify_signature(secret: &str, body: &str, signature_header: &str) -> Result<(), human_errors::Error> {
-        // Parse the signature header format: t=<timestamp>,v1=<hex_signature>
-        let mut timestamp: Option<&str> = None;
-        let mut signature: Option<&str> = None;
-        
-        for element in signature_header.split(',') {
-            let parts: Vec<&str> = element.splitn(2, '=').collect();
-            if parts.len() == 2 {
-                match parts[0] {
-                    "t" => timestamp = Some(parts[1]),
-                    "v1" => signature = Some(parts[1]),
-                    _ => {} // Ignore unknown fields
-                }
-            }
+        let (timestamp, expected_signature) = Self::parse_signature(signature_header)?;
+
+        if (timestamp - Utc::now()).abs() > chrono::Duration::minutes(5) {
+            return Err(human_errors::user(
+                "The Tailscale webhook signature timestamp is too old or too far in the future.",
+                &[
+                    "Ensure that the system clock on this server is accurate.",
+                    "Check that the webhook is configured correctly at https://login.tailscale.com/admin/settings/webhooks"
+                ]
+            ));
         }
         
-        let timestamp = timestamp.ok_or_else(|| std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            "Missing timestamp in signature header"
-        )).wrap_err_as_user(
-            "Failed to parse timestamp from Tailscale-Webhook-Signature header.",
-            &[
-                "Ensure that you are only sending Tailscale webhooks to this endpoint.",
-                "Check that the webhook is configured correctly at https://login.tailscale.com/admin/settings/webhooks"
-            ]
-        )?;
-        
-        let signature_hex = signature.ok_or_else(|| std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            "Missing signature in signature header"
-        )).wrap_err_as_user(
-            "Failed to parse signature from Tailscale-Webhook-Signature header.",
-            &[
-                "Ensure that you are only sending Tailscale webhooks to this endpoint.",
-                "Check that the webhook is configured correctly at https://login.tailscale.com/admin/settings/webhooks"
-            ]
-        )?;
-        
-        // Decode the expected signature from hex
-        let expected_signature = hex::decode(signature_hex)
-            .wrap_err_as_user(
-                "Failed to decode the signature from Tailscale-Webhook-Signature header as hex.",
-                &[
-                    "The signature appears to be corrupted or malformed.",
-                    "Ensure that you are only sending Tailscale webhooks to this endpoint."
-                ]
-            )?;
-        
         // Create the string to sign: <timestamp>.<body>
-        let string_to_sign = format!("{}.{}", timestamp, body);
+        let string_to_sign = format!("{}.{}", timestamp.timestamp(), body);
         
         // Create HMAC-SHA256 instance with the secret
         let mut mac = HmacSha256::new_from_slice(secret.as_bytes())
-            .wrap_err_as_system(
+            .wrap_err_as_user(
                 "Failed to create HMAC instance with the provided secret.",
-                &["Ensure that the configured webhooks.tailscale.secret matches that on https://login.tailscale.com/admin/settings/webhooks"]
+                &[
+                    "Ensure that you have provided a valid webhooks.tailscale.secret in your configuration.",
+                    "Ensure that the configured webhooks.tailscale.secret matches that on https://login.tailscale.com/admin/settings/webhooks"
+                ]
             )?;
         
         // Compute the HMAC of the string to sign
         mac.update(string_to_sign.as_bytes());
-        
+
         // Verify the signature
         mac.verify_slice(&expected_signature)
             .wrap_err_as_user(
-                "Webhook signature verification failed.",
+                format!("Webhook signature verification failed (signatures did not match)."),
                 &["Ensure that the configured webhooks.tailscale.secret matches that on https://login.tailscale.com/admin/settings/webhooks"]
             )?;
         
@@ -212,12 +225,12 @@ mod tests {
     #[test]
     fn test_verify_signature_valid() {
         let secret = "test_secret_key";
-        let timestamp = "1663781880";
+        let timestamp = Utc::now().timestamp().to_string();
         let body = r#"{"version":1,"timestamp":"2024-01-01T00:00:00Z","type":"test","tailnet":"example.com","message":"Test message","data":{}}"#;
-        let signature = generate_signature(secret, timestamp, body);
+        let signature = generate_signature(secret, &timestamp, body);
 
         let result = TailscaleWebhook::verify_signature(secret, body, &signature);
-        assert!(result.is_ok(), "Valid signature should verify successfully");
+        result.expect("Valid signature should verify successfully");
     }
 
     #[test]
@@ -234,9 +247,9 @@ mod tests {
     fn test_verify_signature_wrong_secret() {
         let secret = "test_secret_key";
         let wrong_secret = "wrong_secret_key";
-        let timestamp = "1663781880";
+        let timestamp = Utc::now().timestamp().to_string();
         let body = r#"{"version":1,"timestamp":"2024-01-01T00:00:00Z","type":"test","tailnet":"example.com","message":"Test message","data":{}}"#;
-        let signature = generate_signature(wrong_secret, timestamp, body);
+        let signature = generate_signature(wrong_secret, &timestamp, body);
 
         let result = TailscaleWebhook::verify_signature(secret, body, &signature);
         assert!(result.is_err(), "Signature with wrong secret should fail verification");
@@ -245,10 +258,10 @@ mod tests {
     #[test]
     fn test_verify_signature_tampered_body() {
         let secret = "test_secret_key";
-        let timestamp = "1663781880";
+        let timestamp = Utc::now().timestamp().to_string();
         let original_body = r#"{"version":1,"timestamp":"2024-01-01T00:00:00Z","type":"test","tailnet":"example.com","message":"Test message","data":{}}"#;
         let tampered_body = r#"{"version":1,"timestamp":"2024-01-01T00:00:00Z","type":"test","tailnet":"example.com","message":"Tampered message","data":{}}"#;
-        let signature = generate_signature(secret, timestamp, original_body);
+        let signature = generate_signature(secret, &timestamp, original_body);
 
         let result = TailscaleWebhook::verify_signature(secret, tampered_body, &signature);
         assert!(result.is_err(), "Tampered body should fail verification");
@@ -287,12 +300,12 @@ mod tests {
     #[test]
     fn test_verify_signature_empty_body() {
         let secret = "test_secret_key";
-        let timestamp = "1663781880";
+        let timestamp = Utc::now().timestamp().to_string();
         let body = "";
-        let signature = generate_signature(secret, timestamp, body);
+        let signature = generate_signature(secret, &timestamp, body);
 
         let result = TailscaleWebhook::verify_signature(secret, body, &signature);
-        assert!(result.is_ok(), "Empty body with valid signature should verify successfully");
+        result.expect("Empty body with valid signature should verify successfully");
     }
 
     #[test]
