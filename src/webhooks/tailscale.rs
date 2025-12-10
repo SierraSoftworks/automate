@@ -54,7 +54,10 @@ impl TailscaleWebhook {
             "Missing timestamp in signature header"
         )).wrap_err_as_user(
             "Failed to parse timestamp from Tailscale-Webhook-Signature header.",
-            &["Ensure that you are only sending Tailscale webhooks to this endpoint."]
+            &[
+                "Ensure that you are only sending Tailscale webhooks to this endpoint.",
+                "Check that the webhook is configured correctly at https://login.tailscale.com/admin/settings/webhooks"
+            ]
         )?;
         
         let signature_hex = signature.ok_or_else(|| std::io::Error::new(
@@ -62,14 +65,20 @@ impl TailscaleWebhook {
             "Missing signature in signature header"
         )).wrap_err_as_user(
             "Failed to parse signature from Tailscale-Webhook-Signature header.",
-            &["Ensure that you are only sending Tailscale webhooks to this endpoint."]
+            &[
+                "Ensure that you are only sending Tailscale webhooks to this endpoint.",
+                "Check that the webhook is configured correctly at https://login.tailscale.com/admin/settings/webhooks"
+            ]
         )?;
         
         // Decode the expected signature from hex
         let expected_signature = hex::decode(signature_hex)
             .wrap_err_as_user(
                 "Failed to decode the signature from Tailscale-Webhook-Signature header as hex.",
-                &["Ensure that you are only sending Tailscale webhooks to this endpoint."]
+                &[
+                    "The signature appears to be corrupted or malformed.",
+                    "Ensure that you are only sending Tailscale webhooks to this endpoint."
+                ]
             )?;
         
         // Create the string to sign: <timestamp>.<body>
