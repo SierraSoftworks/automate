@@ -46,6 +46,7 @@ impl Job for RssWorkflow {
         "workflow/rss-todoist"
     }
 
+    #[instrument("workflow.rss.handle", skip(self, job, services), fields(job = %job))]
     async fn handle(&self, job: &Self::JobType, services: impl Services + Send + Sync + 'static) -> Result<(), human_errors::Error> {
         let base_url: reqwest::Url = job.homepage.parse().wrap_err_as_user(
             format!("The feed URL you provided could not be parsed as a valid URL ({}).", &job.homepage),

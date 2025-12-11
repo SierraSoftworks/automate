@@ -1,6 +1,7 @@
 use std::{borrow::Cow, collections::HashSet};
 
 use crate::{collectors::Collector, db::KeyValueStore, services::Services};
+use tracing::instrument;
 
 pub enum Diff<ID, V> {
     Added(ID, V),
@@ -33,6 +34,7 @@ pub trait DifferentialCollector: Collector {
 
     async fn fetch(&self) -> Result<Vec<Self::Item>, human_errors::Error>;
 
+    #[instrument("collectors.diff", skip(self, services))]
     async fn diff(&self, services: &impl Services) -> Result<Vec<Diff<Self::Identifier, Self::Item>>, human_errors::Error> {
         let partition = self.partition(None);
         let key = self.key();

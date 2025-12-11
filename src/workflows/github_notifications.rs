@@ -56,6 +56,7 @@ impl Job for GitHubNotificationsWorkflow {
         "workflow/github-notifications-todoist"
     }
 
+    #[instrument("workflow.github_notifications.handle", skip(self, job, services), fields(job = %job))]
     async fn handle(&self, job: &Self::JobType, services: impl Services + Send + Sync + 'static) -> Result<(), human_errors::Error> {
         if let Some(event) = job.event.as_ref() {
 

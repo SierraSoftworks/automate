@@ -1,7 +1,8 @@
-use std::{borrow::Cow, sync::Arc};
+use std::{borrow::Cow, collections::HashMap, sync::Arc};
 
 use human_errors::{self as errors, ResultExt};
 use tokio_rusqlite::{Connection, OptionalExtension};
+use tracing_batteries::prelude::*;
 
 use crate::db::{KeyValueStore, Queue};
 
@@ -98,6 +99,7 @@ impl SqliteDatabase {
 
 #[async_trait::async_trait]
 impl KeyValueStore for SqliteDatabase {
+    #[instrument("db.sqlite.get", skip(self, partition, key), err(Display))]
     async fn get<
         T: serde::de::DeserializeOwned + Send + 'static,
     >(
@@ -132,6 +134,7 @@ impl KeyValueStore for SqliteDatabase {
             .map_err_as_system(ADVICE_REPORT_DEV)?)
     }
 
+    #[instrument("db.sqlite.list", skip(self, partition), err(Display))]
     async fn list<
         T: serde::de::DeserializeOwned + Send + 'static,
     >(
@@ -168,6 +171,7 @@ impl KeyValueStore for SqliteDatabase {
             .map_err_as_system(ADVICE_DB_ERROR)
     }
 
+    #[instrument("db.sqlite.set", skip(self, partition, key, value), err(Display))]
     async fn set<
         T: serde::Serialize + Send + 'static,
     >(
@@ -197,6 +201,7 @@ impl KeyValueStore for SqliteDatabase {
         Ok(())
     }
 
+    #[instrument("db.sqlite.remove", skip(self, partition, key), err(Display))]
     async fn remove(
         &self,
         partition: impl Into<Cow<'static, str>> + Send,
@@ -220,6 +225,7 @@ impl KeyValueStore for SqliteDatabase {
 
 #[async_trait::async_trait]
 impl Queue for SqliteDatabase {
+    #[instrument("db.sqlite.enqueue", skip(self, partition, job, idempotency_key, delay), err(Display))]
     async fn enqueue<P: Into<Cow<'static, str>> + Send, T: serde::Serialize + Send + 'static>(
         &self,
         partition: P,
@@ -227,6 +233,11 @@ impl Queue for SqliteDatabase {
         idempotency_key: Option<Cow<'static, str>>,
         delay: Option<chrono::Duration>,
     ) -> std::result::Result<(), errors::Error> {
+        let mut trace_headers = HashMap::new();
+        get_text_map_propagator(|p| {
+            p.inject_context(&Span::current().context(), &mut trace_headers);
+        });
+
         let partition = partition.into();
         let serialized = serde_json::to_string(&job).wrap_err_as_system(
             "Failed to serialize the queue message for storage.",
@@ -241,11 +252,11 @@ impl Queue for SqliteDatabase {
         self.connection
             .call(move |c| {
                 c.execute(
-                    "INSERT INTO queues (partition, key, payload, hiddenUntil) VALUES (?1, ?2, ?3, ?4)
+                    "INSERT INTO queues (partition, key, payload, hiddenUntil, traceparent, tracestate) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
                         ON CONFLICT (partition, key)
                         DO UPDATE
                         SET payload = ?3, hiddenUntil = ?4, scheduledAt = CURRENT_TIMESTAMP, reservedBy = NULL",
-                    (partition, &key, &serialized, &hidden_until),
+                    (partition, &key, &serialized, &hidden_until, trace_headers.get("traceparent"), trace_headers.get("tracestate")),
                 )
             })
             .await
@@ -254,6 +265,7 @@ impl Queue for SqliteDatabase {
         Ok(())
     }
 
+    #[instrument("db.sqlite.dequeue", skip(self, partition, reserve_for), err(Display))]
     async fn dequeue<
         P: Into<Cow<'static, str>> + Send,
         T: serde::de::DeserializeOwned + Send + 'static,
@@ -270,10 +282,12 @@ impl Queue for SqliteDatabase {
         self.connection.call(move |c| {
             let tx = c.transaction().map_err_as_system(ADVICE_DB_ERROR)?;
 
-            let message = tx.query_one("SELECT key, payload, scheduledAt FROM queues WHERE partition = ?1 AND hiddenUntil < CURRENT_TIMESTAMP LIMIT 1", [&partition], |row| {
+            let message = tx.query_one("SELECT key, payload, scheduledAt, traceparent, tracestate FROM queues WHERE partition = ?1 AND hiddenUntil < CURRENT_TIMESTAMP LIMIT 1", [&partition], |row| {
                 let key: String = row.get(0)?;
                 let payload_str: String = row.get(1)?;
                 let scheduled_at: chrono::DateTime<chrono::Utc> = row.get(2)?;
+                let traceparent: Option<String> = row.get(3)?;
+                let tracestate: Option<String> = row.get(4)?;
 
                 let payload: T = serde_json::from_str(&payload_str).map_err(|e| {
                     rusqlite::Error::FromSqlConversionFailure(
@@ -288,6 +302,8 @@ impl Queue for SqliteDatabase {
                     reservation_id: reservation_id.clone(),
                     payload,
                     scheduled_at,
+                    traceparent,
+                    tracestate,
                 })
             }).optional().map_err_as_system(ADVICE_DB_ERROR)?;
 
@@ -306,6 +322,7 @@ impl Queue for SqliteDatabase {
         }).await.map_err_as_system(ADVICE_DB_ERROR)
     }
 
+    #[instrument("db.sqlite.complete", skip(self, partition, msg), err(Display))]
     async fn complete<P: Into<Cow<'static, str>> + Send, T: Send + 'static>(
         &self,
         partition: P,
@@ -342,6 +359,8 @@ const MIGRATIONS: &[&str] = &[
         PRIMARY KEY (partition, key)
     )",
     "CREATE INDEX IF NOT EXISTS idx_queues_partition_hidden ON queues (partition, hiddenUntil)",
+    "ALTER TABLE queues ADD COLUMN traceparent TEXT",
+    "ALTER TABLE queues ADD COLUMN tracestate TEXT",
 ];
 
 #[cfg(test)]

@@ -1,6 +1,7 @@
 use std::fmt::Display;
 
 use chrono::Utc;
+use tracing::instrument;
 
 use crate::prelude::*;
 
@@ -20,6 +21,12 @@ pub struct CronJobTask {
     pub task: serde_json::Value,
 }
 
+impl Display for CronJobTask {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.kind)
+    }
+}
+
 impl<J: Job> From<&CronJobConfig<J>> for CronJobTask
 where
     J::JobType: serde::Serialize + Display,
@@ -37,6 +44,7 @@ where
 pub struct CronJob;
 
 impl CronJob {
+    #[instrument("cron_job.setup", skip(jobs, services))]
     pub async fn setup<J: Job>(
         jobs: &[CronJobConfig<J>],
         services: impl Services + Send + Sync + 'static,
@@ -76,6 +84,7 @@ impl Job for CronJob {
         "cron"
     }
 
+    #[instrument("workflow.cron.handle", skip(self, job, services), fields(job = %job))]
     async fn handle(
         &self,
         job: &Self::JobType,

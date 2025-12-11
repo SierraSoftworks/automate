@@ -4,6 +4,7 @@ use crate::{
 };
 use chrono::{DateTime, Utc};
 use feed_rs::model::Entry;
+use tracing::instrument;
 
 pub struct XkcdCollector(RssCollector);
 
@@ -31,6 +32,7 @@ impl Filterable for XkcdItem {
 impl Collector for XkcdCollector {
     type Item = XkcdItem;
 
+    #[instrument("collectors.xkcd.list", skip(self, services), err(Display))]
     async fn list(
         &self,
         services: &(impl crate::services::Services + Send + Sync + 'static),

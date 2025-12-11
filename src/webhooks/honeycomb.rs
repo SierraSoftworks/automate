@@ -27,6 +27,7 @@ impl Job for HoneycombWebhook {
         "webhooks/honeycomb"
     }
 
+    #[instrument("webhooks.honeycomb.handle", skip(self, job, services), fields(job = %job))]
     async fn handle(&self, job: &Self::JobType, services: impl Services + Send + Sync + 'static) -> Result<(), human_errors::Error> {
         if let Some(secret) = job.headers.get("X-Honeycomb-Webhook-Token") {
             if !services.config().webhooks.honeycomb.trusted_secrets.contains(secret) {

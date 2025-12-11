@@ -24,7 +24,7 @@ pub async fn index() -> impl actix_web::Responder {
         .body(format!("<!DOCTYPE html>{}", rendered))
 }
 
-pub async fn admin_index<S: Services>(services: actix_web::web::Data<S>) -> impl actix_web::Responder {
+pub async fn admin_index<S: Services>(_services: actix_web::web::Data<S>) -> impl actix_web::Responder {
     let renderer = ServerRenderer::<crate::ui::Page>::with_props(|| crate::ui::PageProps {
         title: Some("Admin | Automate"),
         children: html! {

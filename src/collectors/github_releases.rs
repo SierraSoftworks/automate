@@ -1,6 +1,7 @@
 use chrono::Utc;
 use human_errors::ResultExt;
 use serde::Deserialize;
+use tracing::instrument;
 
 use crate::filter::Filterable;
 
@@ -64,6 +65,7 @@ impl GitHubReleasesCollector {
 impl Collector for GitHubReleasesCollector {
     type Item = GitHubReleaseItem;
 
+    #[instrument("collectors.github_releases.list", skip(self, services), err(Display))]
     async fn list(
         &self,
         services: &(impl crate::services::Services + Send + Sync + 'static),
@@ -82,6 +84,7 @@ impl IncrementalCollector for GitHubReleasesCollector {
     fn key(&self) -> std::borrow::Cow<'static, str> {
         std::borrow::Cow::Owned(self.api_url.clone())
     }
+
     async fn fetch_since(
         &self,
         watermark: Option<Self::Watermark>,

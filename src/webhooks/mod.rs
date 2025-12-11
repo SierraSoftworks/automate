@@ -20,6 +20,12 @@ pub struct WebhookEvent {
     pub headers: HashMap<String, String>,
 }
 
+impl std::fmt::Display for WebhookEvent {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "WebhookEvent")
+    }
+}
+
 impl WebhookEvent {
     pub fn json<T: serde::de::DeserializeOwned>(&self) -> Result<T, human_errors::Error> {
         serde_json::from_str(&self.body)

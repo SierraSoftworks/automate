@@ -1,10 +1,12 @@
 use std::collections::HashMap;
 
 use actix_web::{Responder, web};
+use tracing::instrument;
 use tracing_batteries::prelude::error;
 
 use crate::{db::Queue, prelude::Services, webhooks::WebhookEvent};
 
+#[instrument("webhooks.handle", skip(req, kind, body, services), fields(webhook.kind = %kind))]
 pub async fn handle<S: Services>(req: actix_web::HttpRequest, kind: web::Path<String>, body: web::Payload, services: web::Data<S>) -> impl Responder {
     let body = match body.to_bytes().await {
         Ok(bytes) => {

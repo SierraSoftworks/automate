@@ -125,6 +125,7 @@ impl Job for TailscaleWebhook {
         "webhooks/tailscale"
     }
 
+    #[instrument("webhooks.tailscale.handle", skip(self, job, services), fields(job = %job))]
     async fn handle(&self, job: &Self::JobType, services: impl Services + Send + Sync + 'static) -> Result<(), human_errors::Error> {
         // Validate the Tailscale webhook signature header
         // https://tailscale.com/kb/1213/webhooks#verifying-an-event-signature

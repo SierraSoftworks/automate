@@ -33,6 +33,7 @@ impl Job for TerraformWebhook {
         "webhook/terraform"
     }
 
+    #[instrument("webhooks.terraform.handle", skip(self, job, services), fields(job = %job))]
     async fn handle(&self, job: &Self::JobType, services: impl Services + Send + Sync + 'static) -> Result<(), human_errors::Error> {
         if let Some(secret) = services.config().webhooks.terraform.secret.as_ref() {
             let expected_hash = job.headers.get("X-TFE-Notification-Signature")

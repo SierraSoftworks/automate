@@ -4,6 +4,7 @@ use crate::{
 };
 use chrono::{DateTime, Utc};
 use feed_rs::model::Entry;
+use tracing::instrument;
 
 pub struct YouTubeCollector(RssCollector);
 
@@ -44,6 +45,7 @@ impl YouTubeCollector {
 impl Collector for YouTubeCollector {
     type Item = YouTubeItem;
 
+    #[instrument("collectors.youtube.list", skip(self, services), err(Display))]
     async fn list(
         &self,
         services: &(impl crate::services::Services + Send + Sync + 'static),

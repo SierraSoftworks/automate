@@ -36,6 +36,7 @@ impl Job for XkcdWorkflow {
         "workflow/xkcd-todoist"
     }
 
+    #[instrument("workflow.xkcd.handle", skip(self, job, services), fields(job = %job))]
     async fn handle(&self, job: &Self::JobType, services: impl Services + Send + Sync + 'static) -> Result<(), human_errors::Error> {
         let collector = XkcdCollector::new();
 

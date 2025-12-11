@@ -37,6 +37,7 @@ impl Job for YouTubeWorkflow {
         "workflow/youtube-todoist"
     }
 
+    #[instrument("workflow.youtube.handle", skip(self, job, services), fields(job = %job))]
     async fn handle(&self, job: &Self::JobType, services: impl Services + Send + Sync + 'static) -> Result<(), human_errors::Error> {
         let collector = YouTubeCollector::new(&job.channel_id);
 

@@ -28,6 +28,7 @@ impl Job for AzureMonitorWebhook {
         "webhooks/azure-monitor"
     }
 
+    #[instrument("webhooks.azure_monitor.handle", skip(self, job, services), fields(job = %job))]
     async fn handle(&self, job: &Self::JobType, services: impl Services + Send + Sync + 'static) -> Result<(), human_errors::Error> {
         let event: AzureMonitorAlertEventPayload = job.json()?;
 

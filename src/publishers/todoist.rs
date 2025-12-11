@@ -31,6 +31,7 @@ impl TodoistClient {
         }
     }
 
+    #[instrument("publishers.todoist.get_project_id", skip(self, name, services), fields(project.name = name), err(Display))]
     pub async fn get_project_id(
         &self,
         name: &str,
@@ -73,6 +74,7 @@ impl TodoistClient {
         Ok(project.id)
     }
 
+    #[instrument("publishers.todoist.get_section_id", skip(self, project_name, project_id, name, services), fields(project.name = project_name, section.name = ?name), err(Display))]
     pub async fn get_section_id(
         &self,
         project_name: &str,

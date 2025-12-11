@@ -1,5 +1,6 @@
 use human_errors::ResultExt;
 use serde::{Deserialize, Serialize};
+use tracing::instrument;
 
 use crate::filter::Filterable;
 
@@ -23,6 +24,7 @@ impl GitHubNotificationsCollector {
         }
     }
 
+    #[instrument("collectors.github_notifications.get_subject_state", skip(self, subject, services))]
     pub async fn get_subject_state(&self, subject: &GitHubNotificationsSubject, services: &(impl crate::services::Services + Send + Sync + 'static)) -> Result<GitHubNotificationsSubjectState, human_errors::Error> {
         if let Some(url) = &subject.url {
             let client = self.get_client(services)?;
@@ -83,6 +85,7 @@ impl GitHubNotificationsCollector {
         }
     }
 
+    #[instrument("collectors.github_notifications.mark_as_done", skip(self, thread_id, services))]
     pub async fn mark_as_done(&self, thread_id: &str, services: &(impl crate::services::Services + Send + Sync + 'static)) -> Result<(), human_errors::Error> {
         let client = self.get_client(services)?;
 
@@ -146,6 +149,7 @@ impl GitHubNotificationsCollector {
 impl Collector for GitHubNotificationsCollector {
     type Item = GitHubNotificationsItem;
 
+    #[instrument("collectors.github_notifications.list", skip(self, services), err(Display))]
     async fn list(
         &self,
         services: &(impl crate::services::Services + Send + Sync + 'static),

@@ -1,5 +1,7 @@
 use std::borrow::Cow;
 
+use tracing::instrument;
+
 use crate::{collectors::Collector, db::KeyValueStore, services::Services};
 
 pub trait IncrementalCollector: Collector {
@@ -23,6 +25,7 @@ pub trait IncrementalCollector: Collector {
         services: &impl Services,
     ) -> Result<(Vec<Self::Item>, Self::Watermark), human_errors::Error>;
 
+    #[instrument("collectors.fetch", skip(self, services), err(Display))]
     async fn fetch(
         &self,
         services: &impl Services,

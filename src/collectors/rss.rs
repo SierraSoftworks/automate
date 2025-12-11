@@ -4,6 +4,7 @@ use crate::collectors::{Collector, incremental::IncrementalCollector};
 use chrono::{DateTime, Utc};
 use feed_rs::{model::Entry, parser::parse};
 use human_errors::ResultExt;
+use tracing::instrument;
 
 pub struct RssCollector {
     pub feed_url: String,
@@ -21,6 +22,7 @@ impl RssCollector {
 impl Collector for RssCollector {
     type Item = Entry;
 
+    #[instrument("collectors.rss.list", skip(self, services), err(Display))]
     async fn list(
         &self,
         services: &(impl crate::services::Services + Send + Sync + 'static),

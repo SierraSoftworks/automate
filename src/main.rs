@@ -30,7 +30,13 @@ struct Args {
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
     let telemetry = tracing_batteries::Session::new("automate", env!("CARGO_PKG_VERSION"))
-        .with_battery(tracing_batteries::OpenTelemetry::new(""))
+        .with_battery(tracing_batteries::Sentry::new("https://64422db58bbf92837d6484d1b8117d5a@o219072.ingest.us.sentry.io/4506753155137536"))
+        .with_battery(tracing_batteries::OpenTelemetry::new("https://api.honeycomb.io")
+            .with_header("x-honeycomb-team", "hcaik_01kc5cbks0wtpdg3pndrxkxyswg7ngh59mvxk00hrb69dyp446jvchds8h")
+            .with_protocol(tracing_batteries::OpenTelemetryProtocol::Grpc)
+            .with_stdout(true)
+            .with_sampler(tracing_batteries::OpenTelemetrySampler::AlwaysOn)
+            .with_default_level(tracing_batteries::OpenTelemetryLevel::INFO))
         .with_battery(tracing_batteries::Medama::new(
             "https://analytics.sierrasoftworks.com",
         ));
@@ -46,6 +52,7 @@ async fn main() {
     }
 }
 
+#[tracing::instrument("main.run", err(Display))]
 async fn run() -> Result<(), human_errors::Error> {
     let args = Args::parse();
 
@@ -90,7 +97,9 @@ async fn run() -> Result<(), human_errors::Error> {
             crate::workflows::YouTubeWorkflow.run(services.clone()),
         ).race()
     ).race().await
-    .map_err_as_user(&[])?;
+        .map_err_as_user(&[
+            "Restart the application and try again after addressing any issues reported in the logs.",
+        ])?;
 
     Ok(())
 }

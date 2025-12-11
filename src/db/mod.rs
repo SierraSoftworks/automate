@@ -8,6 +8,7 @@ mod sqlite;
 
 pub use partition::Partition;
 pub use sqlite::SqliteDatabase;
+use tracing_batteries::prelude::OpenTelemetryPropagationExtractor;
 
 #[allow(dead_code)]
 #[async_trait::async_trait]
@@ -122,4 +123,25 @@ pub struct QueueMessage<T> {
     pub reservation_id: String,
     pub payload: T,
     pub scheduled_at: chrono::DateTime<chrono::Utc>,
+    pub traceparent: Option<String>,
+    pub tracestate: Option<String>,
+}
+
+impl<T> OpenTelemetryPropagationExtractor for QueueMessage<T> {
+    fn get(&self, key: &str) -> Option<&str> {
+        match key {
+            "traceparent" => self.traceparent.as_deref(),
+            "tracestate" => self.tracestate.as_deref(),
+            _ => None,
+        }
+    }
+
+    fn keys(&self) -> Vec<&str> {
+        match (&self.traceparent, &self.tracestate) {
+            (Some(_), Some(_)) => vec!["traceparent", "tracestate"],
+            (Some(_), None) => vec!["traceparent"],
+            (None, Some(_)) => vec!["tracestate"],
+            (None, None) => vec![],
+        }
+    }
 }

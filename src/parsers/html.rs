@@ -3,7 +3,9 @@ use htmd::{
     element_handler::{HandlerResult, Handlers},
 };
 use reqwest::Url;
+use tracing::instrument;
 
+#[instrument("parsers.html.html_to_markdown", skip(html, base_url))]
 pub fn html_to_markdown(html: &str, base_url: Url) -> String {
     htmd::HtmlToMarkdown::builder()
         .skip_tags(vec!["script", "style"])

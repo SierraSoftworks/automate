@@ -24,6 +24,7 @@ pub struct CalendarEventIdentifier {
 impl Collector for CalendarCollector {
     type Item = CalendarEvent;
     
+    #[instrument("collectors.calendar.list", skip(self, services), err(Display))]
     async fn list(
         &self,
         services: &(impl Services + Send + Sync + 'static),

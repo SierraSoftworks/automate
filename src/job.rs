@@ -7,6 +7,7 @@ use crate::prelude::*;
 pub trait Job {
     type JobType: serde::Serialize + serde::de::DeserializeOwned + Send + 'static;
 
+    #[instrument("job.dispatch", skip(job, idempotency_key, services), err(Display))]
     async fn dispatch(
         job: Self::JobType,
         idempotency_key: Option<Cow<'static, str>>,
@@ -19,6 +20,7 @@ pub trait Job {
         Ok(())
     }
 
+    #[instrument("job.dispatch_delayed", skip(job, idempotency_key, delay, services), err(Display))]
     async fn dispatch_delayed(
         job: Self::JobType,
         idempotency_key: Option<Cow<'static, str>>,
@@ -40,29 +42,44 @@ pub trait Job {
 
     async fn handle(&self, job: &Self::JobType, services: impl Services + Send + Sync + 'static) -> Result<(), human_errors::Error>;
 
+    #[instrument("job.run", skip(self, services), err(Display))]
     async fn run(&self, services: impl Services + Clone + Send + Sync + 'static) -> Result<(), human_errors::Error> {
         let queue = services.queue().partition(Self::partition().to_string());
+
+        let root_span = tracing::Span::current();
 
         loop {
             match queue.dequeue(self.timeout()).await {
                 Ok(Some(item)) => {
                     let delay = Utc::now() - item.scheduled_at;
                     let span = info_span!(
+                        parent: None,
                         "job.run",
                         job.name = queue.name(),
                         job.delay = delay.num_milliseconds()
                     );
+                    span.follows_from(&root_span);
 
-                    debug!("Processing job '{}'.", queue.name());
+                    let traceparent = item.traceparent.as_deref().unwrap_or("none");
+
+                    if let Some(_) = &item.traceparent {
+                        if let Err(err) = get_text_map_propagator(|p| {
+                            span.set_parent(p.extract(&item))
+                        }) {
+                            warn!(error = %err, "Failed to propagate trace context for job '{}' (traceparent: {traceparent}): {err}", queue.name());
+                        }
+                    }
+
+                    debug!("Processing job '{}' (traceparent: {traceparent}).", queue.name());
                     if let Err(err) = self
                         .handle(&item.payload, services.clone())
                         .instrument(span)
                         .await
                     {
-                        error!(error = %err, "An error occurred while processing job '{}': {}", queue.name(), err);
+                        error!(error = %err, "An error occurred while processing job '{}' (traceparent: {traceparent}): {err}", queue.name());
                     } else {
+                        info!("Job '{}' completed successfully (traceparent: {traceparent}).", queue.name());
                         queue.complete(item).await.unwrap();
-                        info!("Job '{}' completed successfully.", queue.name());
                     }
                 }
                 Ok(None) => {

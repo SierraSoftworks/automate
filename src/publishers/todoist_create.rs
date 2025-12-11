@@ -21,7 +21,8 @@ impl Job for TodoistCreateTask {
     fn partition() -> &'static str {
         "todoist/create-task"
     }
-
+    
+    #[instrument("publishers.todoist_create.handle", skip(self, job, services), err(Display))]
     async fn handle(&self, job: &Self::JobType, services: impl Services + Send + Sync + 'static) -> Result<(), human_errors::Error> {
         let config = services.config().connections.todoist.merge(&job.config);
 

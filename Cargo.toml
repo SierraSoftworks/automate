@@ -33,6 +33,7 @@ todoist-api = "0.3.0"
 tokio = { version = "1.44.1", features = ["net", "io-std", "rt-multi-thread", "time", "fs"] }
 tokio-rusqlite = "0.7.0"
 toml = "0.9.8"
+tracing = { version = "0.1.43" }
 tracing-batteries = { git = "https://github.com/sierrasoftworks/tracing-batteries-rs.git", features = [
   "medama",
   "opentelemetry",

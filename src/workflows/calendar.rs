@@ -1,6 +1,7 @@
 use std::fmt::Display;
 
 use serde::{Deserialize, Serialize};
+use tracing::instrument;
 
 use crate::{collectors::{CalendarCollector, Diff, DifferentialCollector}, config::TodoistConfig, prelude::*};
 
@@ -35,6 +36,7 @@ impl Job for CalendarWorkflow {
         "workflow/calendar-todoist"
     }
 
+    #[instrument("workflow.calendar.handle", skip(self, job, services), fields(job = %job))]
     async fn handle(&self, job: &Self::JobType, services: impl Services + Send + Sync + 'static) -> Result<(), human_errors::Error> {
         let collector = CalendarCollector::new(&job.url);
 

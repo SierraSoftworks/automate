@@ -31,6 +31,7 @@ impl Job for TodoistUpsertTask {
         "todoist/upsert-task"
     }
 
+    #[instrument("publishers.todoist_upsert.handle", skip(self, job, services), err(Display))]
     async fn handle(&self, job: &Self::JobType, services: impl Services + Send + Sync + 'static) -> Result<(), human_errors::Error> {
         let config = services.config().connections.todoist.merge(&job.config);
 

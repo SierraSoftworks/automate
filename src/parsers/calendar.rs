@@ -3,6 +3,7 @@ use chrono::{DateTime, Utc};
 use human_errors as errors;
 use calcard::{Entry, icalendar::{ICalendar, ICalendarClassification, ICalendarStatus, ICalendarValue}};
 use serde::{Deserialize, Serialize};
+use tracing::instrument;
 
 use crate::filter::Filterable;
 
@@ -62,6 +63,7 @@ macro_rules! property_value {
 }
 
 impl Calendar {
+    #[instrument("parsers.calendar.events", skip(self), err(Display))]
     pub fn events(&self) -> Result<Vec<CalendarEvent>, human_errors::Error> {
         let expanded = self.icalendar.expand_dates(calcard::common::timezone::Tz::UTC, 10);
         expanded.events.iter().map(|event| {
@@ -100,6 +102,7 @@ impl Calendar {
 impl FromStr for Calendar {
     type Err = human_errors::Error;
 
+    #[instrument("parsers.calendar.parse", skip(s), err(Display))]
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let icalendar = ICalendar::parse(s).map_err(|e|
             match e {
