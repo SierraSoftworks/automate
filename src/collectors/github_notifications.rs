@@ -502,7 +502,7 @@ mod tests {
         Mock::given(method("GET"))
             .respond_with(
                 ResponseTemplate::new(200)
-                    .set_body_string(test_data)
+                    .set_body_string(test_data.clone())
                     .insert_header("Last-Modified", "Mon, 08 Apr 2024 12:00:00 GMT"),
             )
             .mount(&mock_server)
@@ -519,6 +519,18 @@ mod tests {
             "Expected to fetch 3 notification items from test data"
         );
         assert_eq!(watermark, "Mon, 08 Apr 2024 12:00:00 GMT");
+        
+        // Verify the If-Modified-Since header was sent correctly
+        let received_requests = mock_server.received_requests().await.unwrap();
+        assert_eq!(received_requests.len(), 1, "Expected exactly one request");
+        let request = &received_requests[0];
+        let if_modified_since = request.headers.get("if-modified-since")
+            .expect("If-Modified-Since header should be present");
+        assert_eq!(
+            if_modified_since.to_str().unwrap(),
+            "Thu, 01 Jan 1970 00:00:00 GMT",
+            "If-Modified-Since header should have default watermark value"
+        );
     }
 
     #[tokio::test]
@@ -529,7 +541,7 @@ mod tests {
         Mock::given(method("GET"))
             .respond_with(
                 ResponseTemplate::new(200)
-                    .set_body_string(test_data)
+                    .set_body_string(test_data.clone())
                     .insert_header("Last-Modified", "Mon, 08 Apr 2024 12:00:00 GMT"),
             )
             .mount(&mock_server)
@@ -539,7 +551,7 @@ mod tests {
         let services = crate::testing::mock_services().await.unwrap();
 
         let watermark = Some("Mon, 01 Apr 2024 12:00:00 GMT".to_string());
-        let (items, new_watermark) = collector.fetch_since(watermark, &services).await.unwrap();
+        let (items, new_watermark) = collector.fetch_since(watermark.clone(), &services).await.unwrap();
         
         assert_eq!(
             items.len(),
@@ -549,6 +561,18 @@ mod tests {
         assert_eq!(new_watermark, "Mon, 08 Apr 2024 12:00:00 GMT");
         assert_eq!(items[0].id, "1");
         assert_eq!(items[1].id, "2");
+        
+        // Verify the If-Modified-Since header was sent correctly
+        let received_requests = mock_server.received_requests().await.unwrap();
+        assert_eq!(received_requests.len(), 1, "Expected exactly one request");
+        let request = &received_requests[0];
+        let if_modified_since = request.headers.get("if-modified-since")
+            .expect("If-Modified-Since header should be present");
+        assert_eq!(
+            if_modified_since.to_str().unwrap(),
+            "Mon, 01 Apr 2024 12:00:00 GMT",
+            "If-Modified-Since header should match the provided watermark"
+        );
     }
 
     #[tokio::test]
@@ -564,9 +588,21 @@ mod tests {
         let services = crate::testing::mock_services().await.unwrap();
 
         let watermark = Some("Mon, 08 Apr 2024 12:00:00 GMT".to_string());
-        let (items, new_watermark) = collector.fetch_since(watermark, &services).await.unwrap();
+        let (items, new_watermark) = collector.fetch_since(watermark.clone(), &services).await.unwrap();
         
         assert_eq!(items.len(), 0, "Expected no items when not modified");
         assert_eq!(new_watermark, "Mon, 08 Apr 2024 12:00:00 GMT", "Watermark should remain unchanged");
+        
+        // Verify the If-Modified-Since header was sent correctly
+        let received_requests = mock_server.received_requests().await.unwrap();
+        assert_eq!(received_requests.len(), 1, "Expected exactly one request");
+        let request = &received_requests[0];
+        let if_modified_since = request.headers.get("if-modified-since")
+            .expect("If-Modified-Since header should be present");
+        assert_eq!(
+            if_modified_since.to_str().unwrap(),
+            "Mon, 08 Apr 2024 12:00:00 GMT",
+            "If-Modified-Since header should match the provided watermark"
+        );
     }
 }
