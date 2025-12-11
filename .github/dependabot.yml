@@ -1,0 +1,20 @@
+version: 2
+updates:
+  - directory: /
+    package-ecosystem: cargo
+    open-pull-requests-limit: 5
+    rebase-strategy: auto
+    schedule:
+      interval: daily
+    groups:
+      opentelemetry:
+        patterns:
+          - "opentelemetry*"
+          - "tracing*"
+          - "tonic"
+  - directory: /
+    package-ecosystem: github-actions
+    open-pull-requests-limit: 5
+    rebase-strategy: auto
+    schedule:
+      interval: daily
