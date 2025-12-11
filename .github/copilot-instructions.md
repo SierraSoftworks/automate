@@ -22,12 +22,12 @@ Automate is a Rust-based automation server designed to automate common manual ta
 src/
 ├── collectors/     - Components that gather data from external sources
 ├── config.rs       - Configuration file parsing and structures
-├── db/             - Database operations
-├── filter/         - Filtering logic for data processing
+├── db/             - Database abstractions (SQLite is the primary implementation)
+├── filter/         - Custom filter language with zero-copy semantics and recursive descent parser
 ├── job.rs          - Job management
 ├── parsers/        - Parsers for various data formats
 ├── publishers/     - Components that publish data to external services
-├── services.rs     - Service definitions and management
+├── services.rs     - Services abstraction for dependency injection and mocking
 ├── ui/             - User interface components (Yew SSR)
 ├── web/            - Web server and routing
 ├── webhooks/       - Webhook handlers (Tailscale, Honeycomb, etc.)
@@ -132,13 +132,15 @@ cargo clippy --all-targets --all-features -- -D warnings
 ### Testing
 - Use `rstest` for parameterized tests
 - Use `wiremock` for HTTP mocking in tests
-- Tests should be in `#[cfg(test)]` modules or the `testing.rs` file
+- Tests should be in `#[cfg(test)]` modules within source files
+- The `testing.rs` module provides test helpers and utilities
 - Aim for meaningful test coverage of business logic
 
 ### Documentation
 - Document public APIs with doc comments
 - Keep README.md up-to-date with major changes
 - Update config.example.toml when adding new configuration options
+- Update `.github/copilot-instructions.md` when major changes are made
 
 ## Acceptance Criteria for Changes
 
@@ -196,14 +198,14 @@ The project uses GitHub Actions for CI/CD:
 
 ### Adding a New Collector/Publisher
 1. Create module in `src/collectors/` or `src/publishers/`
-2. Implement appropriate traits
+2. Implement the `Collector` trait for collectors (publishers use concrete types)
 3. Update configuration structures
 4. Add tests for the component
 5. Document usage patterns
 
 ## Additional Notes
 
-- The project uses `inventory` crate for plugin-style registration
-- Tracing is configured with OpenTelemetry, Sentry, and Medama integrations
+- Use `tracing_batteries` for tracing support (available via `use tracing_batteries::prelude::*` or `use crate::prelude::*`)
 - The web UI uses Yew with server-side rendering
-- Database operations use both `rusqlite` and `fjall` (embedded key-value store)
+- Database operations use `tokio-rusqlite` for multi-threaded SQLite access
+- The `filter` module provides an interpreted language operating over `FilterValue`s for configurable filtering
