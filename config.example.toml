@@ -19,6 +19,11 @@ trusted_secrets = [
 # filter = 'true'
 todoist = { project = "Software", section = "Outages" }
 
+[webhooks.sentry]
+# secret = "xxxxxx"
+# filter = 'true'
+todoist = { project = "Software", section = "Errors" }
+
 [webhooks.tailscale]
 # secret = "xxxxxx"
 # filter = 'true'
