@@ -81,8 +81,8 @@ impl<'a> Scanner<'a> {
 
     fn read_number(&mut self, start: usize) -> Result<Token<'a>, Error> {
         let mut end = start + self.advance_while_fn(|_, c| c.is_numeric());
-        if let Some((loc, c)) = self.chars.peek() {
-            if *c == '.'
+        if let Some((loc, c)) = self.chars.peek()
+            && *c == '.'
                 && self
                     .source
                     .chars()
@@ -93,7 +93,6 @@ impl<'a> Scanner<'a> {
                 self.chars.next();
                 end += 1 + self.advance_while_fn(|_, c| c.is_numeric());
             }
-        }
 
         Ok(Token::Number(
             Loc::new(self.line, 1 + start - self.line_start),

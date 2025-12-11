@@ -34,6 +34,7 @@ pub trait DifferentialCollector: Collector {
 
     async fn fetch(&self) -> Result<Vec<Self::Item>, human_errors::Error>;
 
+    #[allow(clippy::type_complexity)]
     #[instrument("collectors.diff", skip(self, services))]
     async fn diff(
         &self,

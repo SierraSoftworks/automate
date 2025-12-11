@@ -68,7 +68,7 @@ impl Job for CalendarWorkflow {
                             due: if item.all_day {
                                 crate::publishers::TodoistDueDate::Date(item.start.date_naive())
                             } else {
-                                crate::publishers::TodoistDueDate::DateTime(item.start.clone())
+                                crate::publishers::TodoistDueDate::DateTime(item.start)
                             },
                             duration: Some(item.end - item.start),
                             config: job.todoist.clone(),

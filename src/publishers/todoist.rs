@@ -21,13 +21,11 @@ impl TodoistClient {
     pub fn escape_content(content: &str) -> Cow<'_, str> {
         if !content.contains('@') && !content.contains('#') {
             Cow::Borrowed(content)
+        } else if let Ok(re) = regex::Regex::new(r#"(@[^\s]+)"#) {
+            let result = re.replace_all(content, r"`$1`");
+            Cow::Owned(result.into_owned())
         } else {
-            if let Ok(re) = regex::Regex::new(r#"(@[^\s]+)"#) {
-                let result = re.replace_all(content, r"`$1`");
-                Cow::Owned(result.into_owned())
-            } else {
-                Cow::Borrowed(content)
-            }
+            Cow::Borrowed(content)
         }
     }
 

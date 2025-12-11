@@ -119,7 +119,7 @@ impl TailscaleWebhook {
         // Verify the signature
         mac.verify_slice(&expected_signature)
             .wrap_err_as_user(
-                format!("Webhook signature verification failed (signatures did not match)."),
+                "Webhook signature verification failed (signatures did not match).".to_string(),
                 &["Ensure that the configured webhooks.tailscale.secret matches that on https://login.tailscale.com/admin/settings/webhooks"]
             )?;
 

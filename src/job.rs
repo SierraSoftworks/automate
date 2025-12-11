@@ -74,7 +74,7 @@ pub trait Job {
 
                     let traceparent = item.traceparent.as_deref().unwrap_or("none");
 
-                    if let Some(_) = &item.traceparent {
+                    if item.traceparent.is_some() {
                         let context = get_text_map_propagator(|p| p.extract(&item));
 
                         if Self::propagate_parent() {

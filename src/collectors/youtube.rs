@@ -54,7 +54,7 @@ impl Collector for YouTubeCollector {
 
         let youtube_items = items
             .iter()
-            .map(|entry| parse_youtube_entry(entry))
+            .map(parse_youtube_entry)
             .collect();
 
         Ok(youtube_items)
@@ -72,7 +72,7 @@ fn parse_youtube_entry(entry: &Entry) -> YouTubeItem {
         .first()
         .map(|l| l.href.to_string())
         .unwrap_or_default();
-    let published = entry.published.unwrap_or_else(|| DateTime::UNIX_EPOCH);
+    let published = entry.published.unwrap_or(DateTime::UNIX_EPOCH);
     let channel = entry
         .authors
         .first()

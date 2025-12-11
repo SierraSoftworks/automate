@@ -77,7 +77,7 @@ impl XkcdCollector {
                     .to_string()
             })
             .unwrap_or_default();
-        let published = entry.published.unwrap_or_else(|| DateTime::UNIX_EPOCH);
+        let published = entry.published.unwrap_or(DateTime::UNIX_EPOCH);
 
         if let Some(content) = entry
             .summary

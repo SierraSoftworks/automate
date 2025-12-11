@@ -1,7 +1,7 @@
 mod todoist;
 mod todoist_complete;
 mod todoist_create;
-pub(self) mod todoist_upsert;
+ mod todoist_upsert;
 
 pub use todoist::{TodoistClient, TodoistDueDate};
 

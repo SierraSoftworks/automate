@@ -91,10 +91,9 @@ impl Calendar {
                     description: property_value!(value, optional Description, v => v.as_text())?.map(|s| s.to_string()),
                     start: start.to_utc(),
                     end: end.to_utc(),
-                    private: match property_value!(value, Class, v => Some(v))? {
-                        ICalendarValue::Classification(ICalendarClassification::Private | ICalendarClassification::Confidential) => true,
-                        _ => false,
-                    },
+                    private: matches!(
+                        property_value!(value, Class, v => Some(v))?,
+                        ICalendarValue::Classification(ICalendarClassification::Private | ICalendarClassification::Confidential)),
                     all_day: property_value!(value, custom "X-MICROSOFT-CDO-ALLDAYEVENT", v => v.as_boolean())?.unwrap_or_default(),
                     status: match property_value!(value, Status, v => Some(v))? {
                         ICalendarValue::Status(status) => status.clone(),

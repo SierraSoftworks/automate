@@ -29,7 +29,7 @@ pub async fn run_web_server<S: Services + Clone + Send + Sync + 'static>(
                 .service(
                     web::resource("/admin")
                         .guard(actix_web::guard::fn_guard(|ctx| {
-                            ctx.app_data().map_or(false, |services: &web::Data<S>| {
+                            ctx.app_data().is_some_and(|services: &web::Data<S>| {
                                 services
                                     .config()
                                     .web

@@ -73,6 +73,7 @@ impl Job for AzureMonitorWebhook {
             }
             CommonAlertSchemaMonitorCondition::Resolved => {
                 TodoistCompleteTask::dispatch(
+                    #[allow(clippy::needless_update)]
                     TodoistCompleteTaskPayload {
                         unique_key: event.data.essentials.alert_id,
                         config: services.config().webhooks.azure_monitor.todoist.clone(),
@@ -189,9 +190,9 @@ impl CommonAlertSchemaSeverity {
     }
 }
 
-impl Into<FilterValue> for &CommonAlertSchemaSeverity {
-    fn into(self) -> FilterValue {
-        match self {
+impl From<&CommonAlertSchemaSeverity> for FilterValue {
+    fn from(value: &CommonAlertSchemaSeverity) -> Self {
+        match value {
             CommonAlertSchemaSeverity::Sev0 => 0.into(),
             CommonAlertSchemaSeverity::Sev1 => 1.into(),
             CommonAlertSchemaSeverity::Sev2 => 2.into(),
@@ -207,9 +208,9 @@ pub enum CommonAlertSchemaMonitorCondition {
     Resolved,
 }
 
-impl Into<FilterValue> for &CommonAlertSchemaMonitorCondition {
-    fn into(self) -> FilterValue {
-        match self {
+impl From<&CommonAlertSchemaMonitorCondition> for FilterValue {
+    fn from(value: &CommonAlertSchemaMonitorCondition) -> Self {
+        match value {
             CommonAlertSchemaMonitorCondition::Fired => "fired".into(),
             CommonAlertSchemaMonitorCondition::Resolved => "resolved".into(),
         }

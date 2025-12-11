@@ -25,7 +25,7 @@ pub fn html_to_markdown(html: &str, base_url: Url) -> String {
                     .find(|a| a.name.local.to_string() == "href")
                 {
                     let new_url = base_url
-                        .join(&href.value.to_string())
+                        .join(href.value.as_ref())
                         .unwrap_or_else(|_| base_url.clone());
                     let content = handlers.walk_children(element.node).content;
 

@@ -92,7 +92,7 @@ impl Job for TodoistUpsertTask {
                     job.unique_key.clone(),
                     TodoistUpsertTaskState {
                         id: existing_task.id.clone(),
-                        hash: hash,
+                        hash,
                         title: Some(job.title.clone()),
                     },
                 )
@@ -141,7 +141,7 @@ impl Job for TodoistUpsertTask {
                     job.unique_key.clone(),
                     TodoistUpsertTaskState {
                         id: task.id.clone(),
-                        hash: hash,
+                        hash,
                         title: Some(job.title.clone()),
                     },
                 )

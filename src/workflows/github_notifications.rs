@@ -81,13 +81,14 @@ impl Job for GitHubNotificationsWorkflow {
 
             match subject_state {
                 crate::collectors::GitHubNotificationsSubjectState::Open => {
-                    TodoistUpsertTask::dispatch(self.build_task(&event, job), None, &services)
+                    TodoistUpsertTask::dispatch(self.build_task(event, job), None, &services)
                         .await?;
                 }
                 _ => {
                     // Closed/Resolved/Merged/etc., mark as done
                     collector.mark_as_done(&event.id, &services).await?;
                     TodoistCompleteTask::dispatch(
+                        #[allow(clippy::needless_update)]
                         TodoistCompleteTaskPayload {
                             unique_key: event.id.clone(),
                             config: job.todoist.clone(),

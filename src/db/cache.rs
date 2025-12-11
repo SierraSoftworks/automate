@@ -28,11 +28,9 @@ impl<KV: KeyValueStore + Sync + Send + 'static> Cache for KV {
 
         if let Some(value @ CacheItem::<T> { .. }) =
             self.get(partition.clone(), key.clone()).await?
-        {
-            if value.expires_at > chrono::Utc::now() {
+            && value.expires_at > chrono::Utc::now() {
                 return Ok(value.value);
             }
-        }
 
         let value = builder().await?;
         self.set(
