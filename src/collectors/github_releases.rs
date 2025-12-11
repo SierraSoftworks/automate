@@ -13,7 +13,7 @@ pub struct GitHubReleasesCollector {
 }
 
 #[allow(dead_code)]
-#[derive(Deserialize)]
+#[derive(Debug, Deserialize)]
 pub struct GitHubReleaseItem {
     pub tag_name: String,
     pub target_commitish: String,
@@ -191,4 +191,219 @@ impl IncrementalCollector for GitHubReleasesCollector {
     }
 }
 
-// TODO: Add tests for the GitHubReleasesCollector using wiremock to mock out the GitHub API and test data stored in the tests/data/ directory.
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::KeyValueStore;
+    use crate::services::Services;
+    use crate::testing::mock_services;
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    #[tokio::test]
+    async fn test_github_releases_fetch_since_no_watermark() {
+        let mock_server = MockServer::start().await;
+        let test_data = crate::testing::get_test_file_contents("github_releases.json");
+
+        Mock::given(method("GET"))
+            .and(path("/repos/example/repo/releases"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(test_data))
+            .mount(&mock_server)
+            .await;
+
+        let collector = GitHubReleasesCollector::new_with_url(mock_server.uri(), "example/repo");
+        let services = mock_services().await.unwrap();
+
+        let (items, watermark) = collector.fetch_since(None, &services).await.unwrap();
+        
+        assert_eq!(
+            items.len(),
+            4,
+            "Expected to fetch 4 releases from test data"
+        );
+        assert_eq!(items[0].tag_name, "v1.2.0");
+        assert_eq!(items[0].name, "Release 1.2.0");
+        assert_eq!(items[0].html_url, "https://github.com/example/repo/releases/tag/v1.2.0");
+        assert!(!items[0].draft);
+        assert!(!items[0].prerelease);
+        
+        assert_eq!(items[3].tag_name, "v1.0.0");
+        assert_eq!(items[3].name, "Initial Release");
+        
+        // Watermark should be set to the latest published_at date
+        assert_eq!(watermark, chrono::DateTime::parse_from_rfc3339("2024-04-15T12:00:00Z").unwrap().with_timezone(&Utc));
+    }
+
+    #[tokio::test]
+    async fn test_github_releases_fetch_since_with_watermark() {
+        let mock_server = MockServer::start().await;
+        let test_data = crate::testing::get_test_file_contents("github_releases.json");
+
+        Mock::given(method("GET"))
+            .and(path("/repos/example/repo/releases"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(test_data))
+            .mount(&mock_server)
+            .await;
+
+        let collector = GitHubReleasesCollector::new_with_url(mock_server.uri(), "example/repo");
+        let services = mock_services().await.unwrap();
+
+        // Set watermark to filter releases on or before March 1, 2024
+        let watermark = Some(
+            chrono::DateTime::parse_from_rfc3339("2024-03-01T10:00:00Z")
+                .unwrap()
+                .with_timezone(&Utc),
+        );
+        let (items, _) = collector.fetch_since(watermark, &services).await.unwrap();
+
+        assert_eq!(items.len(), 1, "Expected only releases after watermark");
+        assert_eq!(items[0].tag_name, "v1.2.0");
+        assert_eq!(items[0].name, "Release 1.2.0");
+    }
+
+    #[tokio::test]
+    async fn test_github_releases_404_error() {
+        let mock_server = MockServer::start().await;
+
+        Mock::given(method("GET"))
+            .and(path("/repos/nonexistent/repo/releases"))
+            .respond_with(ResponseTemplate::new(404))
+            .mount(&mock_server)
+            .await;
+
+        let collector = GitHubReleasesCollector::new_with_url(mock_server.uri(), "nonexistent/repo");
+        let services = mock_services().await.unwrap();
+
+        let result = collector.fetch_since(None, &services).await;
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.to_string().contains("not found"));
+    }
+
+    #[tokio::test]
+    async fn test_github_releases_401_error() {
+        let mock_server = MockServer::start().await;
+
+        Mock::given(method("GET"))
+            .and(path("/repos/private/repo/releases"))
+            .respond_with(ResponseTemplate::new(401))
+            .mount(&mock_server)
+            .await;
+
+        let collector = GitHubReleasesCollector::new_with_url(mock_server.uri(), "private/repo");
+        let services = mock_services().await.unwrap();
+
+        let result = collector.fetch_since(None, &services).await;
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.to_string().contains("Authorization failed"));
+    }
+
+    #[tokio::test]
+    async fn test_github_releases_429_rate_limit() {
+        let mock_server = MockServer::start().await;
+
+        Mock::given(method("GET"))
+            .and(path("/repos/example/repo/releases"))
+            .respond_with(ResponseTemplate::new(429))
+            .mount(&mock_server)
+            .await;
+
+        let collector = GitHubReleasesCollector::new_with_url(mock_server.uri(), "example/repo");
+        let services = mock_services().await.unwrap();
+
+        let result = collector.fetch_since(None, &services).await;
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.to_string().contains("Rate limit exceeded"));
+    }
+
+    #[tokio::test]
+    async fn test_github_releases_list_collector_trait() {
+        let mock_server = MockServer::start().await;
+        let test_data = crate::testing::get_test_file_contents("github_releases.json");
+
+        Mock::given(method("GET"))
+            .and(path("/repos/example/repo/releases"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(test_data))
+            .mount(&mock_server)
+            .await;
+
+        let collector = GitHubReleasesCollector::new_with_url(mock_server.uri(), "example/repo");
+        let services = mock_services().await.unwrap();
+
+        let items = collector.list(&services).await.unwrap();
+        assert_eq!(items.len(), 4, "Expected to fetch 4 releases via list()");
+    }
+
+    #[tokio::test]
+    async fn test_github_releases_incremental_with_stored_watermark() {
+        let mock_server = MockServer::start().await;
+        let test_data = crate::testing::get_test_file_contents("github_releases.json");
+
+        Mock::given(method("GET"))
+            .and(path("/repos/example/repo/releases"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(test_data))
+            .mount(&mock_server)
+            .await;
+
+        let collector = GitHubReleasesCollector::new_with_url(mock_server.uri(), "example/repo");
+        let services = mock_services().await.unwrap();
+
+        // Store a watermark in the KV store
+        services
+            .kv()
+            .set(
+                collector.partition(None),
+                collector.key(),
+                chrono::DateTime::parse_from_rfc3339("2024-03-01T10:00:00Z")
+                    .unwrap()
+                    .with_timezone(&Utc),
+            )
+            .await
+            .unwrap();
+
+        // List should use the stored watermark
+        let items = collector.list(&services).await.unwrap();
+        assert_eq!(items.len(), 1, "Expected only releases after stored watermark");
+        assert_eq!(items[0].tag_name, "v1.2.0");
+    }
+
+    #[test]
+    fn test_github_release_item_filterable() {
+        let item = GitHubReleaseItem {
+            tag_name: "v1.0.0".to_string(),
+            target_commitish: "main".to_string(),
+            name: "Test Release".to_string(),
+            body: Some("Test body".to_string()),
+            draft: false,
+            prerelease: true,
+            created_at: chrono::DateTime::parse_from_rfc3339("2024-01-01T00:00:00Z")
+                .unwrap()
+                .with_timezone(&Utc),
+            published_at: chrono::DateTime::parse_from_rfc3339("2024-01-01T12:00:00Z")
+                .unwrap()
+                .with_timezone(&Utc),
+            html_url: "https://github.com/example/repo/releases/tag/v1.0.0".to_string(),
+        };
+
+        assert_eq!(
+            item.get("tag"),
+            crate::filter::FilterValue::String("v1.0.0".to_string())
+        );
+        assert_eq!(
+            item.get("name"),
+            crate::filter::FilterValue::String("Test Release".to_string())
+        );
+        assert_eq!(
+            item.get("link"),
+            crate::filter::FilterValue::String("https://github.com/example/repo/releases/tag/v1.0.0".to_string())
+        );
+        assert_eq!(item.get("draft"), crate::filter::FilterValue::Bool(false));
+        assert_eq!(
+            item.get("prerelease"),
+            crate::filter::FilterValue::Bool(true)
+        );
+        assert_eq!(item.get("unknown"), crate::filter::FilterValue::Null);
+    }
+}
