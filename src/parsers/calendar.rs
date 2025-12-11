@@ -1,8 +1,11 @@
-use std::str::FromStr;
+use calcard::{
+    Entry,
+    icalendar::{ICalendar, ICalendarClassification, ICalendarStatus, ICalendarValue},
+};
 use chrono::{DateTime, Utc};
 use human_errors as errors;
-use calcard::{Entry, icalendar::{ICalendar, ICalendarClassification, ICalendarStatus, ICalendarValue}};
 use serde::{Deserialize, Serialize};
+use std::str::FromStr;
 use tracing_batteries::prelude::*;
 
 use crate::filter::Filterable;
@@ -11,52 +14,58 @@ pub struct Calendar {
     icalendar: ICalendar,
 }
 
-
 macro_rules! property_value {
     ($value:expr, $prop:ident, $v:ident => $val:expr) => {
-        $value.property(&calcard::icalendar::ICalendarProperty::$prop)
+        $value
+            .property(&calcard::icalendar::ICalendarProperty::$prop)
             .and_then(|v| v.values.first())
             .and_then(|$v| $val)
             .ok_or_else(|| {
                 errors::user(
                     concat!("Missing ", stringify!($prop), " field for calendar entry."),
-                    &[
-                        concat!("Make sure that the calendar entry has a ", stringify!($prop), " field."),
-                    ],
+                    &[concat!(
+                        "Make sure that the calendar entry has a ",
+                        stringify!($prop),
+                        " field."
+                    )],
                 )
             })
     };
     ($value:expr, custom $prop:expr, $v:ident => $val:expr) => {
         match $value.property(&calcard::icalendar::ICalendarProperty::Other($prop.into())) {
-            Some(prop) => {
-                prop.values.first()
-                    .map(|$v| $val)
-                    .ok_or_else(|| {
-                        errors::user(
-                            concat!("Could not parse the ", stringify!($prop), " field for calendar entry."),
-                            &[
-                                concat!("Make sure that the calendar entry has a valid ", stringify!($prop), " field."),
-                            ],
-                        )
-                    })
-            },
+            Some(prop) => prop.values.first().map(|$v| $val).ok_or_else(|| {
+                errors::user(
+                    concat!(
+                        "Could not parse the ",
+                        stringify!($prop),
+                        " field for calendar entry."
+                    ),
+                    &[concat!(
+                        "Make sure that the calendar entry has a valid ",
+                        stringify!($prop),
+                        " field."
+                    )],
+                )
+            }),
             None => Ok(None),
         }
     };
     ($value:expr, optional $prop:ident, $v:ident => $val:expr) => {
         match $value.property(&calcard::icalendar::ICalendarProperty::$prop) {
-            Some(prop) => {
-                prop.values.first()
-                    .map(|$v| $val)
-                    .ok_or_else(|| {
-                        errors::user(
-                            concat!("Could not parse the ", stringify!($prop), " field for calendar entry."),
-                            &[
-                                concat!("Make sure that the calendar entry has a valid ", stringify!($prop), " field."),
-                            ],
-                        )
-                    })
-            },
+            Some(prop) => prop.values.first().map(|$v| $val).ok_or_else(|| {
+                errors::user(
+                    concat!(
+                        "Could not parse the ",
+                        stringify!($prop),
+                        " field for calendar entry."
+                    ),
+                    &[concat!(
+                        "Make sure that the calendar entry has a valid ",
+                        stringify!($prop),
+                        " field."
+                    )],
+                )
+            }),
             None => Ok(None),
         }
     };
@@ -65,7 +74,9 @@ macro_rules! property_value {
 impl Calendar {
     #[instrument("parsers.calendar.events", skip(self), err(Display))]
     pub fn events(&self) -> Result<Vec<CalendarEvent>, human_errors::Error> {
-        let expanded = self.icalendar.expand_dates(calcard::common::timezone::Tz::UTC, 10);
+        let expanded = self
+            .icalendar
+            .expand_dates(calcard::common::timezone::Tz::UTC, 10);
         expanded.events.iter().map(|event| {
             let start = event.start;
             let end = match event.end {
@@ -104,38 +115,39 @@ impl FromStr for Calendar {
 
     #[instrument("parsers.calendar.parse", skip(s), err(Display))]
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let icalendar = ICalendar::parse(s).map_err(|e|
-            match e {
-                Entry::InvalidLine(line) => errors::user(
-                    format!("Failed to parse calendar entry line: '{}'.", line),
-                    &[
-                        "Make sure that the calendar data is correctly formatted.",
-                        "Check for any invalid or unsupported lines in the calendar data.",
-                    ],
+        let icalendar = ICalendar::parse(s).map_err(|e| match e {
+            Entry::InvalidLine(line) => errors::user(
+                format!("Failed to parse calendar entry line: '{}'.", line),
+                &[
+                    "Make sure that the calendar data is correctly formatted.",
+                    "Check for any invalid or unsupported lines in the calendar data.",
+                ],
+            ),
+            Entry::UnterminatedComponent(component) => errors::user(
+                format!("Calendar component '{}' is unterminated.", component),
+                &[
+                    "Ensure that all calendar components are properly closed.",
+                    "Check the calendar data for any missing 'END' statements.",
+                ],
+            ),
+            Entry::UnexpectedComponentEnd { expected, found } => errors::user(
+                format!(
+                    "Expected end of component '{:?}', but found end of component '{:?}'.",
+                    expected, found
                 ),
-                Entry::UnterminatedComponent(component) => errors::user(
-                    format!("Calendar component '{}' is unterminated.", component),
-                    &[
-                        "Ensure that all calendar components are properly closed.",
-                        "Check the calendar data for any missing 'END' statements.",
-                    ],
-                ),
-                Entry::UnexpectedComponentEnd { expected, found } => errors::user(
-                    format!("Expected end of component '{:?}', but found end of component '{:?}'.", expected, found),
-                    &[
-                        "Ensure that all calendar components are properly nested and closed.",
-                        "Check the calendar data for any mismatched 'END' statements.",
-                    ],
-                ),
-                _ => errors::user(
-                    "Failed to parse calendar data.",
-                    &[
-                        "Ensure that the calendar data is correctly formatted.",
-                        "Check for any invalid or unsupported entries in the calendar data.",
-                    ],
-                ),
-            }
-        )?;
+                &[
+                    "Ensure that all calendar components are properly nested and closed.",
+                    "Check the calendar data for any mismatched 'END' statements.",
+                ],
+            ),
+            _ => errors::user(
+                "Failed to parse calendar data.",
+                &[
+                    "Ensure that the calendar data is correctly formatted.",
+                    "Check for any invalid or unsupported entries in the calendar data.",
+                ],
+            ),
+        })?;
 
         Ok(Self { icalendar })
     }
@@ -145,7 +157,7 @@ pub struct CalendarEvent {
     pub uid: String,
     pub summary: String,
     pub description: Option<String>,
-    
+
     pub start: DateTime<Utc>,
     pub end: DateTime<Utc>,
 

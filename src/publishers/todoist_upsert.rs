@@ -31,17 +31,26 @@ impl Job for TodoistUpsertTask {
         "todoist/upsert-task"
     }
 
-    #[instrument("publishers.todoist_upsert.handle", skip(self, job, services), err(Display))]
-    async fn handle(&self, job: &Self::JobType, services: impl Services + Send + Sync + 'static) -> Result<(), human_errors::Error> {
+    #[instrument(
+        "publishers.todoist_upsert.handle",
+        skip(self, job, services),
+        err(Display)
+    )]
+    async fn handle(
+        &self,
+        job: &Self::JobType,
+        services: impl Services + Send + Sync + 'static,
+    ) -> Result<(), human_errors::Error> {
         let config = services.config().connections.todoist.merge(&job.config);
 
         let client = TodoistClient::new(&config)?;
         let hash = self.job_hash(job)?;
 
-        if let Some(existing_task) = services.kv().get::<TodoistUpsertTaskState>(
-            "todoist/task",
-            job.unique_key.clone(),
-        ).await? {
+        if let Some(existing_task) = services
+            .kv()
+            .get::<TodoistUpsertTaskState>("todoist/task", job.unique_key.clone())
+            .await?
+        {
             if hash == existing_task.hash {
                 // No changes, skip update
                 return Ok(());
@@ -76,28 +85,30 @@ impl Job for TodoistUpsertTask {
                 )?;
             }
 
-            services.kv().set(
-                "todoist/task",
-                job.unique_key.clone(),
-                TodoistUpsertTaskState {
-                    id: existing_task.id.clone(),
-                    hash: hash,
-                    title: Some(job.title.clone()),
-                },
-            ).await?;
+            services
+                .kv()
+                .set(
+                    "todoist/task",
+                    job.unique_key.clone(),
+                    TodoistUpsertTaskState {
+                        id: existing_task.id.clone(),
+                        hash: hash,
+                        title: Some(job.title.clone()),
+                    },
+                )
+                .await?;
         } else {
-            let project_id = client.get_project_id(
-                config.project.as_deref().unwrap_or("Inbox"),
-                &services,
-            )
-            .await?;
-            let section_id = client.get_section_id(
-                config.project.as_deref().unwrap_or("Inbox"),
-                &project_id,
-                config.section.as_deref(),
-                &services,
-            )
-            .await?;
+            let project_id = client
+                .get_project_id(config.project.as_deref().unwrap_or("Inbox"), &services)
+                .await?;
+            let section_id = client
+                .get_section_id(
+                    config.project.as_deref().unwrap_or("Inbox"),
+                    &project_id,
+                    config.section.as_deref(),
+                    &services,
+                )
+                .await?;
 
             let task = client.0
                 .create_task(&todoist_api::CreateTaskArgs {
@@ -123,15 +134,18 @@ impl Job for TodoistUpsertTask {
                     ],
                 )?;
 
-            services.kv().set(
-                "todoist/task",
-                job.unique_key.clone(),
-                TodoistUpsertTaskState {
-                    id: task.id.clone(),
-                    hash: hash,
-                    title: Some(job.title.clone()),
-                },
-            ).await?;
+            services
+                .kv()
+                .set(
+                    "todoist/task",
+                    job.unique_key.clone(),
+                    TodoistUpsertTaskState {
+                        id: task.id.clone(),
+                        hash: hash,
+                        title: Some(job.title.clone()),
+                    },
+                )
+                .await?;
         }
 
         Ok(())

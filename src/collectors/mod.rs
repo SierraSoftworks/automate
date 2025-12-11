@@ -9,7 +9,7 @@ mod xkcd;
 mod youtube;
 
 #[allow(dead_code)]
-pub use differential::{DifferentialCollector, Diff};
+pub use differential::{Diff, DifferentialCollector};
 pub use incremental::IncrementalCollector;
 
 pub use calendar::CalendarCollector;

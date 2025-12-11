@@ -85,7 +85,11 @@ impl IncrementalCollector for GitHubReleasesCollector {
         std::borrow::Cow::Owned(self.api_url.clone())
     }
 
-    #[instrument("collectors.github_releases.fetch_since", skip(self, services), err(Display))]
+    #[instrument(
+        "collectors.github_releases.fetch_since",
+        skip(self, services),
+        err(Display)
+    )]
     async fn fetch_since(
         &self,
         watermark: Option<Self::Watermark>,
@@ -168,12 +172,19 @@ impl IncrementalCollector for GitHubReleasesCollector {
             ],
         )?;
 
-        let latest_release = releases.iter().map(|item| item.published_at).max().unwrap_or(Utc::now());
+        let latest_release = releases
+            .iter()
+            .map(|item| item.published_at)
+            .max()
+            .unwrap_or(Utc::now());
         if let Some(watermark) = watermark {
-            Ok((releases
-                .into_iter()
-                .filter(|item| item.published_at > watermark)
-                .collect(), latest_release))
+            Ok((
+                releases
+                    .into_iter()
+                    .filter(|item| item.published_at > watermark)
+                    .collect(),
+                latest_release,
+            ))
         } else {
             Ok((releases, latest_release))
         }

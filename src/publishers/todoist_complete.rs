@@ -19,16 +19,25 @@ impl Job for TodoistCompleteTask {
         "todoist/complete-task"
     }
 
-    #[instrument("publishers.todoist_complete.handle", skip(self, job, services), err(Display))]
-    async fn handle(&self, job: &Self::JobType, services: impl Services + Send + Sync + 'static) -> Result<(), human_errors::Error> {
+    #[instrument(
+        "publishers.todoist_complete.handle",
+        skip(self, job, services),
+        err(Display)
+    )]
+    async fn handle(
+        &self,
+        job: &Self::JobType,
+        services: impl Services + Send + Sync + 'static,
+    ) -> Result<(), human_errors::Error> {
         let config = services.config().connections.todoist.merge(&job.config);
 
         let client = TodoistClient::new(&config)?;
 
-        if let Some(existing_task) = services.kv().get::<TodoistUpsertTaskState>(
-            "todoist/task",
-            job.unique_key.clone(),
-        ).await? {
+        if let Some(existing_task) = services
+            .kv()
+            .get::<TodoistUpsertTaskState>("todoist/task", job.unique_key.clone())
+            .await?
+        {
             client.0.complete_task(&existing_task.id).await.wrap_err_as_user(
                 format!("Failed to complete Todoist task '{}'.", &existing_task.id),
                 &[
@@ -37,11 +46,10 @@ impl Job for TodoistCompleteTask {
                 ],
             )?;
 
-
-            services.kv().remove(
-                "todoist/task",
-                job.unique_key.clone(),
-            ).await?;
+            services
+                .kv()
+                .remove("todoist/task", job.unique_key.clone())
+                .await?;
         }
 
         Ok(())

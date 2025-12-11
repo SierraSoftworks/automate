@@ -1,6 +1,14 @@
 use serde::Deserialize;
 
-use crate::{config::TodoistConfig, filter::FilterValue, prelude::*, publishers::{TodoistCompleteTask, TodoistCompleteTaskPayload, TodoistUpsertTask, TodoistUpsertTaskPayload}};
+use crate::{
+    config::TodoistConfig,
+    filter::FilterValue,
+    prelude::*,
+    publishers::{
+        TodoistCompleteTask, TodoistCompleteTaskPayload, TodoistUpsertTask,
+        TodoistUpsertTaskPayload,
+    },
+};
 
 #[derive(Clone, Deserialize, Default)]
 pub struct AzureMonitorWebhookConfig {
@@ -29,11 +37,22 @@ impl Job for AzureMonitorWebhook {
     }
 
     #[instrument("webhooks.azure_monitor.handle", skip(self, job, services), fields(job = %job))]
-    async fn handle(&self, job: &Self::JobType, services: impl Services + Send + Sync + 'static) -> Result<(), human_errors::Error> {
+    async fn handle(
+        &self,
+        job: &Self::JobType,
+        services: impl Services + Send + Sync + 'static,
+    ) -> Result<(), human_errors::Error> {
         let event: AzureMonitorAlertEventPayload = job.json()?;
 
         match event.data.essentials.monitor_condition {
-            CommonAlertSchemaMonitorCondition::Fired if services.config().webhooks.azure_monitor.filter.matches(&event)? => {
+            CommonAlertSchemaMonitorCondition::Fired
+                if services
+                    .config()
+                    .webhooks
+                    .azure_monitor
+                    .filter
+                    .matches(&event)? =>
+            {
                 TodoistUpsertTask::dispatch(
                     TodoistUpsertTaskPayload {
                         unique_key: event.data.essentials.alert_id.clone(),
@@ -61,11 +80,15 @@ impl Job for AzureMonitorWebhook {
                     },
                     None,
                     &services,
-                ).await?;
+                )
+                .await?;
                 Ok(())
             }
             _ => {
-                info!("Ignoring non-matching Azure Monitor alert: {}", event.data.essentials.alert_rule);
+                info!(
+                    "Ignoring non-matching Azure Monitor alert: {}",
+                    event.data.essentials.alert_rule
+                );
                 Ok(())
             }
         }
@@ -90,7 +113,14 @@ impl Filterable for CommonAlertSchema {
             "severity" => (&self.data.essentials.severity).into(),
             "monitor_condition" => (&self.data.essentials.monitor_condition).into(),
             "monitor_service" => self.data.essentials.monitor_service.clone().into(),
-            "alert_target_ids" => self.data.essentials.alert_target_ids.iter().map(|s| s.clone().into()).collect::<Vec<FilterValue>>().into(),
+            "alert_target_ids" => self
+                .data
+                .essentials
+                .alert_target_ids
+                .iter()
+                .map(|s| s.clone().into())
+                .collect::<Vec<FilterValue>>()
+                .into(),
             _ => FilterValue::Null,
         }
     }

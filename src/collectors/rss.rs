@@ -89,12 +89,13 @@ impl IncrementalCollector for RssCollector {
                     .collect()
             })?;
 
-        let new_watermark = items.iter().filter_map(|item| item.published).max().unwrap_or(Utc::now());
+        let new_watermark = items
+            .iter()
+            .filter_map(|item| item.published)
+            .max()
+            .unwrap_or(Utc::now());
 
-        Ok((
-            items,
-            new_watermark,
-        ))
+        Ok((items, new_watermark))
     }
 }
 

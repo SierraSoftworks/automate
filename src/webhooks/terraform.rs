@@ -1,9 +1,9 @@
-use serde::{Deserialize, Serialize};
 use hmac::{Hmac, Mac};
+use serde::{Deserialize, Serialize};
 use sha2::Sha512;
 
+use crate::config::TodoistConfig;
 use crate::prelude::*;
-use crate::{config::TodoistConfig};
 
 type HmacSha512 = Hmac<Sha512>;
 
@@ -17,11 +17,11 @@ pub struct TerraformWebhookConfig {
 }
 
 fn default_todoist_config() -> TodoistConfig {
-    TodoistConfig { 
+    TodoistConfig {
         project: Some("Hobbies".into()),
         section: Some("Open Source".into()),
         ..Default::default()
-     }
+    }
 }
 
 pub struct TerraformWebhook;
@@ -34,17 +34,21 @@ impl Job for TerraformWebhook {
     }
 
     #[instrument("webhooks.terraform.handle", skip(self, job, services), fields(job = %job))]
-    async fn handle(&self, job: &Self::JobType, services: impl Services + Send + Sync + 'static) -> Result<(), human_errors::Error> {
+    async fn handle(
+        &self,
+        job: &Self::JobType,
+        services: impl Services + Send + Sync + 'static,
+    ) -> Result<(), human_errors::Error> {
         if let Some(secret) = services.config().webhooks.terraform.secret.as_ref() {
             let expected_hash = job.headers.get("X-TFE-Notification-Signature")
                 .ok_or_else(|| human_errors::user("Missing X-TFE-Notification-Signature header in Terraform webhook", &[
                     "Make sure you are only sending Terraform Cloud webhook events to this endpoint."
                 ]))?;
 
-            let expected_tag = hex::decode(expected_hash)
-                .wrap_err_as_user("Invalid X-TFE-Notification-Signature header format in Terraform webhook", &[
-                    "Make sure the sender of the webhook is sending a valid HMAC SHA-512 signature."
-                ])?;
+            let expected_tag = hex::decode(expected_hash).wrap_err_as_user(
+                "Invalid X-TFE-Notification-Signature header format in Terraform webhook",
+                &["Make sure the sender of the webhook is sending a valid HMAC SHA-512 signature."],
+            )?;
 
             let mut mac = HmacSha512::new_from_slice(secret.as_bytes())
                 .map_err_as_user(&[
@@ -58,42 +62,77 @@ impl Job for TerraformWebhook {
                     "Make sure the sender of the webhook is sending the correct signature using the configured secret."
                 ])?;
         }
-        
+
         let payload: NotificationPayload = job.json()?;
 
         match &payload {
-            NotificationPayload::Standard { organization_name, workspace_name, run_message, run_url, notifications, .. } => {
+            NotificationPayload::Standard {
+                organization_name,
+                workspace_name,
+                run_message,
+                run_url,
+                notifications,
+                ..
+            } => {
                 crate::publishers::TodoistCreateTask::dispatch(
                     crate::publishers::TodoistCreateTaskPayload {
-                        title: format!("[**terraform:{}/{}**]({}): {}", organization_name, workspace_name, run_url, run_message),
-                        description: Some(notifications.iter().map(|n| format!("- \\[{}\\] {} (by {} at {})", n.trigger, n.message, n.run_updated_by, n.run_updated_at)).collect::<Vec<_>>().join("\n")),
+                        title: format!(
+                            "[**terraform:{}/{}**]({}): {}",
+                            organization_name, workspace_name, run_url, run_message
+                        ),
+                        description: Some(
+                            notifications
+                                .iter()
+                                .map(|n| {
+                                    format!(
+                                        "- \\[{}\\] {} (by {} at {})",
+                                        n.trigger, n.message, n.run_updated_by, n.run_updated_at
+                                    )
+                                })
+                                .collect::<Vec<_>>()
+                                .join("\n"),
+                        ),
                         priority: Some(payload.priority()),
                         due: crate::publishers::TodoistDueDate::None,
-                        config: services.config().connections.todoist.merge(&default_todoist_config()),
+                        config: services
+                            .config()
+                            .connections
+                            .todoist
+                            .merge(&default_todoist_config()),
                         ..Default::default()
                     },
                     None,
-                    &services
-                ).await?;
-            },
-            NotificationPayload::Workplace { message, details, .. } => {
+                    &services,
+                )
+                .await?;
+            }
+            NotificationPayload::Workplace {
+                message, details, ..
+            } => {
                 crate::publishers::TodoistCreateTask::dispatch(
                     crate::publishers::TodoistCreateTaskPayload {
                         title: format!("**Terraform Cloud**: {}", message),
-                        description: Some(format!("```\n{}\n```", serde_json::to_string_pretty(&details).map_err_as_system(&[
-                            "Please report this issue to the development team on GitHub."
-                        ])?)),
+                        description: Some(format!(
+                            "```\n{}\n```",
+                            serde_json::to_string_pretty(&details).map_err_as_system(&[
+                                "Please report this issue to the development team on GitHub."
+                            ])?
+                        )),
                         priority: Some(payload.priority()),
                         due: crate::publishers::TodoistDueDate::None,
-                        config: services.config().connections.todoist.merge(&default_todoist_config()),
+                        config: services
+                            .config()
+                            .connections
+                            .todoist
+                            .merge(&default_todoist_config()),
                         ..Default::default()
                     },
                     None,
-                    &services
-                ).await?;
+                    &services,
+                )
+                .await?;
             }
         }
-
 
         Ok(())
     }
@@ -150,7 +189,6 @@ pub enum NotificationPayload {
         workspace_name: String,
         organization_name: String,
         notifications: Vec<NotificationV1>,
-
     },
     Workplace {
         payload_version: NotificationVersion<2>,
@@ -160,7 +198,7 @@ pub enum NotificationPayload {
         trigger: String,
         message: String,
         details: serde_json::Value,
-    }
+    },
 }
 
 impl NotificationPayload {
@@ -178,9 +216,11 @@ impl NotificationPayload {
 
     pub fn priority(&self) -> i32 {
         match self {
-            NotificationPayload::Standard { notifications, .. } => {
-                notifications.iter().map(|n| Self::priority_for(&n.trigger)).max().unwrap_or(1)
-            },
+            NotificationPayload::Standard { notifications, .. } => notifications
+                .iter()
+                .map(|n| Self::priority_for(&n.trigger))
+                .max()
+                .unwrap_or(1),
             NotificationPayload::Workplace { trigger, .. } => Self::priority_for(trigger),
         }
     }
@@ -225,7 +265,9 @@ mod tests {
         }"#;
 
         let deserialized_v1: NotificationPayload = serde_json::from_str(payload_v1).unwrap();
-        assert!(matches!(deserialized_v1, NotificationPayload::Standard { run_id, .. } if run_id == "run_123456"));
+        assert!(
+            matches!(deserialized_v1, NotificationPayload::Standard { run_id, .. } if run_id == "run_123456")
+        );
     }
 
     #[test]
@@ -241,6 +283,8 @@ mod tests {
             "details": {}
         }"#;
         let deserialized_v2: NotificationPayload = serde_json::from_str(payload_v2).unwrap();
-        assert!(matches!(deserialized_v2, NotificationPayload::Workplace { notification_configuration_id, .. } if notification_configuration_id == "nc_654321"));
+        assert!(
+            matches!(deserialized_v2, NotificationPayload::Workplace { notification_configuration_id, .. } if notification_configuration_id == "nc_654321")
+        );
     }
 }

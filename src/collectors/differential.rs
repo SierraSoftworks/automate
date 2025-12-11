@@ -35,18 +35,21 @@ pub trait DifferentialCollector: Collector {
     async fn fetch(&self) -> Result<Vec<Self::Item>, human_errors::Error>;
 
     #[instrument("collectors.diff", skip(self, services))]
-    async fn diff(&self, services: &impl Services) -> Result<Vec<Diff<Self::Identifier, Self::Item>>, human_errors::Error> {
+    async fn diff(
+        &self,
+        services: &impl Services,
+    ) -> Result<Vec<Diff<Self::Identifier, Self::Item>>, human_errors::Error> {
         let partition = self.partition(None);
         let key = self.key();
 
         let items = self.fetch().await?;
-        
+
         let old_identifiers: Vec<Self::Identifier> = services
             .kv()
             .get(partition.clone(), key.clone())
             .await?
             .unwrap_or_default();
-        
+
         let mut new_identifiers = HashSet::new();
         let mut output = Vec::new();
 
@@ -67,9 +70,7 @@ pub trait DifferentialCollector: Collector {
             output.push(Diff::Removed(id));
         }
 
-        let new_identifiers: Vec<_> = new_identifiers
-            .into_iter()
-            .collect();
+        let new_identifiers: Vec<_> = new_identifiers.into_iter().collect();
 
         services.kv().set(partition, key, new_identifiers).await?;
 

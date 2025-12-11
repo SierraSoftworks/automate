@@ -24,8 +24,15 @@ impl GitHubNotificationsCollector {
         }
     }
 
-    #[instrument("collectors.github_notifications.get_subject_state", skip(self, subject, services))]
-    pub async fn get_subject_state(&self, subject: &GitHubNotificationsSubject, services: &(impl crate::services::Services + Send + Sync + 'static)) -> Result<GitHubNotificationsSubjectState, human_errors::Error> {
+    #[instrument(
+        "collectors.github_notifications.get_subject_state",
+        skip(self, subject, services)
+    )]
+    pub async fn get_subject_state(
+        &self,
+        subject: &GitHubNotificationsSubject,
+        services: &(impl crate::services::Services + Send + Sync + 'static),
+    ) -> Result<GitHubNotificationsSubjectState, human_errors::Error> {
         if let Some(url) = &subject.url {
             let client = self.get_client(services)?;
 
@@ -49,9 +56,7 @@ impl GitHubNotificationsCollector {
                 reqwest::StatusCode::TOO_MANY_REQUESTS => {
                     return Err(human_errors::user(
                         "Rate limit exceeded when trying to fetch GitHub notification subject state.",
-                        &[
-                            "Wait for a while before making more requests to GitHub's API.",
-                        ],
+                        &["Wait for a while before making more requests to GitHub's API."],
                     ));
                 }
                 status => {
@@ -85,8 +90,15 @@ impl GitHubNotificationsCollector {
         }
     }
 
-    #[instrument("collectors.github_notifications.mark_as_done", skip(self, thread_id, services))]
-    pub async fn mark_as_done(&self, thread_id: &str, services: &(impl crate::services::Services + Send + Sync + 'static)) -> Result<(), human_errors::Error> {
+    #[instrument(
+        "collectors.github_notifications.mark_as_done",
+        skip(self, thread_id, services)
+    )]
+    pub async fn mark_as_done(
+        &self,
+        thread_id: &str,
+        services: &(impl crate::services::Services + Send + Sync + 'static),
+    ) -> Result<(), human_errors::Error> {
         let client = self.get_client(services)?;
 
         let response = client
@@ -107,22 +119,23 @@ impl GitHubNotificationsCollector {
                     ],
                 ))
             }
-            status => {
-                Err(human_errors::user(
-                    format!(
-                        "Failed to mark GitHub notification as read. Received unexpected status code: {}",
-                        status
-                    ),
-                    &[
-                        "Make sure that your network connection is working properly.",
-                        "Check https://www.githubstatus.com/ for any ongoing issues with GitHub's services.",
-                    ],
-                ))
-            }
+            status => Err(human_errors::user(
+                format!(
+                    "Failed to mark GitHub notification as read. Received unexpected status code: {}",
+                    status
+                ),
+                &[
+                    "Make sure that your network connection is working properly.",
+                    "Check https://www.githubstatus.com/ for any ongoing issues with GitHub's services.",
+                ],
+            )),
         }
     }
 
-    fn get_client(&self, services: &impl crate::services::Services) -> Result<reqwest::Client, human_errors::Error> {
+    fn get_client(
+        &self,
+        services: &impl crate::services::Services,
+    ) -> Result<reqwest::Client, human_errors::Error> {
         let mut headers = reqwest::header::HeaderMap::new();
         headers.insert("X-GitHub-Api-Version", "2022-11-28".parse().unwrap());
         headers.insert("Accept", "application/vnd.github+json".parse().unwrap());
@@ -149,7 +162,11 @@ impl GitHubNotificationsCollector {
 impl Collector for GitHubNotificationsCollector {
     type Item = GitHubNotificationsItem;
 
-    #[instrument("collectors.github_notifications.list", skip(self, services), err(Display))]
+    #[instrument(
+        "collectors.github_notifications.list",
+        skip(self, services),
+        err(Display)
+    )]
     async fn list(
         &self,
         services: &(impl crate::services::Services + Send + Sync + 'static),
@@ -169,7 +186,11 @@ impl IncrementalCollector for GitHubNotificationsCollector {
         std::borrow::Cow::Owned(self.api_url.clone())
     }
 
-    #[instrument("collectors.github_notifications.fetch_since", skip(self, services), err(Display))]
+    #[instrument(
+        "collectors.github_notifications.fetch_since",
+        skip(self, services),
+        err(Display)
+    )]
     async fn fetch_since(
         &self,
         watermark: Option<Self::Watermark>,
@@ -188,7 +209,8 @@ impl IncrementalCollector for GitHubNotificationsCollector {
             reqwest::StatusCode::OK => {}
             reqwest::StatusCode::NOT_MODIFIED => {
                 // No new notifications
-                let current_watermark = watermark.unwrap_or("Thu, 01 Jan 1970 00:00:00 GMT".to_string());
+                let current_watermark =
+                    watermark.unwrap_or("Thu, 01 Jan 1970 00:00:00 GMT".to_string());
                 return Ok((vec![], current_watermark));
             }
             reqwest::StatusCode::UNAUTHORIZED | reqwest::StatusCode::FORBIDDEN => {
@@ -203,9 +225,7 @@ impl IncrementalCollector for GitHubNotificationsCollector {
             reqwest::StatusCode::TOO_MANY_REQUESTS => {
                 return Err(human_errors::user(
                     "Rate limit exceeded when trying to fetch GitHub notifications.",
-                    &[
-                        "Wait for a while before making more requests to GitHub's API.",
-                    ],
+                    &["Wait for a while before making more requests to GitHub's API."],
                 ));
             }
             status => {
@@ -222,7 +242,9 @@ impl IncrementalCollector for GitHubNotificationsCollector {
             }
         }
 
-        let new_watermark = response.headers().get("Last-Modified")
+        let new_watermark = response
+            .headers()
+            .get("Last-Modified")
             .and_then(|value| value.to_str().ok())
             .unwrap_or("Thu, 01 Jan 1970 00:00:00 GMT")
             .to_string();
@@ -242,7 +264,6 @@ impl IncrementalCollector for GitHubNotificationsCollector {
     }
 }
 
-
 #[allow(dead_code)]
 #[derive(Serialize, Deserialize, Clone)]
 pub struct GitHubNotificationsItem {
@@ -253,14 +274,16 @@ pub struct GitHubNotificationsItem {
     pub updated_at: chrono::DateTime<chrono::Utc>,
     pub last_read_at: Option<chrono::DateTime<chrono::Utc>>,
 
-    pub repository : GitHubNotificationsRepository,
+    pub repository: GitHubNotificationsRepository,
     pub subject: GitHubNotificationsSubject,
 }
 
 impl Filterable for GitHubNotificationsItem {
     fn get(&self, key: &str) -> crate::filter::FilterValue {
         match key {
-            "reason" => serde_json::to_string(&self.reason).unwrap_or_default().into(),
+            "reason" => serde_json::to_string(&self.reason)
+                .unwrap_or_default()
+                .into(),
             "repository.name" => self.repository.name.clone().into(),
             "repository.full_name" => self.repository.full_name.clone().into(),
             "repository.owner" => self.repository.owner.login.clone().into(),
@@ -322,7 +345,7 @@ pub enum GitHubNotificationsReason {
     TeamMention,
     // Any other reason not listed above (see https://docs.github.com/en/rest/activity/notifications?apiVersion=2022-11-28)
     #[serde(other)]
-    Other
+    Other,
 }
 
 impl GitHubNotificationsReason {
@@ -332,13 +355,13 @@ impl GitHubNotificationsReason {
 
             GitHubNotificationsReason::ApprovalRequested => 3,
             GitHubNotificationsReason::ReviewRequested => 3,
-            
+
             GitHubNotificationsReason::TeamMention => 2,
             GitHubNotificationsReason::Mention => 2,
             GitHubNotificationsReason::Subscribed => 2,
             GitHubNotificationsReason::Author => 2,
-            
-            _ => 1
+
+            _ => 1,
         }
     }
 }
@@ -388,17 +411,29 @@ mod tests {
     #[test]
     fn test_notification_reason_serialization() {
         let examples = vec![
-            (GitHubNotificationsReason::ApprovalRequested, "approval_requested"),
+            (
+                GitHubNotificationsReason::ApprovalRequested,
+                "approval_requested",
+            ),
             (GitHubNotificationsReason::Assign, "assign"),
             (GitHubNotificationsReason::Author, "author"),
             (GitHubNotificationsReason::CiActivity, "ci_activity"),
             (GitHubNotificationsReason::Comment, "comment"),
             (GitHubNotificationsReason::Invitation, "invitation"),
             (GitHubNotificationsReason::Manual, "manual"),
-            (GitHubNotificationsReason::MemberFeatureRequested, "member_feature_requested"),
+            (
+                GitHubNotificationsReason::MemberFeatureRequested,
+                "member_feature_requested",
+            ),
             (GitHubNotificationsReason::Mention, "mention"),
-            (GitHubNotificationsReason::ReviewRequested, "review_requested"),
-            (GitHubNotificationsReason::SecurityAdvisoryCredit, "security_advisory_credit"),
+            (
+                GitHubNotificationsReason::ReviewRequested,
+                "review_requested",
+            ),
+            (
+                GitHubNotificationsReason::SecurityAdvisoryCredit,
+                "security_advisory_credit",
+            ),
             (GitHubNotificationsReason::SecurityAlert, "security_alert"),
             (GitHubNotificationsReason::StateChange, "state_change"),
             (GitHubNotificationsReason::Subscribed, "subscribed"),
@@ -407,8 +442,8 @@ mod tests {
         ];
 
         for (reason, expected) in examples {
-            let serialized =
-                serde_json::to_string(&reason).expect("Failed to serialize GitHubNotificationsReason");
+            let serialized = serde_json::to_string(&reason)
+                .expect("Failed to serialize GitHubNotificationsReason");
             assert_eq!(serialized.trim_matches('"'), expected);
 
             let deserialized: GitHubNotificationsReason =

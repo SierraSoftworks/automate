@@ -21,27 +21,35 @@ impl Job for TodoistCreateTask {
     fn partition() -> &'static str {
         "todoist/create-task"
     }
-    
-    #[instrument("publishers.todoist_create.handle", skip(self, job, services), err(Display))]
-    async fn handle(&self, job: &Self::JobType, services: impl Services + Send + Sync + 'static) -> Result<(), human_errors::Error> {
+
+    #[instrument(
+        "publishers.todoist_create.handle",
+        skip(self, job, services),
+        err(Display)
+    )]
+    async fn handle(
+        &self,
+        job: &Self::JobType,
+        services: impl Services + Send + Sync + 'static,
+    ) -> Result<(), human_errors::Error> {
         let config = services.config().connections.todoist.merge(&job.config);
 
         let client = TodoistClient::new(&config)?;
 
-        let project_id = client.get_project_id(
-            config.project.as_deref().unwrap_or("Inbox"),
-            &services,
-        )
-        .await?;
-        let section_id = client.get_section_id(
-            config.project.as_deref().unwrap_or("Inbox"),
-            &project_id,
-            config.section.as_deref(),
-            &services,
-        )
-        .await?;
+        let project_id = client
+            .get_project_id(config.project.as_deref().unwrap_or("Inbox"), &services)
+            .await?;
+        let section_id = client
+            .get_section_id(
+                config.project.as_deref().unwrap_or("Inbox"),
+                &project_id,
+                config.section.as_deref(),
+                &services,
+            )
+            .await?;
 
-        client.0
+        client
+            .0
             .create_task(&todoist_api::CreateTaskArgs {
                 content: TodoistClient::escape_content(&job.title).into_owned(),
                 description: job.description.clone(),

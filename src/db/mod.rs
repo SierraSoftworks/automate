@@ -13,24 +13,18 @@ use tracing_batteries::prelude::OpenTelemetryPropagationExtractor;
 #[allow(dead_code)]
 #[async_trait::async_trait]
 pub trait KeyValueStore {
-    async fn get<
-        T: serde::de::DeserializeOwned + Send + 'static,
-    >(
+    async fn get<T: serde::de::DeserializeOwned + Send + 'static>(
         &self,
         partition: impl Into<Cow<'static, str>> + Send,
         key: impl Into<Cow<'static, str>> + Send,
     ) -> Result<Option<T>, errors::Error>;
 
-    async fn list<
-        T: serde::de::DeserializeOwned + Send + 'static,
-    >(
+    async fn list<T: serde::de::DeserializeOwned + Send + 'static>(
         &self,
         partition: impl Into<Cow<'static, str>> + Send,
     ) -> Result<Vec<(String, T)>, errors::Error>;
 
-    async fn set<
-        T: serde::Serialize + Send + 'static,
-    >(
+    async fn set<T: serde::Serialize + Send + 'static>(
         &self,
         partition: impl Into<Cow<'static, str>> + Send,
         key: impl Into<Cow<'static, str>> + Send,

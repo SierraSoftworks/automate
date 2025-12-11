@@ -3,7 +3,10 @@ use hmac::{Hmac, Mac};
 use serde::Deserialize;
 use sha2::Sha256;
 
-use crate::{prelude::*, publishers::{TodoistCreateTask, TodoistCreateTaskPayload, TodoistDueDate}};
+use crate::{
+    prelude::*,
+    publishers::{TodoistCreateTask, TodoistCreateTaskPayload, TodoistDueDate},
+};
 
 type HmacSha256 = Hmac<Sha256>;
 
@@ -30,7 +33,9 @@ fn default_todoist_config() -> crate::config::TodoistConfig {
 pub struct TailscaleWebhook;
 
 impl TailscaleWebhook {
-    fn parse_signature(header: &str) -> Result<(chrono::DateTime<Utc>, Vec<u8>), human_errors::Error> {
+    fn parse_signature(
+        header: &str,
+    ) -> Result<(chrono::DateTime<Utc>, Vec<u8>), human_errors::Error> {
         let mut timestamp = None;
         let mut signature = None;
 
@@ -61,27 +66,28 @@ impl TailscaleWebhook {
                 ])?;
 
                 Ok((timestamp, signature))
-
-            },
-            _ => Err(
-                human_errors::user(
-                    "The X-Tailscale-Webhook-Signature header did not contain a valid signature.",
-                    &[
-                        "Ensure that you are only sending Tailscale webhooks to this endpoint.",
-                        "Check that the webhook is configured correctly at https://login.tailscale.com/admin/settings/webhooks"
-                    ]
-                )
-            )
+            }
+            _ => Err(human_errors::user(
+                "The X-Tailscale-Webhook-Signature header did not contain a valid signature.",
+                &[
+                    "Ensure that you are only sending Tailscale webhooks to this endpoint.",
+                    "Check that the webhook is configured correctly at https://login.tailscale.com/admin/settings/webhooks",
+                ],
+            )),
         }
     }
 
     /// Verifies the Tailscale webhook signature.
-    /// 
+    ///
     /// According to https://tailscale.com/kb/1213/webhooks#verifying-an-event-signature,
     /// Tailscale signs webhooks using HMAC-SHA256 with the webhook secret, and includes
     /// the signature in the Tailscale-Webhook-Signature header in the format:
     /// `t=<timestamp>,v1=<hex_signature>`
-    fn verify_signature(secret: &str, body: &str, signature_header: &str) -> Result<(), human_errors::Error> {
+    fn verify_signature(
+        secret: &str,
+        body: &str,
+        signature_header: &str,
+    ) -> Result<(), human_errors::Error> {
         let (timestamp, expected_signature) = Self::parse_signature(signature_header)?;
 
         if (timestamp - Utc::now()).abs() > chrono::Duration::minutes(5) {
@@ -89,14 +95,14 @@ impl TailscaleWebhook {
                 "The Tailscale webhook signature timestamp is too old or too far in the future.",
                 &[
                     "Ensure that the system clock on this server is accurate.",
-                    "Check that the webhook is configured correctly at https://login.tailscale.com/admin/settings/webhooks"
-                ]
+                    "Check that the webhook is configured correctly at https://login.tailscale.com/admin/settings/webhooks",
+                ],
             ));
         }
-        
+
         // Create the string to sign: <timestamp>.<body>
         let string_to_sign = format!("{}.{}", timestamp.timestamp(), body);
-        
+
         // Create HMAC-SHA256 instance with the secret
         let mut mac = HmacSha256::new_from_slice(secret.as_bytes())
             .wrap_err_as_user(
@@ -106,7 +112,7 @@ impl TailscaleWebhook {
                     "Ensure that the configured webhooks.tailscale.secret matches that on https://login.tailscale.com/admin/settings/webhooks"
                 ]
             )?;
-        
+
         // Compute the HMAC of the string to sign
         mac.update(string_to_sign.as_bytes());
 
@@ -116,7 +122,7 @@ impl TailscaleWebhook {
                 format!("Webhook signature verification failed (signatures did not match)."),
                 &["Ensure that the configured webhooks.tailscale.secret matches that on https://login.tailscale.com/admin/settings/webhooks"]
             )?;
-        
+
         Ok(())
     }
 }
@@ -129,21 +135,29 @@ impl Job for TailscaleWebhook {
     }
 
     #[instrument("webhooks.tailscale.handle", skip(self, job, services), fields(job = %job))]
-    async fn handle(&self, job: &Self::JobType, services: impl Services + Send + Sync + 'static) -> Result<(), human_errors::Error> {
+    async fn handle(
+        &self,
+        job: &Self::JobType,
+        services: impl Services + Send + Sync + 'static,
+    ) -> Result<(), human_errors::Error> {
         // Validate the Tailscale webhook signature header
         // https://tailscale.com/kb/1213/webhooks#verifying-an-event-signature
         let secret = &services.config().webhooks.tailscale.secret;
-        
+
         if !secret.is_empty() {
             // HTTP headers are case-insensitive, so we need to search for the header with case-insensitive comparison
-            let signature = job.headers.iter()
+            let signature = job
+                .headers
+                .iter()
                 .find(|(key, _)| key.eq_ignore_ascii_case("tailscale-webhook-signature"))
                 .map(|(_, value)| value.as_str());
-            
+
             if let Some(signature) = signature {
                 Self::verify_signature(secret, &job.body, signature)?;
             } else {
-                warn!("Received Tailscale webhook without signature, but secret is configured; rejecting request.");
+                warn!(
+                    "Received Tailscale webhook without signature, but secret is configured; rejecting request."
+                );
                 return Ok(());
             }
         } else {
@@ -152,14 +166,23 @@ impl Job for TailscaleWebhook {
 
         let event: TailscaleAlertEventPayload = job.json()?;
 
-        if !services.config().webhooks.tailscale.filter.matches(&event)? {
-            info!("Tailscale event '{}' did not match filter; ignoring.", event._type);
+        if !services
+            .config()
+            .webhooks
+            .tailscale
+            .filter
+            .matches(&event)?
+        {
+            info!(
+                "Tailscale event '{}' did not match filter; ignoring.",
+                event._type
+            );
             return Ok(());
         }
 
-        let pretty_payload = serde_json::to_string_pretty(&event.data) 
-            .unwrap_or_else(|_| job.body.clone());
-        
+        let pretty_payload =
+            serde_json::to_string_pretty(&event.data).unwrap_or_else(|_| job.body.clone());
+
         TodoistCreateTask::dispatch(
             TodoistCreateTaskPayload {
                 title: format!(
@@ -189,7 +212,7 @@ impl Job for TailscaleWebhook {
 
                     "test" => 1,
 
-                    _ => 3
+                    _ => 3,
                 }),
                 config: services.config().webhooks.tailscale.todoist.clone(),
                 ..Default::default()
@@ -257,10 +280,14 @@ mod tests {
     fn test_verify_signature_invalid() {
         let secret = "test_secret_key";
         let body = r#"{"version":1,"timestamp":"2024-01-01T00:00:00Z","type":"test","tailnet":"example.com","message":"Test message","data":{}}"#;
-        let wrong_signature = "t=1663781880,v1=0000000000000000000000000000000000000000000000000000000000000000";
+        let wrong_signature =
+            "t=1663781880,v1=0000000000000000000000000000000000000000000000000000000000000000";
 
         let result = TailscaleWebhook::verify_signature(secret, body, wrong_signature);
-        assert!(result.is_err(), "Invalid signature should fail verification");
+        assert!(
+            result.is_err(),
+            "Invalid signature should fail verification"
+        );
     }
 
     #[test]
@@ -272,7 +299,10 @@ mod tests {
         let signature = generate_signature(wrong_secret, &timestamp, body);
 
         let result = TailscaleWebhook::verify_signature(secret, body, &signature);
-        assert!(result.is_err(), "Signature with wrong secret should fail verification");
+        assert!(
+            result.is_err(),
+            "Signature with wrong secret should fail verification"
+        );
     }
 
     #[test]
@@ -301,7 +331,8 @@ mod tests {
     fn test_verify_signature_missing_timestamp() {
         let secret = "test_secret_key";
         let body = r#"{"version":1,"timestamp":"2024-01-01T00:00:00Z","type":"test","tailnet":"example.com","message":"Test message","data":{}}"#;
-        let missing_timestamp = "v1=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        let missing_timestamp =
+            "v1=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
         let result = TailscaleWebhook::verify_signature(secret, body, missing_timestamp);
         assert!(result.is_err(), "Missing timestamp should fail");
@@ -333,30 +364,33 @@ mod tests {
         // Test that header lookup works with different case variations
         let body = r#"{"version":1,"timestamp":"2024-01-01T00:00:00Z","type":"test","tailnet":"example.com","message":"Test","data":{}}"#;
         let signature = generate_signature("secret", "1663781880", body);
-        
+
         // Test with lowercase
         let mut headers = HashMap::new();
         headers.insert("tailscale-webhook-signature".to_string(), signature.clone());
-        
-        let found = headers.iter()
+
+        let found = headers
+            .iter()
             .find(|(key, _)| key.eq_ignore_ascii_case("tailscale-webhook-signature"))
             .map(|(_, value)| value.as_str());
         assert!(found.is_some(), "Should find lowercase header");
-        
+
         // Test with uppercase
         let mut headers = HashMap::new();
         headers.insert("TAILSCALE-WEBHOOK-SIGNATURE".to_string(), signature.clone());
-        
-        let found = headers.iter()
+
+        let found = headers
+            .iter()
             .find(|(key, _)| key.eq_ignore_ascii_case("tailscale-webhook-signature"))
             .map(|(_, value)| value.as_str());
         assert!(found.is_some(), "Should find uppercase header");
-        
+
         // Test with mixed case
         let mut headers = HashMap::new();
         headers.insert("Tailscale-Webhook-Signature".to_string(), signature.clone());
-        
-        let found = headers.iter()
+
+        let found = headers
+            .iter()
             .find(|(key, _)| key.eq_ignore_ascii_case("tailscale-webhook-signature"))
             .map(|(_, value)| value.as_str());
         assert!(found.is_some(), "Should find mixed case header");

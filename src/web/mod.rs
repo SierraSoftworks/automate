@@ -1,4 +1,4 @@
-use actix_web::{web, App, HttpServer};
+use actix_web::{App, HttpServer, web};
 use human_errors::ResultExt;
 
 use crate::{filter::Filterable, prelude::Services};
@@ -7,7 +7,9 @@ mod telemetry;
 mod ui;
 mod webhooks;
 
-pub async fn run_web_server<S: Services + Clone + Send + Sync + 'static>(services: S) -> Result<(), human_errors::Error> {
+pub async fn run_web_server<S: Services + Clone + Send + Sync + 'static>(
+    services: S,
+) -> Result<(), human_errors::Error> {
     if let Some((mut addr, port)) = services.config().web.address.split_once(':') {
         if addr.is_empty() {
             addr = "0.0.0.0";
@@ -15,9 +17,7 @@ pub async fn run_web_server<S: Services + Clone + Send + Sync + 'static>(service
 
         let port = port.parse::<u16>().wrap_err_as_user(
             "The port number in the web.address field is not a valid number.",
-            &[
-                "Ensure that the port is a valid integer between 0 and 65535.",
-            ],
+            &["Ensure that the port is a valid integer between 0 and 65535."],
         )?;
 
         let server = HttpServer::new(move || {
@@ -26,10 +26,10 @@ pub async fn run_web_server<S: Services + Clone + Send + Sync + 'static>(service
                 .wrap(telemetry::TracingLogger)
                 .route("/", web::get().to(ui::index))
                 .route("/webhooks/{kind:.*}", web::post().to(webhooks::handle::<S>))
-                .service(web::resource("/admin")
-                    .guard(actix_web::guard::fn_guard(|ctx| {
-                        ctx.app_data()
-                            .map_or(false, |services: &web::Data<S>| {
+                .service(
+                    web::resource("/admin")
+                        .guard(actix_web::guard::fn_guard(|ctx| {
+                            ctx.app_data().map_or(false, |services: &web::Data<S>| {
                                 services
                                     .config()
                                     .web
@@ -37,8 +37,9 @@ pub async fn run_web_server<S: Services + Clone + Send + Sync + 'static>(service
                                     .matches(&RequestContextFilter { req: ctx })
                                     .unwrap_or(false)
                             })
-                    }))
-                    .to(ui::admin_index::<S>))
+                        }))
+                        .to(ui::admin_index::<S>),
+                )
                 .default_service(web::to(ui::not_found))
         })
         .bind((addr, port))?;
@@ -53,7 +54,6 @@ pub async fn run_web_server<S: Services + Clone + Send + Sync + 'static>(service
             ],
         ))
     }
-
 }
 
 struct RequestContextFilter<'a> {
@@ -65,7 +65,12 @@ impl<'a> Filterable for RequestContextFilter<'a> {
         match key {
             "method" => self.req.head().method.as_str().into(),
             "path" => self.req.head().uri.path().into(),
-            "client_ip" => self.req.head().peer_addr.map(|addr| addr.ip().to_string()).into(),
+            "client_ip" => self
+                .req
+                .head()
+                .peer_addr
+                .map(|addr| addr.ip().to_string())
+                .into(),
             key if key.starts_with("headers.") => {
                 let header_name = &key["headers.".len()..];
                 let header_value = self.req.head().headers().get(header_name);

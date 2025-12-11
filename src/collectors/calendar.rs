@@ -1,6 +1,10 @@
 use serde::{Deserialize, Serialize};
 
-use crate::{collectors::{Diff, DifferentialCollector}, parsers::{Calendar, CalendarEvent}, prelude::*};
+use crate::{
+    collectors::{Diff, DifferentialCollector},
+    parsers::{Calendar, CalendarEvent},
+    prelude::*,
+};
 
 pub struct CalendarCollector {
     pub url: String,
@@ -8,9 +12,7 @@ pub struct CalendarCollector {
 
 impl CalendarCollector {
     pub fn new(url: impl Into<String>) -> Self {
-        Self {
-            url: url.into(),
-        }
+        Self { url: url.into() }
     }
 }
 
@@ -23,7 +25,7 @@ pub struct CalendarEventIdentifier {
 #[async_trait::async_trait]
 impl Collector for CalendarCollector {
     type Item = CalendarEvent;
-    
+
     #[instrument("collectors.calendar.list", skip(self, services), err(Display))]
     async fn list(
         &self,
@@ -31,10 +33,13 @@ impl Collector for CalendarCollector {
     ) -> Result<Vec<Self::Item>, human_errors::Error> {
         let results = self.diff(services).await?;
 
-        Ok(results.into_iter().filter_map(|d| match d {
-            Diff::Added(_, item) => Some(item),
-            _ => None,
-        }).collect())
+        Ok(results
+            .into_iter()
+            .filter_map(|d| match d {
+                Diff::Added(_, item) => Some(item),
+                _ => None,
+            })
+            .collect())
     }
 }
 
@@ -61,17 +66,20 @@ impl DifferentialCollector for CalendarCollector {
         let client = reqwest::Client::builder()
             .user_agent("SierraSoftworks/automate-rs")
             .build()
-            .map_err_as_system(&[
-                "Report this issue to the development team on GitHub."
-            ])?;
+            .map_err_as_system(&["Report this issue to the development team on GitHub."])?;
 
-        let response = client.get(&self.url)
+        let response = client
+            .get(&self.url)
             .header("Accept", "text/calendar")
-            .send().await.wrap_err_as_user("We were unable to fetch your calendar.", &[
-                "Make sure that your network connection is working properly.",
-                "Make sure you provided a valid URL for your calendar."
-            ])?;
-
+            .send()
+            .await
+            .wrap_err_as_user(
+                "We were unable to fetch your calendar.",
+                &[
+                    "Make sure that your network connection is working properly.",
+                    "Make sure you provided a valid URL for your calendar.",
+                ],
+            )?;
 
         match response.status() {
             reqwest::StatusCode::OK => {}
@@ -87,17 +95,13 @@ impl DifferentialCollector for CalendarCollector {
             reqwest::StatusCode::UNAUTHORIZED | reqwest::StatusCode::FORBIDDEN => {
                 return Err(human_errors::user(
                     "Authorization failed when trying to fetch your calendar.",
-                    &[
-                        "Make sure that your calendar is marked as publicly accessible.",
-                    ],
+                    &["Make sure that your calendar is marked as publicly accessible."],
                 ));
             }
             reqwest::StatusCode::TOO_MANY_REQUESTS => {
                 return Err(human_errors::user(
                     "Rate limit exceeded when trying to fetch your calendar.",
-                    &[
-                        "Wait for a while before making more requests to your calendar's URL.",
-                    ],
+                    &["Wait for a while before making more requests to your calendar's URL."],
                 ));
             }
             status => {
@@ -106,15 +110,13 @@ impl DifferentialCollector for CalendarCollector {
                         "Failed to fetch your calendar. Received unexpected status code: {}",
                         status
                     ),
-                    &[
-                        "Make sure that your network connection is working properly.",
-                    ],
+                    &["Make sure that your network connection is working properly."],
                 ));
             }
         }
 
         let content = response.text().await.map_err_as_user(&[
-            "Make sure that you have provided a valid URL for your calendar."
+            "Make sure that you have provided a valid URL for your calendar.",
         ])?;
 
         let calendar: Calendar = content.parse()?;
@@ -125,10 +127,9 @@ impl DifferentialCollector for CalendarCollector {
         let start = now;
         let end = now + chrono::Duration::days(7);
 
-        let relevant_events: Vec<CalendarEvent> = events.into_iter()
-            .filter(|event| {
-                event.end > start && event.start < end
-            })
+        let relevant_events: Vec<CalendarEvent> = events
+            .into_iter()
+            .filter(|event| event.end > start && event.start < end)
             .collect();
 
         Ok(relevant_events)

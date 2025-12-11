@@ -2,7 +2,11 @@ use std::fmt::Display;
 
 use serde::{Deserialize, Serialize};
 
-use crate::{collectors::{CalendarCollector, Diff, DifferentialCollector}, config::TodoistConfig, prelude::*};
+use crate::{
+    collectors::{CalendarCollector, Diff, DifferentialCollector},
+    config::TodoistConfig,
+    prelude::*,
+};
 
 #[derive(Clone, Serialize, Deserialize, Default)]
 pub struct CalendarWorkflowConfig {
@@ -36,7 +40,11 @@ impl Job for CalendarWorkflow {
     }
 
     #[instrument("workflow.calendar.handle", skip(self, job, services), fields(job = %job))]
-    async fn handle(&self, job: &Self::JobType, services: impl Services + Send + Sync + 'static) -> Result<(), human_errors::Error> {
+    async fn handle(
+        &self,
+        job: &Self::JobType,
+        services: impl Services + Send + Sync + 'static,
+    ) -> Result<(), human_errors::Error> {
         let collector = CalendarCollector::new(&job.url);
 
         let items = collector.diff(&services).await?;
@@ -44,9 +52,12 @@ impl Job for CalendarWorkflow {
         for item in items.into_iter() {
             match item {
                 Diff::Added(id, item) if job.filter.matches(&item).unwrap_or_default() => {
-                    info!("Calendar item '{}' matched filter, creating Todoist task", item.summary);
+                    info!(
+                        "Calendar item '{}' matched filter, creating Todoist task",
+                        item.summary
+                    );
                     let identifier_string = serde_json::to_string(&id).map_err_as_system(&[
-                        "Report this issue to the development team on GitHub."
+                        "Report this issue to the development team on GitHub.",
                     ])?;
                     crate::publishers::TodoistUpsertTask::dispatch(
                         crate::publishers::TodoistUpsertTaskPayload {
@@ -63,13 +74,17 @@ impl Job for CalendarWorkflow {
                             config: job.todoist.clone(),
                         },
                         None,
-                        &services
-                    ).await?;
-                },
+                        &services,
+                    )
+                    .await?;
+                }
                 Diff::Added(id, item) => {
-                    info!("Calendar item '{}' did not match filter, skipping Todoist creation", item.summary);
+                    info!(
+                        "Calendar item '{}' did not match filter, skipping Todoist creation",
+                        item.summary
+                    );
                     let identifier_string = serde_json::to_string(&id).map_err_as_system(&[
-                        "Report this issue to the development team on GitHub."
+                        "Report this issue to the development team on GitHub.",
                     ])?;
                     crate::publishers::TodoistCompleteTask::dispatch(
                         crate::publishers::TodoistCompleteTaskPayload {
@@ -77,12 +92,13 @@ impl Job for CalendarWorkflow {
                             config: job.todoist.clone(),
                         },
                         None,
-                        &services
-                    ).await?;
+                        &services,
+                    )
+                    .await?;
                 }
                 Diff::Removed(id) => {
                     let identifier_string = serde_json::to_string(&id).map_err_as_system(&[
-                        "Report this issue to the development team on GitHub."
+                        "Report this issue to the development team on GitHub.",
                     ])?;
                     crate::publishers::TodoistCompleteTask::dispatch(
                         crate::publishers::TodoistCompleteTaskPayload {
@@ -90,8 +106,9 @@ impl Job for CalendarWorkflow {
                             config: job.todoist.clone(),
                         },
                         None,
-                        &services
-                    ).await?;
+                        &services,
+                    )
+                    .await?;
                 }
             }
         }

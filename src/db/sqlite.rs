@@ -100,9 +100,7 @@ impl SqliteDatabase {
 #[async_trait::async_trait]
 impl KeyValueStore for SqliteDatabase {
     #[instrument("db.sqlite.get", skip(self, partition, key), fields(otel.kind=?OpenTelemetrySpanKind::Client), err(Display))]
-    async fn get<
-        T: serde::de::DeserializeOwned + Send + 'static,
-    >(
+    async fn get<T: serde::de::DeserializeOwned + Send + 'static>(
         &self,
         partition: impl Into<Cow<'static, str>> + Send,
         key: impl Into<Cow<'static, str>> + Send,
@@ -135,9 +133,7 @@ impl KeyValueStore for SqliteDatabase {
     }
 
     #[instrument("db.sqlite.list", skip(self, partition), fields(otel.kind=?OpenTelemetrySpanKind::Client), err(Display))]
-    async fn list<
-        T: serde::de::DeserializeOwned + Send + 'static,
-    >(
+    async fn list<T: serde::de::DeserializeOwned + Send + 'static>(
         &self,
         partition: impl Into<Cow<'static, str>> + Send,
     ) -> std::result::Result<Vec<(String, T)>, errors::Error> {
@@ -172,9 +168,7 @@ impl KeyValueStore for SqliteDatabase {
     }
 
     #[instrument("db.sqlite.set", skip(self, partition, key, value), fields(otel.kind=?OpenTelemetrySpanKind::Client), err(Display))]
-    async fn set<
-        T: serde::Serialize + Send + 'static,
-    >(
+    async fn set<T: serde::Serialize + Send + 'static>(
         &self,
         partition: impl Into<Cow<'static, str>> + Send,
         key: impl Into<Cow<'static, str>> + Send,

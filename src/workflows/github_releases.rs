@@ -34,7 +34,11 @@ impl Job for GitHubReleasesWorkflow {
     }
 
     #[instrument("workflow.github_releases.handle", skip(self, job, services), fields(job = %job))]
-    async fn handle(&self, job: &Self::JobType, services: impl Services + Send + Sync + 'static) -> Result<(), human_errors::Error> {
+    async fn handle(
+        &self,
+        job: &Self::JobType,
+        services: impl Services + Send + Sync + 'static,
+    ) -> Result<(), human_errors::Error> {
         let collector = GitHubReleasesCollector::new(&job.repository);
 
         let items = collector.list(&services).await?;
