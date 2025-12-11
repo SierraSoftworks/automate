@@ -190,3 +190,5 @@ impl IncrementalCollector for GitHubReleasesCollector {
         }
     }
 }
+
+// TODO: Add tests for the GitHubReleasesCollector using wiremock to mock out the GitHub API and test data stored in the tests/data/ directory.
