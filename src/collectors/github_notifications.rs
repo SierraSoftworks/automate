@@ -407,6 +407,8 @@ pub struct GitHubSubjectStatusItem {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use wiremock::matchers::method;
+    use wiremock::{Mock, MockServer, ResponseTemplate};
 
     #[test]
     fn test_notification_reason_serialization() {
@@ -451,5 +453,118 @@ mod tests {
                     .expect("Failed to deserialize GitHubNotificationsReason");
             assert_eq!(deserialized, reason);
         }
+    }
+
+    #[tokio::test]
+    async fn test_list() {
+        let mock_server = MockServer::start().await;
+        let test_data = crate::testing::get_test_file_contents("github_notifications.json");
+
+        Mock::given(method("GET"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_string(test_data)
+                    .insert_header("Last-Modified", "Mon, 08 Apr 2024 12:00:00 GMT"),
+            )
+            .mount(&mock_server)
+            .await;
+
+        let collector = GitHubNotificationsCollector::new_with_url(mock_server.uri());
+        let services = crate::testing::mock_services().await.unwrap();
+
+        let items = collector.list(&services).await.unwrap();
+        assert_eq!(
+            items.len(),
+            3,
+            "Expected to fetch 3 notification items from test data"
+        );
+        assert_eq!(items[0].id, "1");
+        assert_eq!(items[0].subject.title, "Test Issue #1");
+        assert_eq!(items[0].repository.full_name, "testorg/test-repo");
+        assert_eq!(items[0].reason, GitHubNotificationsReason::Mention);
+        assert_eq!(items[0].unread, true);
+        
+        assert_eq!(items[1].id, "2");
+        assert_eq!(items[1].subject.title, "Test PR #42");
+        assert_eq!(items[1].reason, GitHubNotificationsReason::ReviewRequested);
+        
+        assert_eq!(items[2].id, "3");
+        assert_eq!(items[2].reason, GitHubNotificationsReason::Author);
+    }
+
+    #[tokio::test]
+    async fn test_fetch_since_no_watermark() {
+        let mock_server = MockServer::start().await;
+        let test_data = crate::testing::get_test_file_contents("github_notifications.json");
+
+        Mock::given(method("GET"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_string(test_data)
+                    .insert_header("Last-Modified", "Mon, 08 Apr 2024 12:00:00 GMT"),
+            )
+            .mount(&mock_server)
+            .await;
+
+        let collector = GitHubNotificationsCollector::new_with_url(mock_server.uri());
+        let services = crate::testing::mock_services().await.unwrap();
+
+        let (items, watermark) = collector.fetch_since(None, &services).await.unwrap();
+        
+        assert_eq!(
+            items.len(),
+            3,
+            "Expected to fetch 3 notification items from test data"
+        );
+        assert_eq!(watermark, "Mon, 08 Apr 2024 12:00:00 GMT");
+    }
+
+    #[tokio::test]
+    async fn test_fetch_since_with_watermark() {
+        let mock_server = MockServer::start().await;
+        let test_data = crate::testing::get_test_file_contents("github_notifications.json");
+
+        Mock::given(method("GET"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_string(test_data)
+                    .insert_header("Last-Modified", "Mon, 08 Apr 2024 12:00:00 GMT"),
+            )
+            .mount(&mock_server)
+            .await;
+
+        let collector = GitHubNotificationsCollector::new_with_url(mock_server.uri());
+        let services = crate::testing::mock_services().await.unwrap();
+
+        let watermark = Some("Mon, 01 Apr 2024 12:00:00 GMT".to_string());
+        let (items, new_watermark) = collector.fetch_since(watermark, &services).await.unwrap();
+        
+        assert_eq!(
+            items.len(),
+            3,
+            "Expected to fetch 3 notification items from test data"
+        );
+        assert_eq!(new_watermark, "Mon, 08 Apr 2024 12:00:00 GMT");
+        assert_eq!(items[0].id, "1");
+        assert_eq!(items[1].id, "2");
+    }
+
+    #[tokio::test]
+    async fn test_fetch_since_not_modified() {
+        let mock_server = MockServer::start().await;
+
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(304))
+            .mount(&mock_server)
+            .await;
+
+        let collector = GitHubNotificationsCollector::new_with_url(mock_server.uri());
+        let services = crate::testing::mock_services().await.unwrap();
+
+        let watermark = Some("Mon, 08 Apr 2024 12:00:00 GMT".to_string());
+        let (items, new_watermark) = collector.fetch_since(watermark, &services).await.unwrap();
+        
+        assert_eq!(items.len(), 0, "Expected no items when not modified");
+        assert_eq!(new_watermark, "Mon, 08 Apr 2024 12:00:00 GMT", "Watermark should remain unchanged");
     }
 }

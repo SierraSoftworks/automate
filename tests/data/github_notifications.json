@@ -1,0 +1,68 @@
+[
+  {
+    "id": "1",
+    "reason": "mention",
+    "unread": true,
+    "updated_at": "2024-04-08T12:00:00Z",
+    "last_read_at": null,
+    "repository": {
+      "name": "test-repo",
+      "full_name": "testorg/test-repo",
+      "html_url": "https://github.com/testorg/test-repo",
+      "owner": {
+        "login": "testorg",
+        "html_url": "https://github.com/testorg"
+      }
+    },
+    "subject": {
+      "title": "Test Issue #1",
+      "type": "Issue",
+      "url": "https://api.github.com/repos/testorg/test-repo/issues/1",
+      "latest_comment_url": "https://api.github.com/repos/testorg/test-repo/issues/comments/123"
+    }
+  },
+  {
+    "id": "2",
+    "reason": "review_requested",
+    "unread": true,
+    "updated_at": "2024-04-09T10:00:00Z",
+    "last_read_at": "2024-04-08T10:00:00Z",
+    "repository": {
+      "name": "another-repo",
+      "full_name": "testorg/another-repo",
+      "html_url": "https://github.com/testorg/another-repo",
+      "owner": {
+        "login": "testorg",
+        "html_url": "https://github.com/testorg"
+      }
+    },
+    "subject": {
+      "title": "Test PR #42",
+      "type": "PullRequest",
+      "url": "https://api.github.com/repos/testorg/another-repo/pulls/42",
+      "latest_comment_url": null
+    }
+  },
+  {
+    "id": "3",
+    "reason": "author",
+    "unread": false,
+    "updated_at": "2024-04-10T08:30:00Z",
+    "last_read_at": "2024-04-10T09:00:00Z",
+    "repository": {
+      "name": "test-repo",
+      "full_name": "testorg/test-repo",
+      "html_url": "https://github.com/testorg/test-repo",
+      "owner": {
+        "login": "testorg",
+        "html_url": "https://github.com/testorg"
+      }
+    },
+    "subject": {
+      "title": "Another Issue #5",
+      "type": "Issue",
+      "url": "https://api.github.com/repos/testorg/test-repo/issues/5",
+      "latest_comment_url": "https://api.github.com/repos/testorg/test-repo/issues/comments/456"
+    }
+  }
+]
