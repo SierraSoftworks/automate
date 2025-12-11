@@ -130,7 +130,8 @@ impl<'a> Filterable for RssEntryFilter<'a> {
                 .into(),
             "link" => self
                 .0
-                .links.first()
+                .links
+                .first()
                 .map(|l| l.href.to_lowercase())
                 .unwrap_or_default()
                 .into(),

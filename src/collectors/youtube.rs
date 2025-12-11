@@ -52,10 +52,7 @@ impl Collector for YouTubeCollector {
     ) -> Result<Vec<Self::Item>, human_errors::Error> {
         let items = self.0.fetch(services).await?;
 
-        let youtube_items = items
-            .iter()
-            .map(parse_youtube_entry)
-            .collect();
+        let youtube_items = items.iter().map(parse_youtube_entry).collect();
 
         Ok(youtube_items)
     }
