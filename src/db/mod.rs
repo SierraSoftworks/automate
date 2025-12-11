@@ -72,7 +72,7 @@ pub trait Queue {
         &self,
         partition: P,
         reserve_for: chrono::Duration,
-    ) -> Result<Option<QueueMessage<T>>, errors::Error>;
+    ) -> Result<QueueMessage<T>, errors::Error>;
 
     async fn complete<P: Into<Cow<'static, str>> + Send, T: Send + 'static>(
         &self,

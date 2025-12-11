@@ -54,7 +54,7 @@ pub trait Job {
 
         loop {
             match queue.dequeue(self.timeout()).await {
-                Ok(Some(item)) => {
+                Ok(item) => {
                     let delay = Utc::now() - item.scheduled_at;
                     let span = info_span!(
                         parent: None,
@@ -92,10 +92,6 @@ pub trait Job {
                         info!("Job '{}' completed successfully (traceparent: {traceparent}).", queue.name());
                         queue.complete(item).await.unwrap();
                     }
-                }
-                Ok(None) => {
-                    debug!("No jobs available in queue '{}', waiting...", queue.name());
-                    tokio::time::sleep(std::time::Duration::from_secs(5)).await;
                 }
                 Err(err) => {
                     error!(error = %err, "An error occurred while fetching job from queue '{}': {}", queue.name(), err);

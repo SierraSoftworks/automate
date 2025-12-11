@@ -273,53 +273,62 @@ impl Queue for SqliteDatabase {
         &self,
         partition: P,
         reserve_for: chrono::Duration,
-    ) -> std::result::Result<Option<super::QueueMessage<T>>, errors::Error> {
-        let reservation_id = uuid::Uuid::new_v4().to_string();
-        let reserved_until = chrono::Utc::now() + reserve_for;
-
+    ) -> std::result::Result<super::QueueMessage<T>, errors::Error> {
         let partition = partition.into();
 
-        self.connection.call(move |c| {
-            let tx = c.transaction().map_err_as_system(ADVICE_DB_ERROR)?;
+        loop {
+            let reservation_id = uuid::Uuid::new_v4().to_string();
+            let reserved_until = chrono::Utc::now() + reserve_for;
 
-            let message = tx.query_one("SELECT key, payload, scheduledAt, traceparent, tracestate FROM queues WHERE partition = ?1 AND hiddenUntil < CURRENT_TIMESTAMP LIMIT 1", [&partition], |row| {
-                let key: String = row.get(0)?;
-                let payload_str: String = row.get(1)?;
-                let scheduled_at: chrono::DateTime<chrono::Utc> = row.get(2)?;
-                let traceparent: Option<String> = row.get(3)?;
-                let tracestate: Option<String> = row.get(4)?;
+            let partition = partition.clone();
+            let message = self.connection.call(move |c| {
+                let tx = c.transaction().map_err_as_system(ADVICE_DB_ERROR)?;
 
-                let payload: T = serde_json::from_str(&payload_str).map_err(|e| {
-                    rusqlite::Error::FromSqlConversionFailure(
-                        1,
-                        rusqlite::types::Type::Text,
-                        Box::new(e),
-                    )
-                })?;
+                let message = tx.query_one("SELECT key, payload, scheduledAt, traceparent, tracestate FROM queues WHERE partition = ?1 AND hiddenUntil < CURRENT_TIMESTAMP LIMIT 1", [&partition], |row| {
+                    let key: String = row.get(0)?;
+                    let payload_str: String = row.get(1)?;
+                    let scheduled_at: chrono::DateTime<chrono::Utc> = row.get(2)?;
+                    let traceparent: Option<String> = row.get(3)?;
+                    let tracestate: Option<String> = row.get(4)?;
 
-                Ok(super::QueueMessage {
-                    key,
-                    reservation_id: reservation_id.clone(),
-                    payload,
-                    scheduled_at,
-                    traceparent,
-                    tracestate,
-                })
-            }).optional().map_err_as_system(ADVICE_DB_ERROR)?;
+                    let payload: T = serde_json::from_str(&payload_str).map_err(|e| {
+                        rusqlite::Error::FromSqlConversionFailure(
+                            1,
+                            rusqlite::types::Type::Text,
+                            Box::new(e),
+                        )
+                    })?;
 
-            if let Some(msg) = &message {
-                tx.execute(
-                    "UPDATE queues
-                    SET reservedBy = ?1, hiddenUntil = ?2
-                    WHERE partition = ?3 AND key = ?4",
-                    (&reservation_id, &reserved_until, &partition, &msg.key),
-                ).map_err_as_system(ADVICE_DB_ERROR)?;
+                    Ok(super::QueueMessage {
+                        key,
+                        reservation_id: reservation_id.clone(),
+                        payload,
+                        scheduled_at,
+                        traceparent,
+                        tracestate,
+                    })
+                }).optional().map_err_as_system(ADVICE_DB_ERROR)?;
+
+                if let Some(msg) = &message {
+                    tx.execute(
+                        "UPDATE queues
+                        SET reservedBy = ?1, hiddenUntil = ?2
+                        WHERE partition = ?3 AND key = ?4",
+                        (&reservation_id, &reserved_until, &partition, &msg.key),
+                    ).map_err_as_system(ADVICE_DB_ERROR)?;
+                }
+
+                tx.commit().map_err_as_system(ADVICE_DB_ERROR)?;
+
+                Result::<_, human_errors::Error>::Ok(message)
+            }).await.map_err_as_system(ADVICE_DB_ERROR)?;
+
+            if let Some(msg) = message {
+                return Ok(msg);
+            } else {
+                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
             }
-
-            tx.commit().map_err_as_system(ADVICE_DB_ERROR)?;
-
-            Result::<_, human_errors::Error>::Ok(message)
-        }).await.map_err_as_system(ADVICE_DB_ERROR)
+        }
     }
 
     #[instrument("db.sqlite.complete", skip(self, partition, msg), fields(otel.kind=?OpenTelemetrySpanKind::Consumer, job.kind=std::any::type_name::<T>()), err(Display))]
@@ -446,8 +455,7 @@ mod tests {
         let job: QueueMessage<String> = db
             .dequeue("test_queue", chrono::Duration::seconds(60))
             .await
-            .unwrap()
-            .expect("job should be dequeued");
+            .unwrap();
         assert_eq!(job.payload, "job1");
         assert_ne!(job.traceparent, None);
 

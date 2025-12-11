@@ -65,7 +65,7 @@ impl<D: Queue, T: serde::Serialize + serde::de::DeserializeOwned + Send + 'stati
     pub async fn dequeue(
         &self,
         reserve_for: chrono::Duration,
-    ) -> Result<Option<QueueMessage<T>>, human_errors::Error> {
+    ) -> Result<QueueMessage<T>, human_errors::Error> {
         self.db.dequeue(self.name.clone(), reserve_for).await
     }
 
