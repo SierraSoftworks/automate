@@ -152,11 +152,9 @@ impl Job for GrafanaWebhook {
                     .unwrap_or_else(|| format!("grafana-alert-{}", event.title));
 
                 TodoistCompleteTask::dispatch(
-                    #[allow(clippy::needless_update)]
                     TodoistCompleteTaskPayload {
                         unique_key,
                         config: services.config().webhooks.grafana.todoist.clone(),
-                        ..Default::default()
                     },
                     None,
                     &services,
