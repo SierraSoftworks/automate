@@ -487,9 +487,11 @@ mod tests {
         assert_eq!(items[1].id, "2");
         assert_eq!(items[1].subject.title, "Test PR #42");
         assert_eq!(items[1].reason, GitHubNotificationsReason::ReviewRequested);
+        assert_eq!(items[1].unread, true);
         
         assert_eq!(items[2].id, "3");
         assert_eq!(items[2].reason, GitHubNotificationsReason::Author);
+        assert_eq!(items[2].unread, false);
     }
 
     #[tokio::test]
