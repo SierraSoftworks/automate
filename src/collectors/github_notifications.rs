@@ -483,12 +483,12 @@ mod tests {
         assert_eq!(items[0].repository.full_name, "testorg/test-repo");
         assert_eq!(items[0].reason, GitHubNotificationsReason::Mention);
         assert_eq!(items[0].unread, true);
-        
+
         assert_eq!(items[1].id, "2");
         assert_eq!(items[1].subject.title, "Test PR #42");
         assert_eq!(items[1].reason, GitHubNotificationsReason::ReviewRequested);
         assert_eq!(items[1].unread, true);
-        
+
         assert_eq!(items[2].id, "3");
         assert_eq!(items[2].reason, GitHubNotificationsReason::Author);
         assert_eq!(items[2].unread, false);
@@ -512,19 +512,21 @@ mod tests {
         let services = crate::testing::mock_services().await.unwrap();
 
         let (items, watermark) = collector.fetch_since(None, &services).await.unwrap();
-        
+
         assert_eq!(
             items.len(),
             3,
             "Expected to fetch 3 notification items from test data"
         );
         assert_eq!(watermark, "Mon, 08 Apr 2024 12:00:00 GMT");
-        
+
         // Verify the If-Modified-Since header was sent correctly
         let received_requests = mock_server.received_requests().await.unwrap();
         assert_eq!(received_requests.len(), 1, "Expected exactly one request");
         let request = &received_requests[0];
-        let if_modified_since = request.headers.get("if-modified-since")
+        let if_modified_since = request
+            .headers
+            .get("if-modified-since")
             .expect("If-Modified-Since header should be present");
         assert_eq!(
             if_modified_since.to_str().unwrap(),
@@ -551,8 +553,11 @@ mod tests {
         let services = crate::testing::mock_services().await.unwrap();
 
         let watermark = Some("Mon, 01 Apr 2024 12:00:00 GMT".to_string());
-        let (items, new_watermark) = collector.fetch_since(watermark.clone(), &services).await.unwrap();
-        
+        let (items, new_watermark) = collector
+            .fetch_since(watermark.clone(), &services)
+            .await
+            .unwrap();
+
         assert_eq!(
             items.len(),
             3,
@@ -561,12 +566,14 @@ mod tests {
         assert_eq!(new_watermark, "Mon, 08 Apr 2024 12:00:00 GMT");
         assert_eq!(items[0].id, "1");
         assert_eq!(items[1].id, "2");
-        
+
         // Verify the If-Modified-Since header was sent correctly
         let received_requests = mock_server.received_requests().await.unwrap();
         assert_eq!(received_requests.len(), 1, "Expected exactly one request");
         let request = &received_requests[0];
-        let if_modified_since = request.headers.get("if-modified-since")
+        let if_modified_since = request
+            .headers
+            .get("if-modified-since")
             .expect("If-Modified-Since header should be present");
         assert_eq!(
             if_modified_since.to_str().unwrap(),
@@ -588,16 +595,24 @@ mod tests {
         let services = crate::testing::mock_services().await.unwrap();
 
         let watermark = Some("Mon, 08 Apr 2024 12:00:00 GMT".to_string());
-        let (items, new_watermark) = collector.fetch_since(watermark.clone(), &services).await.unwrap();
-        
+        let (items, new_watermark) = collector
+            .fetch_since(watermark.clone(), &services)
+            .await
+            .unwrap();
+
         assert_eq!(items.len(), 0, "Expected no items when not modified");
-        assert_eq!(new_watermark, "Mon, 08 Apr 2024 12:00:00 GMT", "Watermark should remain unchanged");
-        
+        assert_eq!(
+            new_watermark, "Mon, 08 Apr 2024 12:00:00 GMT",
+            "Watermark should remain unchanged"
+        );
+
         // Verify the If-Modified-Since header was sent correctly
         let received_requests = mock_server.received_requests().await.unwrap();
         assert_eq!(received_requests.len(), 1, "Expected exactly one request");
         let request = &received_requests[0];
-        let if_modified_since = request.headers.get("if-modified-since")
+        let if_modified_since = request
+            .headers
+            .get("if-modified-since")
             .expect("If-Modified-Since header should be present");
         assert_eq!(
             if_modified_since.to_str().unwrap(),
