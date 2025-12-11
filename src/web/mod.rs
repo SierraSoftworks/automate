@@ -3,6 +3,7 @@ use human_errors::ResultExt;
 
 use crate::{filter::Filterable, prelude::Services};
 
+mod telemetry;
 mod ui;
 mod webhooks;
 
@@ -22,6 +23,7 @@ pub async fn run_web_server<S: Services + Clone + Send + Sync + 'static>(service
         let server = HttpServer::new(move || {
             App::new()
                 .app_data(web::Data::new(services.clone()))
+                .wrap(telemetry::TracingLogger)
                 .route("/", web::get().to(ui::index))
                 .route("/webhooks/{kind:.*}", web::post().to(webhooks::handle::<S>))
                 .service(web::resource("/admin")

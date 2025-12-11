@@ -3,7 +3,7 @@ use chrono::{DateTime, Utc};
 use human_errors as errors;
 use calcard::{Entry, icalendar::{ICalendar, ICalendarClassification, ICalendarStatus, ICalendarValue}};
 use serde::{Deserialize, Serialize};
-use tracing::instrument;
+use tracing_batteries::prelude::*;
 
 use crate::filter::Filterable;
 

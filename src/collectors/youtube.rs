@@ -4,7 +4,7 @@ use crate::{
 };
 use chrono::{DateTime, Utc};
 use feed_rs::model::Entry;
-use tracing::instrument;
+use tracing_batteries::prelude::*;
 
 pub struct YouTubeCollector(RssCollector);
 

@@ -1,6 +1,5 @@
 use std::borrow::Cow;
-
-use tracing::instrument;
+use tracing_batteries::prelude::*;
 
 use crate::{collectors::Collector, db::KeyValueStore, services::Services};
 

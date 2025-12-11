@@ -38,8 +38,8 @@ impl GitHubNotificationsWorkflow {
         TodoistUpsertTaskPayload {
             unique_key: event.id.clone(),
             title: format!(
-                "[github:{}]({}): [{}]({}) ({})",
-                &event.repository.full_name, &event.repository.html_url, event.subject.title, subject_html_url.unwrap_or_default(), serde_json::to_string(&event.reason).unwrap_or_default()
+                "[**{}**]({}): {}",
+                &event.repository.full_name, subject_html_url.unwrap_or(event.repository.html_url.clone()), event.subject.title
             ),
             due: TodoistDueDate::DateTime(event.updated_at),
             config: job.todoist.clone(),

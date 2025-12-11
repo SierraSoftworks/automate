@@ -7,7 +7,7 @@ use crate::prelude::*;
 pub trait Job {
     type JobType: serde::Serialize + serde::de::DeserializeOwned + Send + 'static;
 
-    #[instrument("job.dispatch", skip(job, idempotency_key, services), err(Display))]
+    #[instrument("job.dispatch", skip(job, idempotency_key, services), fields(otel.kind=?OpenTelemetrySpanKind::Producer, job.kind = std::any::type_name::<Self::JobType>()), err(Display))]
     async fn dispatch(
         job: Self::JobType,
         idempotency_key: Option<Cow<'static, str>>,
@@ -20,7 +20,7 @@ pub trait Job {
         Ok(())
     }
 
-    #[instrument("job.dispatch_delayed", skip(job, idempotency_key, delay, services), err(Display))]
+    #[instrument("job.dispatch_delayed", skip(job, idempotency_key, delay, services), fields(otel.kind=?OpenTelemetrySpanKind::Producer, job.kind = std::any::type_name::<Self::JobType>()), err(Display))]
     async fn dispatch_delayed(
         job: Self::JobType,
         idempotency_key: Option<Cow<'static, str>>,
@@ -36,13 +36,17 @@ pub trait Job {
 
     fn partition() -> &'static str;
 
+    fn propagate_parent() -> bool {
+        true
+    }
+
     fn timeout(&self) -> TimeDelta {
         TimeDelta::minutes(5)
     }
 
     async fn handle(&self, job: &Self::JobType, services: impl Services + Send + Sync + 'static) -> Result<(), human_errors::Error>;
 
-    #[instrument("job.run", skip(self, services), err(Display))]
+    #[instrument("job.run", skip(self, services), fields(otel.kind=?OpenTelemetrySpanKind::Consumer, job.kind = std::any::type_name::<Self::JobType>()), err(Display))]
     async fn run(&self, services: impl Services + Clone + Send + Sync + 'static) -> Result<(), human_errors::Error> {
         let queue = services.queue().partition(Self::partition().to_string());
 
@@ -56,17 +60,24 @@ pub trait Job {
                         parent: None,
                         "job.run",
                         job.name = queue.name(),
-                        job.delay = delay.num_milliseconds()
+                        job.delay = delay.num_milliseconds(),
+                        otel.kind = ?OpenTelemetrySpanKind::Consumer
                     );
                     span.follows_from(&root_span);
 
                     let traceparent = item.traceparent.as_deref().unwrap_or("none");
 
                     if let Some(_) = &item.traceparent {
-                        if let Err(err) = get_text_map_propagator(|p| {
-                            span.set_parent(p.extract(&item))
-                        }) {
-                            warn!(error = %err, "Failed to propagate trace context for job '{}' (traceparent: {traceparent}): {err}", queue.name());
+                        let context = get_text_map_propagator(|p| {
+                            p.extract(&item)
+                        });
+                            
+                        if Self::propagate_parent() {
+                            if let Err(err) = span.set_parent(context) {
+                                warn!(error = %err, "Failed to set trace context for job '{}' (traceparent: {traceparent}): {err}", queue.name());
+                            }
+                        } else {
+                            span.add_link(context.span().span_context().clone());
                         }
                     }
 

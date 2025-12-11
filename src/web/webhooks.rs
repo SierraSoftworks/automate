@@ -1,8 +1,7 @@
 use std::collections::HashMap;
 
 use actix_web::{Responder, web};
-use tracing::instrument;
-use tracing_batteries::prelude::error;
+use tracing_batteries::prelude::*;
 
 use crate::{db::Queue, prelude::Services, webhooks::WebhookEvent};
 

@@ -1,7 +1,7 @@
 use std::{borrow::Cow, collections::HashSet};
+use tracing_batteries::prelude::*;
 
 use crate::{collectors::Collector, db::KeyValueStore, services::Services};
-use tracing::instrument;
 
 pub enum Diff<ID, V> {
     Added(ID, V),

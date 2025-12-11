@@ -1,7 +1,6 @@
 use std::fmt::Display;
 
 use chrono::Utc;
-use tracing::instrument;
 
 use crate::prelude::*;
 
@@ -44,7 +43,7 @@ where
 pub struct CronJob;
 
 impl CronJob {
-    #[instrument("cron_job.setup", skip(jobs, services))]
+    #[instrument("cron_job.setup", skip(jobs, services), fields(otel.kind=?OpenTelemetrySpanKind::Producer, job.kind = std::any::type_name::<J::JobType>()))]
     pub async fn setup<J: Job>(
         jobs: &[CronJobConfig<J>],
         services: impl Services + Send + Sync + 'static,
@@ -62,6 +61,8 @@ impl CronJob {
                     "Please ensure the cron schedule is valid.",
                 ])?
                 ;
+
+            info!("Scheduling cron job '{}' to run at {}", job.kind, next_run);
 
             queue
                 .enqueue(
@@ -82,6 +83,10 @@ impl Job for CronJob {
 
     fn partition() -> &'static str {
         "cron"
+    }
+
+    fn propagate_parent() -> bool {
+        false
     }
 
     #[instrument("workflow.cron.handle", skip(self, job, services), fields(job = %job))]

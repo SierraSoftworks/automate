@@ -1,7 +1,6 @@
 use std::fmt::Display;
 
 use serde::{Deserialize, Serialize};
-use tracing::instrument;
 
 use crate::{collectors::{CalendarCollector, Diff, DifferentialCollector}, config::TodoistConfig, prelude::*};
 

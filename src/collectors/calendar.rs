@@ -56,6 +56,7 @@ impl DifferentialCollector for CalendarCollector {
         }
     }
 
+    #[instrument("collectors.calendar.fetch", skip(self), err(Display))]
     async fn fetch(&self) -> Result<Vec<Self::Item>, human_errors::Error> {
         let client = reqwest::Client::builder()
             .user_agent("SierraSoftworks/automate-rs")

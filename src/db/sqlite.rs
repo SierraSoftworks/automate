@@ -99,7 +99,7 @@ impl SqliteDatabase {
 
 #[async_trait::async_trait]
 impl KeyValueStore for SqliteDatabase {
-    #[instrument("db.sqlite.get", skip(self, partition, key), err(Display))]
+    #[instrument("db.sqlite.get", skip(self, partition, key), fields(otel.kind=?OpenTelemetrySpanKind::Client), err(Display))]
     async fn get<
         T: serde::de::DeserializeOwned + Send + 'static,
     >(
@@ -134,7 +134,7 @@ impl KeyValueStore for SqliteDatabase {
             .map_err_as_system(ADVICE_REPORT_DEV)?)
     }
 
-    #[instrument("db.sqlite.list", skip(self, partition), err(Display))]
+    #[instrument("db.sqlite.list", skip(self, partition), fields(otel.kind=?OpenTelemetrySpanKind::Client), err(Display))]
     async fn list<
         T: serde::de::DeserializeOwned + Send + 'static,
     >(
@@ -171,7 +171,7 @@ impl KeyValueStore for SqliteDatabase {
             .map_err_as_system(ADVICE_DB_ERROR)
     }
 
-    #[instrument("db.sqlite.set", skip(self, partition, key, value), err(Display))]
+    #[instrument("db.sqlite.set", skip(self, partition, key, value), fields(otel.kind=?OpenTelemetrySpanKind::Client), err(Display))]
     async fn set<
         T: serde::Serialize + Send + 'static,
     >(
@@ -201,7 +201,7 @@ impl KeyValueStore for SqliteDatabase {
         Ok(())
     }
 
-    #[instrument("db.sqlite.remove", skip(self, partition, key), err(Display))]
+    #[instrument("db.sqlite.remove", skip(self, partition, key), fields(otel.kind=?OpenTelemetrySpanKind::Client), err(Display))]
     async fn remove(
         &self,
         partition: impl Into<Cow<'static, str>> + Send,
@@ -225,7 +225,7 @@ impl KeyValueStore for SqliteDatabase {
 
 #[async_trait::async_trait]
 impl Queue for SqliteDatabase {
-    #[instrument("db.sqlite.enqueue", skip(self, partition, job, idempotency_key, delay), err(Display))]
+    #[instrument("db.sqlite.enqueue", skip(self, partition, job, idempotency_key, delay), fields(otel.kind=?OpenTelemetrySpanKind::Producer, job.kind=std::any::type_name::<T>()), err(Display))]
     async fn enqueue<P: Into<Cow<'static, str>> + Send, T: serde::Serialize + Send + 'static>(
         &self,
         partition: P,
@@ -255,7 +255,7 @@ impl Queue for SqliteDatabase {
                     "INSERT INTO queues (partition, key, payload, hiddenUntil, traceparent, tracestate) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
                         ON CONFLICT (partition, key)
                         DO UPDATE
-                        SET payload = ?3, hiddenUntil = ?4, scheduledAt = CURRENT_TIMESTAMP, reservedBy = NULL",
+                        SET payload = ?3, hiddenUntil = ?4, scheduledAt = CURRENT_TIMESTAMP, reservedBy = NULL, traceparent = ?5, tracestate = ?6",
                     (partition, &key, &serialized, &hidden_until, trace_headers.get("traceparent"), trace_headers.get("tracestate")),
                 )
             })
@@ -265,7 +265,7 @@ impl Queue for SqliteDatabase {
         Ok(())
     }
 
-    #[instrument("db.sqlite.dequeue", skip(self, partition, reserve_for), err(Display))]
+    #[instrument("db.sqlite.dequeue", skip(self, partition, reserve_for), fields(otel.kind=?OpenTelemetrySpanKind::Consumer, job.kind=std::any::type_name::<T>()), err(Display))]
     async fn dequeue<
         P: Into<Cow<'static, str>> + Send,
         T: serde::de::DeserializeOwned + Send + 'static,
@@ -322,7 +322,7 @@ impl Queue for SqliteDatabase {
         }).await.map_err_as_system(ADVICE_DB_ERROR)
     }
 
-    #[instrument("db.sqlite.complete", skip(self, partition, msg), err(Display))]
+    #[instrument("db.sqlite.complete", skip(self, partition, msg), fields(otel.kind=?OpenTelemetrySpanKind::Consumer, job.kind=std::any::type_name::<T>()), err(Display))]
     async fn complete<P: Into<Cow<'static, str>> + Send, T: Send + 'static>(
         &self,
         partition: P,
@@ -419,6 +419,13 @@ mod tests {
     async fn test_queue_basic() {
         let db = SqliteDatabase::open_in_memory().await.unwrap();
 
+        let session = tracing_batteries::Session::new("automate", "0.0.1-test")
+            .with_battery(tracing_batteries::OpenTelemetry::new(""));
+
+        let span = tracing::error_span!("test_queue_basic").entered();
+        assert!(!span.context().is_telemetry_suppressed());
+        assert!(!Span::current().context().is_telemetry_suppressed());
+
         db.enqueue("test_queue", "job1", None, None).await.unwrap();
 
         db.connection
@@ -436,16 +443,15 @@ mod tests {
             .await
             .unwrap();
 
-        let job: Option<QueueMessage<String>> = db
+        let job: QueueMessage<String> = db
             .dequeue("test_queue", chrono::Duration::seconds(60))
             .await
-            .unwrap();
-        assert!(job.is_some(), "Expected to dequeue a job from the queue");
-        assert_eq!(job.as_ref().unwrap().payload, "job1");
+            .unwrap()
+            .expect("job should be dequeued");
+        assert_eq!(job.payload, "job1");
+        assert_ne!(job.traceparent, None);
 
-        if let Some(job) = job {
-            db.complete("test_queue", job).await.unwrap();
-        }
+        db.complete("test_queue", job).await.unwrap();
 
         db.connection
             .call(|c| {
@@ -457,5 +463,7 @@ mod tests {
             })
             .await
             .unwrap();
+
+        session.shutdown();
     }
 }

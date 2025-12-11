@@ -1,10 +1,10 @@
 use std::borrow::Cow;
+use tracing_batteries::prelude::*;
 
 use crate::collectors::{Collector, incremental::IncrementalCollector};
 use chrono::{DateTime, Utc};
 use feed_rs::{model::Entry, parser::parse};
 use human_errors::ResultExt;
-use tracing::instrument;
 
 pub struct RssCollector {
     pub feed_url: String,
@@ -42,6 +42,7 @@ impl IncrementalCollector for RssCollector {
         Cow::Owned(self.feed_url.clone())
     }
 
+    #[instrument("collectors.rss.fetch_since", skip(self, _services), err(Display))]
     async fn fetch_since(
         &self,
         watermark: Option<Self::Watermark>,

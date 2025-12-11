@@ -8,4 +8,3 @@ pub use crate::webhooks::WebhookEvent;
 
 pub use human_errors::ResultExt;
 pub use tracing_batteries::prelude::*;
-pub use tracing::instrument;

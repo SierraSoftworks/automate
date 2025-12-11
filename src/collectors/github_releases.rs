@@ -1,7 +1,7 @@
 use chrono::Utc;
 use human_errors::ResultExt;
 use serde::Deserialize;
-use tracing::instrument;
+use tracing_batteries::prelude::*;
 
 use crate::filter::Filterable;
 
@@ -85,6 +85,7 @@ impl IncrementalCollector for GitHubReleasesCollector {
         std::borrow::Cow::Owned(self.api_url.clone())
     }
 
+    #[instrument("collectors.github_releases.fetch_since", skip(self, services), err(Display))]
     async fn fetch_since(
         &self,
         watermark: Option<Self::Watermark>,

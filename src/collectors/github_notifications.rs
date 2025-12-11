@@ -1,6 +1,6 @@
 use human_errors::ResultExt;
 use serde::{Deserialize, Serialize};
-use tracing::instrument;
+use tracing_batteries::prelude::*;
 
 use crate::filter::Filterable;
 
@@ -169,6 +169,7 @@ impl IncrementalCollector for GitHubNotificationsCollector {
         std::borrow::Cow::Owned(self.api_url.clone())
     }
 
+    #[instrument("collectors.github_notifications.fetch_since", skip(self, services), err(Display))]
     async fn fetch_since(
         &self,
         watermark: Option<Self::Watermark>,

@@ -17,6 +17,7 @@ mod testing;
 
 use clap::Parser;
 use futures_concurrency::future::Race;
+use tracing_batteries::prelude::*;
 
 use crate::{prelude::*, workflows::CronJob};
 
@@ -27,22 +28,18 @@ struct Args {
     config: Option<String>,
 }
 
-#[tokio::main(flavor = "current_thread")]
+#[tokio::main]
 async fn main() {
     let telemetry = tracing_batteries::Session::new("automate", env!("CARGO_PKG_VERSION"))
-        .with_battery(tracing_batteries::Sentry::new("https://64422db58bbf92837d6484d1b8117d5a@o219072.ingest.us.sentry.io/4506753155137536"))
-        .with_battery(tracing_batteries::OpenTelemetry::new("https://api.honeycomb.io")
+        .with_battery(tracing_batteries::OpenTelemetry::new("https://refinery.sierrasoftworks.com")
             .with_header("x-honeycomb-team", "hcaik_01kc5cbks0wtpdg3pndrxkxyswg7ngh59mvxk00hrb69dyp446jvchds8h")
-            .with_protocol(tracing_batteries::OpenTelemetryProtocol::Grpc)
-            .with_stdout(true)
-            .with_sampler(tracing_batteries::OpenTelemetrySampler::AlwaysOn)
-            .with_default_level(tracing_batteries::OpenTelemetryLevel::INFO))
+            .with_stdout(true))
+        .with_battery(tracing_batteries::Sentry::new("https://64422db58bbf92837d6484d1b8117d5a@o219072.ingest.us.sentry.io/4506753155137536"))
         .with_battery(tracing_batteries::Medama::new(
             "https://analytics.sierrasoftworks.com",
-        ));
+            ));
 
-    let local_set = &mut tokio::task::LocalSet::new();
-    if let Err(err) = local_set.run_until(run()).await {
+    if let Err(err) = run().await {
         eprintln!("{}", err);
         telemetry.record_error(&err);
         telemetry.shutdown();
@@ -52,7 +49,7 @@ async fn main() {
     }
 }
 
-#[tracing::instrument("main.run", err(Display))]
+#[instrument("main.run", err(Display))]
 async fn run() -> Result<(), human_errors::Error> {
     let args = Args::parse();
 
@@ -61,12 +58,14 @@ async fn run() -> Result<(), human_errors::Error> {
     let db = db::SqliteDatabase::open("database.sqlite").await.unwrap();
     let services = services::ServicesContainer::new(config, db);
 
-    CronJob::setup(&services.config().workflows.calendars, services.clone()).await?;
-    CronJob::setup(&services.config().workflows.github_notifications, services.clone()).await?;
-    CronJob::setup(&services.config().workflows.github_releases, services.clone()).await?;
-    CronJob::setup(&services.config().workflows.rss, services.clone()).await?;
-    CronJob::setup(&services.config().workflows.xkcd, services.clone()).await?;
-    CronJob::setup(&services.config().workflows.youtube, services.clone()).await?; 
+    {
+        CronJob::setup(&services.config().workflows.calendars, services.clone()).await?;
+        CronJob::setup(&services.config().workflows.github_notifications, services.clone()).await?;
+        CronJob::setup(&services.config().workflows.github_releases, services.clone()).await?;
+        CronJob::setup(&services.config().workflows.rss, services.clone()).await?;
+        CronJob::setup(&services.config().workflows.xkcd, services.clone()).await?;
+        CronJob::setup(&services.config().workflows.youtube, services.clone()).await?; 
+    }
 
     (
         crate::web::run_web_server(services.clone()),
