@@ -215,7 +215,7 @@ mod tests {
         let services = mock_services().await.unwrap();
 
         let (items, watermark) = collector.fetch_since(None, &services).await.unwrap();
-        
+
         assert_eq!(
             items.len(),
             4,
@@ -223,15 +223,23 @@ mod tests {
         );
         assert_eq!(items[0].tag_name, "v1.2.0");
         assert_eq!(items[0].name, "Release 1.2.0");
-        assert_eq!(items[0].html_url, "https://github.com/example/repo/releases/tag/v1.2.0");
+        assert_eq!(
+            items[0].html_url,
+            "https://github.com/example/repo/releases/tag/v1.2.0"
+        );
         assert!(!items[0].draft);
         assert!(!items[0].prerelease);
-        
+
         assert_eq!(items[3].tag_name, "v1.0.0");
         assert_eq!(items[3].name, "Initial Release");
-        
+
         // Watermark should be set to the latest published_at date
-        assert_eq!(watermark, chrono::DateTime::parse_from_rfc3339("2024-04-15T12:00:00Z").unwrap().with_timezone(&Utc));
+        assert_eq!(
+            watermark,
+            chrono::DateTime::parse_from_rfc3339("2024-04-15T12:00:00Z")
+                .unwrap()
+                .with_timezone(&Utc)
+        );
     }
 
     #[tokio::test]
@@ -271,7 +279,8 @@ mod tests {
             .mount(&mock_server)
             .await;
 
-        let collector = GitHubReleasesCollector::new_with_url(mock_server.uri(), "nonexistent/repo");
+        let collector =
+            GitHubReleasesCollector::new_with_url(mock_server.uri(), "nonexistent/repo");
         let services = mock_services().await.unwrap();
 
         let result = collector.fetch_since(None, &services).await;
@@ -365,7 +374,11 @@ mod tests {
 
         // List should use the stored watermark
         let items = collector.list(&services).await.unwrap();
-        assert_eq!(items.len(), 1, "Expected only releases after stored watermark");
+        assert_eq!(
+            items.len(),
+            1,
+            "Expected only releases after stored watermark"
+        );
         assert_eq!(items[0].tag_name, "v1.2.0");
     }
 
@@ -397,7 +410,9 @@ mod tests {
         );
         assert_eq!(
             item.get("link"),
-            crate::filter::FilterValue::String("https://github.com/example/repo/releases/tag/v1.0.0".to_string())
+            crate::filter::FilterValue::String(
+                "https://github.com/example/repo/releases/tag/v1.0.0".to_string()
+            )
         );
         assert_eq!(item.get("draft"), crate::filter::FilterValue::Bool(false));
         assert_eq!(
