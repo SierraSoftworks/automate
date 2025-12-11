@@ -410,9 +410,6 @@ mod tests {
     use wiremock::matchers::method;
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
-    // TODO: Add tests which mock out the GitHub GET /notifications API and test the list and fetch_since methods
-    // These should follow the pattern used in src/collectors/rss.rs (including placing test data in the tests/data/ directory).
-
     #[test]
     fn test_notification_reason_serialization() {
         let examples = vec![
