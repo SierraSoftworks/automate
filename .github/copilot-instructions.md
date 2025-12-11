@@ -205,7 +205,7 @@ The project uses GitHub Actions for CI/CD:
 
 ## Additional Notes
 
-- Use `tracing_batteries` for tracing support (available via `use tracing_batteries::prelude::*` or `use crate::prelude::*`)
+- Use `tracing_batteries` for tracing support (available via `use tracing_batteries::prelude::*`, or more simply through `use crate::prelude::*` which re-exports it)
 - The web UI uses Yew with server-side rendering
 - Database operations use `tokio-rusqlite` for multi-threaded SQLite access
 - The `filter` module provides an interpreted language operating over `FilterValue`s for configurable filtering
