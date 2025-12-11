@@ -71,6 +71,9 @@ pub struct WebhookConfigs {
     pub azure_monitor: AzureMonitorWebhookConfig,
 
     #[serde(default)]
+    pub grafana: GrafanaWebhookConfig,
+
+    #[serde(default)]
     pub honeycomb: HoneycombWebhookConfig,
 
     #[serde(default)]
