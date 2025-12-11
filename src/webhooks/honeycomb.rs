@@ -6,6 +6,9 @@ use crate::{prelude::*, publishers::{TodoistCreateTask, TodoistCreateTaskPayload
 pub struct HoneycombWebhookConfig {
     pub trusted_secrets: Vec<String>,
 
+    #[serde(default)]
+    pub filter: crate::filter::Filter,
+
     #[serde(default = "default_todoist_config")]
     pub todoist: crate::config::TodoistConfig,
 }
@@ -45,6 +48,11 @@ impl Job for HoneycombWebhook {
 
         if !event.status.eq_ignore_ascii_case("triggered") {
             info!("Ignoring non-triggered Honeycomb alert: {}", event.status);
+            return Ok(());
+        }
+
+        if !services.config().webhooks.honeycomb.filter.matches(&event)? {
+            info!("Honeycomb alert '{}' did not match filter; ignoring.", event.name);
             return Ok(());
         }
         
@@ -88,4 +96,14 @@ struct HoneycombAlertEventPayload {
 
     result_url: Option<String>,
     trigger_url: Option<String>,
+}
+
+impl Filterable for HoneycombAlertEventPayload {
+    fn get(&self, key: &str) -> crate::filter::FilterValue {
+        match key {
+            "id" => self.id.clone().into(),
+            "name" => self.name.clone().into(),
+            _ => crate::filter::FilterValue::Null,
+        }
+    }
 }

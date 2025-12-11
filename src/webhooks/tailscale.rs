@@ -11,6 +11,9 @@ type HmacSha256 = Hmac<Sha256>;
 pub struct TailscaleWebhookConfig {
     pub secret: String,
 
+    #[serde(default)]
+    pub filter: crate::filter::Filter,
+
     #[serde(default = "default_todoist_config")]
     pub todoist: crate::config::TodoistConfig,
 }
@@ -149,6 +152,11 @@ impl Job for TailscaleWebhook {
 
         let event: TailscaleAlertEventPayload = job.json()?;
 
+        if !services.config().webhooks.tailscale.filter.matches(&event)? {
+            info!("Tailscale event '{}' did not match filter; ignoring.", event._type);
+            return Ok(());
+        }
+
         let pretty_payload = serde_json::to_string_pretty(&event.data) 
             .unwrap_or_else(|_| job.body.clone());
         
@@ -205,6 +213,17 @@ struct TailscaleAlertEventPayload {
     tailnet: String,
     message: String,
     data: serde_json::Value,
+}
+
+impl Filterable for TailscaleAlertEventPayload {
+    fn get(&self, key: &str) -> crate::filter::FilterValue {
+        match key {
+            "type" => self._type.clone().into(),
+            "tailnet" => self.tailnet.clone().into(),
+            "message" => self.message.clone().into(),
+            _ => crate::filter::FilterValue::Null,
+        }
+    }
 }
 
 #[cfg(test)]

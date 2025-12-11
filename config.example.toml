@@ -1,5 +1,49 @@
+[connections.github]
+api_key = "xxxxxx"
+
 [connections.todoist]
-api_key = "xxx"
+api_key = "xxxxxx"
+
+[web]
+address = "127.0.0.1:8080"
+admin_acl = 'client_ip in ["127.0.0.1"]'
+
+[webhooks.azure_monitor]
+# filter = 'true'
+todoist = { project = "Software", section = "Outages" }
+
+[webhooks.honeycomb]
+trusted_secrets = [
+    # "xxxxxx"
+]
+# filter = 'true'
+todoist = { project = "Software", section = "Outages" }
+
+[webhooks.tailscale]
+# secret = "xxxxxx"
+# filter = 'true'
+todoist = { project = "Software", section = "Security" }
+
+[webhooks.terraform]
+# secret = "xxxxxx"
+todoist = { project = "Software", section = "Maintenance" }
+
+[[workflows.calendars]]
+name = "Personal"
+url = "https://example.com/calendar.ics"
+cron = "*/30 * * * *"
+priority = 4
+todoist = { project = "Life", section = "Plans" }
+
+[[workflows.github_notifications]]
+cron = "*/15 * * * *"
+todoist = { project = "Hobbies", section = "Open Source" }
+
+[[workflows.github_releases]]
+repository = "hashicorp/vault"
+cron = "0 */8 * * *"
+filter = "!prerelease && !draft"
+todoist = { project = "Hobbies", section = "Software" }
 
 [[workflows.rss]]
 name = "Citation Needed"
@@ -24,11 +68,6 @@ name = "Word of the Day"
 homepage = "https://www.merriam-webster.com/word"
 url = "https://www.merriam-webster.com/word/feed/rss2"
 
-[[workflows.rss]]
-name = "YNAB Updates"
-homepage = "https://www.youneedabudget.com/blog/"
-url = "https://www.youneedabudget.com/blog/feed/"
-
 [[workflows.youtube]]
 name = "Alexander the Ok"
 channel_id = "UC9XjwCMWhes6R3jtOzZx50A"
@@ -42,34 +81,6 @@ filter = "title contains \"extended highlights\""
 name = "Formula 1"
 channel_id = "UCB_qr75-ydFVKSF9Dmo6izg"
 filter = "title contains \"highlights | \" && !(title contains \"f2 \")"
-
-[[workflows.youtube]]
-name = "FortNine"
-channel_id = "UCNSMdQtn1SuFzCZjfK2C7dQ"
-
-[[workflows.youtube]]
-name = "Last Week Tonight"
-channel_id = "UC3XTzVzaHQEd30rQbuvCtTQ"
-
-[[workflows.youtube]]
-name = "Common Tread XP"
-channel_id = "UCLQZTXj_AnL7fDC8sLrTGMw"
-filter = "title endswith \"| common tread xp\" || title endswith \"| ctxp\""
-
-[[workflows.youtube]]
-name = "Daily Rider"
-channel_id = "UCLQZTXj_AnL7fDC8sLrTGMw"
-filter = "title endswith \"| daily rider\""
-
-[[workflows.youtube]]
-name = "The Shop Manual"
-channel_id = "UCLQZTXj_AnL7fDC8sLrTGMw"
-filter = "title endswith \"| the shop manual\""
-
-[[workflows.youtube]]
-name = "Visual Investigations"
-channel_id = "UCqnbDFdCpuN8CMEg0VuEBqA"
-filter = "title endswith \"| visual investigations\""
 
 [[workflows.xkcd]]
 cron = "0 8 * * *"
