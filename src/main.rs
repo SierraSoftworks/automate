@@ -94,7 +94,7 @@ async fn run() -> Result<(), human_errors::Error> {
 
         (
             crate::webhooks::AzureMonitorWebhook.run(services.clone()),
-            // TODO: GrafanaAlertsWebhook
+            crate::webhooks::GrafanaWebhook.run(services.clone()),
             crate::webhooks::HoneycombWebhook.run(services.clone()),
             // TODO: SentryAlertsWebhook
             crate::webhooks::TailscaleWebhook.run(services.clone()),

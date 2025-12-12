@@ -12,6 +12,11 @@ admin_acl = 'client_ip in ["127.0.0.1"]'
 # filter = 'true'
 todoist = { project = "Software", section = "Outages" }
 
+[webhooks.grafana]
+# secret = "xxxxxx"  # Optional authorization header value for webhook authentication
+# filter = 'true'
+todoist = { project = "Software", section = "Outages" }
+
 [webhooks.honeycomb]
 trusted_secrets = [
     # "xxxxxx"
