@@ -6,12 +6,14 @@ use crate::prelude::*;
 mod azure_monitor;
 mod grafana;
 mod honeycomb;
+mod sentry;
 mod tailscale;
 mod terraform;
 
 pub use azure_monitor::{AzureMonitorWebhook, AzureMonitorWebhookConfig};
 pub use grafana::{GrafanaWebhook, GrafanaWebhookConfig};
 pub use honeycomb::{HoneycombWebhook, HoneycombWebhookConfig};
+pub use sentry::{SentryAlertsWebhook, SentryWebhookConfig};
 pub use tailscale::{TailscaleWebhook, TailscaleWebhookConfig};
 pub use terraform::{TerraformWebhook, TerraformWebhookConfig};
 

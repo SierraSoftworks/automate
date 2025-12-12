@@ -77,6 +77,9 @@ pub struct WebhookConfigs {
     pub honeycomb: HoneycombWebhookConfig,
 
     #[serde(default)]
+    pub sentry: SentryWebhookConfig,
+
+    #[serde(default)]
     pub tailscale: TailscaleWebhookConfig,
 
     #[serde(default)]
