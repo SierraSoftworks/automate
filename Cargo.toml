@@ -12,14 +12,12 @@ clap = { version = "4.5.53", features = ["cargo", "derive", "string"] }
 cron = "0.15.0"
 croner = { version = "3.0.1", features = ["serde"] }
 feed-rs = "2.3.1"
-fjall = "2.8.0"
 futures-concurrency = "7.6.3"
 hex = "0.4.3"
 htmd = "0.5.0"
 hmac = "0.12.1"
 html-escape = "0.2.13"
 human-errors = "0.2.1"
-inventory = "0.3.21"
 regex = "1.12.2"
 reqwest = { version = "0.12.15", features = ["rustls-tls"] }
 rusqlite = { version = "0.37.0", features = ["bundled", "chrono"] }
