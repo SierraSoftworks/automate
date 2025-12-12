@@ -1,3 +1,5 @@
+use std::fmt::Display;
+
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
 
@@ -90,8 +92,8 @@ impl Job for GrafanaWebhook {
         }
 
         // Process based on alert status
-        match event.status.as_str() {
-            "firing" => {
+        match event.status {
+            GrafanaAlertStatus::Firing => {
                 // Create a unique key based on the alert rule URL or title
                 let unique_key = event
                     .rule_url
@@ -114,20 +116,42 @@ impl Job for GrafanaWebhook {
                     _ => 1,
                 };
 
+                let alert_title = event
+                    .group_labels
+                    .and_then(|l| {
+                        l.get("grafana_folder")
+                            .or_else(|| l.get("alertname"))
+                            .cloned()
+                    })
+                    .or_else(|| {
+                        event
+                            .alerts
+                            .iter()
+                            .filter_map(|a| a.labels.get("rulename"))
+                            .next()
+                            .cloned()
+                    })
+                    .unwrap_or("Grafana Alert".to_string());
+                let dashboard_url = event
+                    .alerts
+                    .iter()
+                    .filter_map(|a| a.dashboard_url.clone())
+                    .next()
+                    .or_else(|| event.external_url.clone())
+                    .unwrap_or_else(|| "https://grafana.com".into());
+
+                let summary = event.alerts.iter().filter_map(|a| {
+                    a.annotations
+                        .get("summary")
+                        .cloned()
+                }).collect::<Vec<String>>().join("\n");
+
                 // Create or update the Todoist task
                 TodoistUpsertTask::dispatch(
                     TodoistUpsertTaskPayload {
                         unique_key: unique_key.clone(),
-                        title: format!(
-                            "[**Grafana Alert**]({}): {}",
-                            event
-                                .rule_url
-                                .as_ref()
-                                .or(event.external_url.as_ref())
-                                .unwrap_or(&"https://grafana.com".to_string()),
-                            event.title
-                        ),
-                        description: Some(event.message.clone()),
+                        title: format!("[**Grafana Alert**]({dashboard_url}): {alert_title} is unhealthy"),
+                        description: Some(summary),
                         due: starts_at
                             .map(crate::publishers::TodoistDueDate::DateTime)
                             .unwrap_or_else(|| {
@@ -137,19 +161,25 @@ impl Job for GrafanaWebhook {
                         config: services.config().webhooks.grafana.todoist.clone(),
                         ..Default::default()
                     },
-                    None,
+                    Some(
+                        event
+                            .rule_url
+                            .clone()
+                            .unwrap_or_else(|| event.title.clone())
+                            .into(),
+                    ),
                     &services,
                 )
                 .await?;
 
                 Ok(())
             }
-            "resolved" => {
+            GrafanaAlertStatus::Resolved => {
                 // Complete the task when the alert is resolved
                 let unique_key = event
                     .rule_url
                     .clone()
-                    .unwrap_or_else(|| format!("grafana-alert-{}", event.title));
+                    .unwrap_or_else(|| event.title.clone());
 
                 TodoistCompleteTask::dispatch(
                     TodoistCompleteTaskPayload {
@@ -163,13 +193,6 @@ impl Job for GrafanaWebhook {
 
                 Ok(())
             }
-            _ => {
-                info!(
-                    "Ignoring Grafana alert with status '{}': {}",
-                    event.status, event.title
-                );
-                Ok(())
-            }
         }
     }
 }
@@ -181,14 +204,14 @@ pub struct GrafanaAlertPayload {
     /// Name of the contact point (receiver)
     pub receiver: String,
     /// Overall status: "firing" or "resolved"
-    pub status: String,
+    pub status: GrafanaAlertStatus,
     /// Organization ID
     #[serde(rename = "orgId")]
     pub org_id: i64,
     /// Alert title
     pub title: String,
     /// Alert state: "alerting", "ok", etc.
-    pub state: String,
+    pub state: GrafanaAlertState,
     /// Alert message
     pub message: String,
     /// Grafana base URL
@@ -199,24 +222,67 @@ pub struct GrafanaAlertPayload {
     pub rule_url: Option<String>,
     /// List of individual alerts
     pub alerts: Vec<GrafanaAlert>,
+    #[serde(rename = "groupLabels")]
+    /// Common labels for the alert group
+    pub group_labels: Option<std::collections::HashMap<String, String>>,
+    #[serde(rename = "commonLabels")]
+    pub common_labels: Option<std::collections::HashMap<String, String>>,
+    #[serde(rename = "commonAnnotations")]
+    pub common_annotations: Option<std::collections::HashMap<String, String>>,
 }
 
 impl Filterable for GrafanaAlertPayload {
     fn get(&self, key: &str) -> FilterValue {
         match key {
             "receiver" => self.receiver.clone().into(),
-            "status" => self.status.clone().into(),
+            "status" => format!("{}", self.status).into(),
             "org_id" => self.org_id.into(),
             "title" => self.title.clone().into(),
-            "state" => self.state.clone().into(),
+            "state" => format!("{}", self.state).into(),
             "message" => self.message.clone().into(),
-            "alerts" => self
+            "alerts.status" => self
                 .alerts
                 .iter()
-                .map(|a| a.status.clone().into())
+                .map(|a| format!("{}", a.status).into())
                 .collect::<Vec<FilterValue>>()
                 .into(),
             _ => FilterValue::Null,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum GrafanaAlertStatus {
+    Firing,
+    Resolved,
+}
+
+impl Display for GrafanaAlertStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            GrafanaAlertStatus::Firing => write!(f, "firing"),
+            GrafanaAlertStatus::Resolved => write!(f, "resolved"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum GrafanaAlertState {
+    Alerting,
+    Ok,
+    NoData,
+    Paused,
+}
+
+impl Display for GrafanaAlertState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            GrafanaAlertState::Alerting => write!(f, "alerting"),
+            GrafanaAlertState::Ok => write!(f, "ok"),
+            GrafanaAlertState::NoData => write!(f, "no_data"),
+            GrafanaAlertState::Paused => write!(f, "paused"),
         }
     }
 }
@@ -226,7 +292,7 @@ impl Filterable for GrafanaAlertPayload {
 #[derive(Deserialize)]
 pub struct GrafanaAlert {
     /// Alert status: "firing" or "resolved"
-    pub status: String,
+    pub status: GrafanaAlertStatus,
     /// Labels associated with the alert
     pub labels: std::collections::HashMap<String, String>,
     /// Annotations associated with the alert
@@ -240,6 +306,8 @@ pub struct GrafanaAlert {
     /// URL to the panel/dashboard that generated the alert
     #[serde(rename = "generatorURL")]
     pub generator_url: Option<String>,
+    #[serde(rename = "dashboardURL")]
+    pub dashboard_url: Option<String>,
     /// Alert values (metrics that triggered the alert)
     #[serde(default)]
     pub values: Option<std::collections::HashMap<String, serde_json::Value>>,
@@ -360,14 +428,17 @@ mod tests {
     async fn test_grafana_alert_filterable() {
         let alert = GrafanaAlertPayload {
             receiver: "test-receiver".to_string(),
-            status: "firing".to_string(),
+            status: GrafanaAlertStatus::Firing,
             org_id: 123,
             title: "Test Alert".to_string(),
-            state: "alerting".to_string(),
+            state: GrafanaAlertState::Alerting,
             message: "Test message".to_string(),
             external_url: Some("https://grafana.example.com".to_string()),
             rule_url: Some("https://grafana.example.com/rule/1".to_string()),
             alerts: vec![],
+            group_labels: None,
+            common_labels: None,
+            common_annotations: None,
         };
 
         // Test Filterable trait implementation
