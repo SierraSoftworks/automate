@@ -1,3 +1,5 @@
+use std::fmt::Display;
+
 use hmac::{Hmac, Mac};
 use serde::Deserialize;
 use sha2::Sha256;
@@ -133,35 +135,18 @@ impl Job for SentryAlertsWebhook {
         }
 
         let issue = &notification.data.issue;
-        let description = if !issue.culprit.is_empty() {
-            Some(format!(
-                "{}\n\nProject: {}",
-                issue.culprit, issue.project.name
-            ))
-        } else {
-            Some(format!("Project: {}", issue.project.name))
-        };
-
-        let priority = match issue.level.as_str() {
-            "fatal" => 4,
-            "error" => 4,
-            "warning" => 3,
-            "info" => 2,
-            "debug" => 1,
-            _ => 3,
-        };
 
         TodoistCreateTask::dispatch(
             TodoistCreateTaskPayload {
                 title: format!(
-                    "[**Sentry {}**]({}): {}",
-                    issue._type.to_uppercase(),
+                    "[{}]({}): {}",
+                    issue.short_id,
                     issue.web_url,
                     issue.title
                 ),
-                description,
+                description: Some(issue.culprit.clone()),
                 due: TodoistDueDate::DateTime(chrono::Utc::now()),
-                priority: Some(priority),
+                priority: Some(issue.level.to_priority()),
                 config: services.config().webhooks.sentry.todoist.clone(),
                 ..Default::default()
             },
@@ -188,8 +173,8 @@ impl Filterable for SentryIssueNotification {
             "action" => self.action.clone().into(),
             "issue_id" => self.data.issue.id.clone().into(),
             "issue_title" => self.data.issue.title.clone().into(),
-            "issue_type" => self.data.issue._type.clone().into(),
-            "issue_level" => self.data.issue.level.clone().into(),
+            "issue_type" => format!("{}", self.data.issue._type).into(),
+            "issue_level" => format!("{}", self.data.issue.level).into(),
             "project_name" => self.data.issue.project.name.clone().into(),
             "project_platform" => self.data.issue.project.platform.clone().into(),
             _ => crate::filter::FilterValue::Null,
@@ -201,9 +186,25 @@ impl Filterable for SentryIssueNotification {
 #[derive(Deserialize)]
 struct SentryActor {
     #[serde(rename = "type")]
-    _type: String,
+    _type: SentryActorType,
     id: String,
     name: String,
+}
+
+#[derive(Deserialize, Debug, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+enum SentryActorType {
+  Application,
+  User
+}
+
+impl Display for SentryActorType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            SentryActorType::Application => write!(f, "application"),
+            SentryActorType::User => write!(f, "user"),
+        }
+    }
 }
 
 #[allow(dead_code)]
@@ -221,12 +222,44 @@ struct SentryIssue {
     project_url: String,
     title: String,
     #[serde(rename = "type")]
-    _type: String,
-    level: String,
+    _type: SentryIssueLevel,
+    level: SentryIssueLevel,
     #[serde(rename = "shortId")]
     short_id: String,
     culprit: String,
     project: SentryProject,
+}
+
+#[derive(Deserialize, Debug, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+enum SentryIssueLevel {
+  Fatal,
+  Error,
+  Warning,
+  Info,
+  Debug
+}
+
+impl SentryIssueLevel {
+  pub fn to_priority(&self) -> i32 {
+    match self {
+      SentryIssueLevel::Fatal | SentryIssueLevel::Error => 3,
+      SentryIssueLevel::Warning => 2,
+      _ => 1
+    }
+  }
+}
+
+impl Display for SentryIssueLevel {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            SentryIssueLevel::Fatal => write!(f, "fatal"),
+            SentryIssueLevel::Error => write!(f, "error"),
+            SentryIssueLevel::Warning => write!(f, "warning"),
+            SentryIssueLevel::Info => write!(f, "info"),
+            SentryIssueLevel::Debug => write!(f, "debug"),
+        }
+    }
 }
 
 #[allow(dead_code)]
