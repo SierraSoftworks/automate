@@ -51,27 +51,11 @@ impl CronJob {
     where
         J::JobType: serde::Serialize + Display,
     {
-        let queue = services.queue();
-
         for job in jobs.iter() {
             let job: CronJobTask = job.into();
-            let now = Utc::now();
-            let next_run = job.cron.find_next_occurrence(&now, false)
-                .wrap_err_as_user("We could not determine the next time at which this cron job should be dispatched.", &[
-                    "Please ensure the cron schedule is valid.",
-                ])?
-                ;
+            let idempotency_key = job.idempotency_key.clone().map(|k| k.into());
 
-            info!("Scheduling cron job '{}' to run at {}", job.kind, next_run);
-
-            queue
-                .enqueue(
-                    "cron",
-                    job.clone(),
-                    job.idempotency_key.map(|k| k.into()),
-                    Some(next_run - now),
-                )
-                .await?;
+            Self::dispatch(job, idempotency_key, &services).await?;
         }
 
         Ok(())

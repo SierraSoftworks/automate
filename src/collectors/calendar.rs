@@ -121,17 +121,11 @@ impl DifferentialCollector for CalendarCollector {
 
         let calendar: Calendar = content.parse()?;
 
-        let events = calendar.events()?;
-
         let now = chrono::Utc::now();
         let start = now;
         let end = now + chrono::Duration::days(7);
+        let events = calendar.events(start, end)?;
 
-        let relevant_events: Vec<CalendarEvent> = events
-            .into_iter()
-            .filter(|event| event.end > start && event.start < end)
-            .collect();
-
-        Ok(relevant_events)
+        Ok(events)
     }
 }

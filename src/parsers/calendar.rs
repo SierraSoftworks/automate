@@ -73,11 +73,14 @@ macro_rules! property_value {
 
 impl Calendar {
     #[instrument("parsers.calendar.events", skip(self), err(Display))]
-    pub fn events(&self) -> Result<Vec<CalendarEvent>, human_errors::Error> {
+    pub fn events(&self, start: DateTime<Utc>, end: DateTime<Utc>) -> Result<Vec<CalendarEvent>, human_errors::Error> {
         let expanded = self
             .icalendar
-            .expand_dates(calcard::common::timezone::Tz::UTC, 10);
-        expanded.events.iter().map(|event| {
+            .expand_dates(calcard::common::timezone::Tz::UTC, 10000);
+        expanded.events.iter().filter(|event| match event.end {
+            calcard::icalendar::dates::TimeOrDelta::Delta(d) => event.start + d,
+            calcard::icalendar::dates::TimeOrDelta::Time(t) => t
+        } >= start && event.start <= end).map(|event| {
             let start = event.start;
             let end = match event.end {
                 calcard::icalendar::dates::TimeOrDelta::Delta(d) => start + d,
@@ -244,13 +247,16 @@ mod tests {
         let calendar: Calendar = content.parse().expect("Failed to parse calendar");
 
         let mut events = 0;
-        for event in calendar.events().expect("Failed to get events") {
+        for event in calendar.events(
+            DateTime::from_str("2023-07-01T00:00:00Z").expect("Failed to parse date"),
+            DateTime::from_str("2023-07-31T23:59:59Z").expect("Failed to parse date"),
+        ).expect("Failed to get events") {
             println!(
                 "Event: {} - {} (private: {})",
                 event.uid, event.summary, event.private
             );
             events += 1;
         }
-        assert_eq!(events, 1545);
+        assert_eq!(events, 193);
     }
 }
