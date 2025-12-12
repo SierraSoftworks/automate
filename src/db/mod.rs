@@ -4,6 +4,7 @@ use human_errors as errors;
 
 mod cache;
 mod partition;
+mod fjall;
 mod sqlite;
 
 pub use partition::Partition;
