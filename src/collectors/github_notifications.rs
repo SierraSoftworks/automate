@@ -1,3 +1,5 @@
+use std::fmt::Display;
+
 use human_errors::ResultExt;
 use serde::{Deserialize, Serialize};
 use tracing_batteries::prelude::*;
@@ -28,11 +30,11 @@ impl GitHubNotificationsCollector {
         "collectors.github_notifications.get_subject_state",
         skip(self, subject, services)
     )]
-    pub async fn get_subject_state(
+    pub async fn get_subject(
         &self,
         subject: &GitHubNotificationsSubject,
         services: &(impl crate::services::Services + Send + Sync + 'static),
-    ) -> Result<GitHubNotificationsSubjectState, human_errors::Error> {
+    ) -> Result<Option<GitHubSubjectInformation>, human_errors::Error> {
         if let Some(url) = &subject.url {
             let client = self.get_client(services)?;
 
@@ -73,7 +75,7 @@ impl GitHubNotificationsCollector {
                 }
             }
 
-            let issue: GitHubSubjectStatusItem = response.json().await.wrap_err_as_user(
+            let issue: GitHubSubjectInformation = response.json().await.wrap_err_as_user(
                 format!(
                     "Failed to read the content of the GitHub notification subject from URL '{}'.",
                     url
@@ -84,9 +86,9 @@ impl GitHubNotificationsCollector {
                 ],
             )?;
 
-            Ok(issue.state)
+            Ok(Some(issue))
         } else {
-            Ok(GitHubNotificationsSubjectState::Open)
+            Ok(None)
         }
     }
 
@@ -366,17 +368,23 @@ impl GitHubNotificationsReason {
     }
 }
 
+impl Display for GitHubNotificationsReason {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", serde_json::to_string(self).unwrap_or("unknown".to_string()).trim_end_matches('"'))
+    }
+}
+
 #[derive(Serialize, Deserialize, Clone)]
 pub struct GitHubNotificationsRepository {
     pub name: String,
     pub full_name: String,
     pub html_url: String,
 
-    pub owner: GitHubNotificationsRepositoryOwner,
+    pub owner: GitHubUser,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
-pub struct GitHubNotificationsRepositoryOwner {
+pub struct GitHubUser {
     pub login: String,
     pub html_url: String,
 }
@@ -390,7 +398,7 @@ pub struct GitHubNotificationsSubject {
     pub latest_comment_url: Option<String>,
 }
 
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum GitHubNotificationsSubjectState {
     Open,
@@ -399,9 +407,10 @@ pub enum GitHubNotificationsSubjectState {
 }
 
 #[derive(Serialize, Deserialize, Clone)]
-pub struct GitHubSubjectStatusItem {
-    pub id: u64,
+pub struct GitHubSubjectInformation {
     pub state: GitHubNotificationsSubjectState,
+    pub body: Option<String>,
+    pub user: GitHubUser,
 }
 
 #[cfg(test)]
