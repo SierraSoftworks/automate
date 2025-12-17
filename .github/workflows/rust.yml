@@ -108,6 +108,7 @@ jobs:
             target: x86_64-pc-windows-msvc
             extension: .exe
             builder: cargo
+            cargo-flags: ""
 
           # Linux builds
           - arch: amd64
@@ -116,11 +117,13 @@ jobs:
             target: x86_64-unknown-linux-musl
             test: true
             builder: cargo
+            cargo-flags: "--features openssl-vendored"
           - arch: "arm64"
             os: linux
             run_on: ubuntu-latest
             target: aarch64-unknown-linux-musl
             builder: cross
+            cargo-flags: "--features openssl-vendored"
 
           # Apple MacOS builds
           - arch: amd64
@@ -128,11 +131,13 @@ jobs:
             os: darwin
             target: x86_64-apple-darwin
             builder: cargo
+            cargo-flags: "--features openssl-vendored"
           - arch: arm64
             run_on: macos-latest
             os: darwin
             target: aarch64-apple-darwin
             builder: cargo
+            cargo-flags: "--features openssl-vendored"
 
     steps:
       - name: Check out code
@@ -161,7 +166,7 @@ jobs:
           cargo binstall --no-confirm cross
 
       - name: cargo build
-        run: ${{ matrix.builder }} build --release --target ${{ matrix.target }}
+        run: ${{ matrix.builder }} build --release --target ${{ matrix.target }} ${{ matrix.cargo-flags }}
 
       - name: Upload GitHub Release Artifacts
         uses: SierraSoftworks/gh-releases@v1.0.8

@@ -18,6 +18,7 @@ htmd = "0.5.0"
 hmac = "0.12.1"
 html-escape = "0.2.13"
 human-errors = "0.2.1"
+openssl-sys = { version = "0.9.111", features = ["vendored"], optional = true }
 regex = "1.12.2"
 reqwest = { version = "0.12.26", features = ["rustls-tls"] }
 rusqlite = { version = "0.37.0", features = ["bundled", "chrono"] }
@@ -44,3 +45,5 @@ futures = "0.3.31"
 rstest = "0.26.1"
 wiremock = "0.6"
 
+[features]
+openssl-vendored = ["dep:openssl-sys"]
