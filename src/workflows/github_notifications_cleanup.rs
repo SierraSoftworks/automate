@@ -48,10 +48,9 @@ impl Job for GitHubNotificationsCleanupWorkflow {
             if let Some(subject) = collector
                 .get_subject(&notification.subject, &services)
                 .await?
+                && subject.state != GitHubNotificationsSubjectState::Open
             {
-                if subject.state != GitHubNotificationsSubjectState::Open {
-                    collector.mark_as_done(&notification.id, &services).await?;
-                }
+                collector.mark_as_done(&notification.id, &services).await?;
             }
         }
 
