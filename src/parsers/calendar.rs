@@ -73,7 +73,11 @@ macro_rules! property_value {
 
 impl Calendar {
     #[instrument("parsers.calendar.events", skip(self), err(Display))]
-    pub fn events(&self, start: DateTime<Utc>, end: DateTime<Utc>) -> Result<Vec<CalendarEvent>, human_errors::Error> {
+    pub fn events(
+        &self,
+        start: DateTime<Utc>,
+        end: DateTime<Utc>,
+    ) -> Result<Vec<CalendarEvent>, human_errors::Error> {
         let expanded = self
             .icalendar
             .expand_dates(calcard::common::timezone::Tz::UTC, 10000);
@@ -247,10 +251,13 @@ mod tests {
         let calendar: Calendar = content.parse().expect("Failed to parse calendar");
 
         let mut events = 0;
-        for event in calendar.events(
-            DateTime::from_str("2023-07-01T00:00:00Z").expect("Failed to parse date"),
-            DateTime::from_str("2023-07-31T23:59:59Z").expect("Failed to parse date"),
-        ).expect("Failed to get events") {
+        for event in calendar
+            .events(
+                DateTime::from_str("2023-07-01T00:00:00Z").expect("Failed to parse date"),
+                DateTime::from_str("2023-07-31T23:59:59Z").expect("Failed to parse date"),
+            )
+            .expect("Failed to get events")
+        {
             println!(
                 "Event: {} - {} (private: {})",
                 event.uid, event.summary, event.private

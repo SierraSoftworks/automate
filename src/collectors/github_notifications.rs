@@ -370,7 +370,13 @@ impl GitHubNotificationsReason {
 
 impl Display for GitHubNotificationsReason {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", serde_json::to_string(self).unwrap_or("unknown".to_string()).trim_end_matches('"'))
+        write!(
+            f,
+            "{}",
+            serde_json::to_string(self)
+                .unwrap_or("unknown".to_string())
+                .trim_end_matches('"')
+        )
     }
 }
 

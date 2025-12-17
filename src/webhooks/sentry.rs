@@ -138,12 +138,7 @@ impl Job for SentryAlertsWebhook {
 
         TodoistCreateTask::dispatch(
             TodoistCreateTaskPayload {
-                title: format!(
-                    "[{}]({}): {}",
-                    issue.short_id,
-                    issue.web_url,
-                    issue.title
-                ),
+                title: format!("[{}]({}): {}", issue.short_id, issue.web_url, issue.title),
                 description: Some(issue.culprit.clone()),
                 due: TodoistDueDate::DateTime(chrono::Utc::now()),
                 priority: Some(issue.level.to_priority()),
@@ -194,8 +189,8 @@ struct SentryActor {
 #[derive(Deserialize, Debug, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 enum SentryActorType {
-  Application,
-  User
+    Application,
+    User,
 }
 
 impl Display for SentryActorType {
@@ -233,21 +228,21 @@ struct SentryIssue {
 #[derive(Deserialize, Debug, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 enum SentryIssueLevel {
-  Fatal,
-  Error,
-  Warning,
-  Info,
-  Debug
+    Fatal,
+    Error,
+    Warning,
+    Info,
+    Debug,
 }
 
 impl SentryIssueLevel {
-  pub fn to_priority(&self) -> i32 {
-    match self {
-      SentryIssueLevel::Fatal | SentryIssueLevel::Error => 3,
-      SentryIssueLevel::Warning => 2,
-      _ => 1
+    pub fn to_priority(&self) -> i32 {
+        match self {
+            SentryIssueLevel::Fatal | SentryIssueLevel::Error => 3,
+            SentryIssueLevel::Warning => 2,
+            _ => 1,
+        }
     }
-  }
 }
 
 impl Display for SentryIssueLevel {

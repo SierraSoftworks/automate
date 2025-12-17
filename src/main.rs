@@ -103,8 +103,9 @@ async fn run() -> Result<(), human_errors::Error> {
     Ok(())
 }
 
-
-async fn schedule_cron_jobs(services: impl Services + Send + Sync + Clone + 'static) -> Result<(), human_errors::Error> {
+async fn schedule_cron_jobs(
+    services: impl Services + Send + Sync + Clone + 'static,
+) -> Result<(), human_errors::Error> {
     CronJob::setup(&services.config().workflows.calendars, services.clone()).await?;
 
     CronJob::setup(
@@ -114,7 +115,11 @@ async fn schedule_cron_jobs(services: impl Services + Send + Sync + Clone + 'sta
     .await?;
 
     CronJob::setup(
-        &[services.config().workflows.github_notifications_cleanup.clone()],
+        &[services
+            .config()
+            .workflows
+            .github_notifications_cleanup
+            .clone()],
         services.clone(),
     )
     .await?;
@@ -128,6 +133,6 @@ async fn schedule_cron_jobs(services: impl Services + Send + Sync + Clone + 'sta
     CronJob::setup(&services.config().workflows.rss, services.clone()).await?;
     CronJob::setup(&services.config().workflows.xkcd, services.clone()).await?;
     CronJob::setup(&services.config().workflows.youtube, services.clone()).await?;
-    
+
     Ok(())
 }

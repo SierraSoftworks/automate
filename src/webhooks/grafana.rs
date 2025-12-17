@@ -140,17 +140,20 @@ impl Job for GrafanaWebhook {
                     .or_else(|| event.external_url.clone())
                     .unwrap_or_else(|| "https://grafana.com".into());
 
-                let summary = event.alerts.iter().filter_map(|a| {
-                    a.annotations
-                        .get("summary")
-                        .cloned()
-                }).collect::<Vec<String>>().join("\n");
+                let summary = event
+                    .alerts
+                    .iter()
+                    .filter_map(|a| a.annotations.get("summary").cloned())
+                    .collect::<Vec<String>>()
+                    .join("\n");
 
                 // Create or update the Todoist task
                 TodoistUpsertTask::dispatch(
                     TodoistUpsertTaskPayload {
                         unique_key: unique_key.clone(),
-                        title: format!("[**Grafana Alert**]({dashboard_url}): {alert_title} is unhealthy"),
+                        title: format!(
+                            "[**Grafana Alert**]({dashboard_url}): {alert_title} is unhealthy"
+                        ),
                         description: Some(summary),
                         due: starts_at
                             .map(crate::publishers::TodoistDueDate::DateTime)
