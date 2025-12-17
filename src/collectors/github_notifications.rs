@@ -497,16 +497,16 @@ mod tests {
         assert_eq!(items[0].subject.title, "Test Issue #1");
         assert_eq!(items[0].repository.full_name, "testorg/test-repo");
         assert_eq!(items[0].reason, GitHubNotificationsReason::Mention);
-        assert_eq!(items[0].unread, true);
+        assert!(items[0].unread);
 
         assert_eq!(items[1].id, "2");
         assert_eq!(items[1].subject.title, "Test PR #42");
         assert_eq!(items[1].reason, GitHubNotificationsReason::ReviewRequested);
-        assert_eq!(items[1].unread, true);
+        assert!(items[1].unread);
 
         assert_eq!(items[2].id, "3");
         assert_eq!(items[2].reason, GitHubNotificationsReason::Author);
-        assert_eq!(items[2].unread, false);
+        assert!(!items[2].unread);
     }
 
     #[tokio::test]
