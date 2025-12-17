@@ -93,6 +93,8 @@ pub struct WorkflowConfigs {
     #[serde(default)]
     pub github_notifications: Vec<CronJobConfig<GitHubNotificationsWorkflow>>,
     #[serde(default)]
+    pub github_notifications_cleanup: CronJobConfig<GitHubNotificationsCleanupWorkflow>,
+    #[serde(default)]
     pub github_releases: Vec<CronJobConfig<GitHubReleasesWorkflow>>,
     #[serde(default)]
     pub rss: Vec<CronJobConfig<RssWorkflow>>,

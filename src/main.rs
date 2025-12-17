@@ -65,22 +65,7 @@ async fn run() -> Result<(), human_errors::Error> {
     let db = db::SqliteDatabase::open("database.sqlite").await.unwrap();
     let services = services::ServicesContainer::new(config, db);
 
-    {
-        CronJob::setup(&services.config().workflows.calendars, services.clone()).await?;
-        CronJob::setup(
-            &services.config().workflows.github_notifications,
-            services.clone(),
-        )
-        .await?;
-        CronJob::setup(
-            &services.config().workflows.github_releases,
-            services.clone(),
-        )
-        .await?;
-        CronJob::setup(&services.config().workflows.rss, services.clone()).await?;
-        CronJob::setup(&services.config().workflows.xkcd, services.clone()).await?;
-        CronJob::setup(&services.config().workflows.youtube, services.clone()).await?;
-    }
+    schedule_cron_jobs(services.clone()).await?;
 
     (
         crate::web::run_web_server(services.clone()),
@@ -104,7 +89,7 @@ async fn run() -> Result<(), human_errors::Error> {
         (
             crate::workflows::CalendarWorkflow.run(services.clone()),
             crate::workflows::GitHubNotificationsWorkflow.run(services.clone()),
-            // TODO: GitHubNotificationsCleanupWorkflow (close out old notifications where the subject has been closed)
+            crate::workflows::GitHubNotificationsCleanupWorkflow.run(services.clone()),
             crate::workflows::GitHubReleasesWorkflow.run(services.clone()),
             crate::workflows::RssWorkflow.run(services.clone()),
             crate::workflows::XkcdWorkflow.run(services.clone()),
@@ -115,5 +100,34 @@ async fn run() -> Result<(), human_errors::Error> {
             "Restart the application and try again after addressing any issues reported in the logs.",
         ])?;
 
+    Ok(())
+}
+
+
+async fn schedule_cron_jobs(services: impl Services + Send + Sync + Clone + 'static) -> Result<(), human_errors::Error> {
+    CronJob::setup(&services.config().workflows.calendars, services.clone()).await?;
+
+    CronJob::setup(
+        &services.config().workflows.github_notifications,
+        services.clone(),
+    )
+    .await?;
+
+    CronJob::setup(
+        &[services.config().workflows.github_notifications_cleanup.clone()],
+        services.clone(),
+    )
+    .await?;
+
+    CronJob::setup(
+        &services.config().workflows.github_releases,
+        services.clone(),
+    )
+    .await?;
+
+    CronJob::setup(&services.config().workflows.rss, services.clone()).await?;
+    CronJob::setup(&services.config().workflows.xkcd, services.clone()).await?;
+    CronJob::setup(&services.config().workflows.youtube, services.clone()).await?;
+    
     Ok(())
 }

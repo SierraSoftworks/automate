@@ -1,4 +1,4 @@
-use std::fmt::Display;
+use std::{fmt::Display, str::FromStr};
 
 use chrono::Utc;
 
@@ -10,6 +10,19 @@ pub struct CronJobConfig<J: Job> {
     pub job: J::JobType,
 
     pub cron: croner::Cron,
+}
+
+impl<J> Default for CronJobConfig<J>
+where
+    J: Job,
+    J::JobType: Default,
+{
+    fn default() -> Self {
+        CronJobConfig {
+            job: J::JobType::default(),
+            cron: croner::Cron::from_str("@hourly").unwrap(), // Default to hourly
+        }
+    }
 }
 
 #[derive(serde::Deserialize, serde::Serialize, Clone)]
