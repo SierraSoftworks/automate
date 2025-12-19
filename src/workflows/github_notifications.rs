@@ -56,8 +56,8 @@ impl GitHubNotificationsWorkflow {
             ),
             description: Some(
                 format!(
-                    "{}\n\nReason: {}",
-                    subject.and_then(|s| s.body).unwrap_or_default(),
+                    "Reason: {}\nAuthor: {}",
+                    subject.map(|s| s.user.login).unwrap_or("unknown".to_string()),
                     event.reason
                 )
                 .trim()
@@ -105,7 +105,7 @@ impl GitHubNotificationsWorkflow {
                         &services,
                     )
                     .await?;
-                } else {
+                } else if subject.state == GitHubNotificationsSubjectState::Open {
                     TodoistUpsertTask::dispatch(
                         self.build_task(&item, job, Some(subject)),
                         Some(item.id.clone().into()),
