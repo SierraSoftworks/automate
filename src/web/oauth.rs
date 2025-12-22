@@ -256,7 +256,7 @@ impl actix_web::http::header::Header for HostHeader {
         let header_value = msg
             .headers()
             .get(actix_web::http::header::HOST)
-            .ok_or_else(|| actix_web::error::ParseError::Header)?;
+            .ok_or(actix_web::error::ParseError::Header)?;
         let header_str = header_value
             .to_str()
             .map_err(|_| actix_web::error::ParseError::Header)?;
