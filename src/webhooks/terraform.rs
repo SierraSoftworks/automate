@@ -86,7 +86,7 @@ impl Job for TerraformWebhook {
                                 .map(|n| {
                                     format!(
                                         "- \\[{}\\] {} (by {} at {})",
-                                        n.trigger, n.message, n.run_updated_by, n.run_updated_at
+                                        n.trigger, n.message, n.run_updated_by.as_deref().unwrap_or("unknown"), n.run_updated_at
                                     )
                                 })
                                 .collect::<Vec<_>>()
@@ -232,7 +232,7 @@ pub struct NotificationV1 {
     pub trigger: String,
     pub run_status: String,
     pub run_updated_at: chrono::DateTime<chrono::Utc>,
-    pub run_updated_by: String,
+    pub run_updated_by: Option<String>,
 }
 
 #[cfg(test)]
@@ -285,6 +285,35 @@ mod tests {
         let deserialized_v2: NotificationPayload = serde_json::from_str(payload_v2).unwrap();
         assert!(
             matches!(deserialized_v2, NotificationPayload::Workplace { notification_configuration_id, .. } if notification_configuration_id == "nc_654321")
+        );
+    }
+
+    #[test]
+    fn test_deserialization_sampled() {
+        let payload = r#"{
+            "payload_version":1,
+            "notification_configuration_id":"nc-a9UxE3zM5k6YSNK3",
+            "run_url":"https://app.terraform.io/app/xxx/yyy/runs/run-xboqtF5JxofL6a6A",
+            "run_id":"run-xboqtF5JxofL6a6A",
+            "run_message":"Merge pull request #100 from xxx/dependabot/terraform/hashicorp/azurerm-4.57.0",
+            "run_created_at":"2025-12-18T19:13:53.000Z",
+            "run_created_by":"dependabot[bot]",
+            "workspace_id":"ws-qsGnTma1RXJ",
+            "workspace_name":"infra",
+            "organization_name":"xxx",
+            "notifications":[
+                {
+                    "message":"Run Planned and Finished",
+                    "trigger":"run:completed",
+                    "run_status":"planned_and_finished",
+                    "run_updated_at":"2025-12-18T19:15:00.000Z",
+                    "run_updated_by":null
+                }
+            ]
+        }"#;
+        let deserialized: NotificationPayload = serde_json::from_str(payload).unwrap();
+        assert!(
+            matches!(deserialized, NotificationPayload::Standard { run_id, .. } if run_id == "run-xboqtF5JxofL6a6A")
         );
     }
 }
