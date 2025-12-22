@@ -1,27 +1,48 @@
 use crate::{
-    prelude::*,
-    web::ui::{error_page, not_found},
+    prelude::*, ui::render_page, web::ui::{error_page, not_found}
 };
 use actix_web::{dev::HttpServiceFactory, web};
 use oauth2::{CsrfToken, Scope, TokenResponse};
 use reqwest::Url;
 use serde::Deserialize;
-use yew::{ServerRenderer, html};
+use yew::html;
 
 use crate::{prelude::Services, ui};
 
 pub fn configure<S: Services + Send + Sync + 'static>() -> impl HttpServiceFactory {
     web::scope("/oauth/{provider}")
-        .route("/setup", web::get().to(oauth_setup::<S>))
+        .route("/", web::get().to(oauth_home::<S>))
+        .route("/authorize", web::get().to(oauth_authorize::<S>))
         .route("/callback", web::get().to(oauth_callback::<S>))
 }
 
+async fn oauth_home<S: Services + Send + Sync + 'static>(
+    provider: web::Path<String>,
+    services: web::Data<S>,
+) -> actix_web::HttpResponse {
+    if let Some(config) = services.config().oauth2.get(&*provider).cloned() {
+        render_page(format!("{} | Automate", config.name), move || {
+            html! {
+                <ui::Center>
+                    <h1>{ format!("Login with {}", config.name) }</h1>
+                    <p>{ format!("Click the button below to initiate the setup process for {}.", config.name) }</p>
+                    <a href={format!("/oauth/{}/authorize", &*provider)}>
+                        <button>{ "Login" }</button>
+                    </a>
+                </ui::Center>
+            }
+        }).await
+    } else {
+        not_found().await
+    }
+}
+
 #[instrument(
-    "web.oauth.setup",
+    "web.oauth.authorize",
     skip(provider, services, host),
     fields(oauth.provider = %provider, otel.kind=?OpenTelemetrySpanKind::Server),
 )]
-async fn oauth_setup<S: Services + Send + Sync + 'static>(
+async fn oauth_authorize<S: Services + Send + Sync + 'static>(
     provider: web::Path<String>,
     services: web::Data<S>,
     host: Host,
@@ -103,23 +124,14 @@ async fn oauth_callback<S: Services + Send + Sync + 'static>(
                             }
                         }
 
-                        let renderer = ServerRenderer::<crate::ui::Page>::with_props(|| {
-                            ui::PageProps {
-                                title: None,
-                                children: html! {
-                                    <ui::Center>
-                                        <h1>{ "Login Complete" }</h1>
-                                        <p>{ "You have successfully completed signing into your account, you can close this window." }</p>
-                                    </ui::Center>
-                                },
+                        render_page(format!("{} | Automate", config.name), move || {
+                            html! {
+                                <ui::Center>
+                                    <h1>{ "Login Complete" }</h1>
+                                    <p>{ format!("You have successfully completed setting up {}, you can close this window.", config.name) }</p>
+                                </ui::Center>
                             }
-                        });
-
-                        let rendered = renderer.render().await;
-
-                        actix_web::HttpResponse::Ok()
-                            .content_type("text/html; charset=utf-8")
-                            .body(format!("<!DOCTYPE html>{}", rendered))
+                        }).await
                     }
                     Err(e) => {
                         error!("OAuth callback handling failed: {}", e);

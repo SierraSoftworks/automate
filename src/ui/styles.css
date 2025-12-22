@@ -37,3 +37,20 @@ footer {
     font-size: 0.8rem;
     opacity: 0.7;
 }
+
+a>button {
+  text-decoration: none;
+  border: none;
+  background: #0F5A80;
+  border-radius: 3px;
+  padding: 1rem 2rem;
+  color: white;
+  cursor: pointer;
+  box-shadow: 1px 1px 10px rgba(0,0,0,0.3);
+  transition: ease background 150ms;
+}
+
+a>button:hover,
+a>button:focus {
+  background: #117bb0;
+}

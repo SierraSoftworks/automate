@@ -1,12 +1,11 @@
 use actix_web::HttpResponseBuilder;
 use yew::{ServerRenderer, prelude::*};
 
-use crate::prelude::*;
+use crate::{prelude::*, ui::render_page};
 
 pub async fn index() -> actix_web::HttpResponse {
-    let renderer = ServerRenderer::<crate::ui::Page>::with_props(|| crate::ui::PageProps {
-        title: Some("Automate | Sierra Softworks".to_string()),
-        children: html! {
+    render_page("Automate | Sierra Softworks", || {
+        html! {
             <crate::ui::Center>
                 <h1>
                     <strong>{ "Automate" }</strong> { " by Sierra Softworks" }
@@ -15,34 +14,21 @@ pub async fn index() -> actix_web::HttpResponse {
                     { "Automate various aspects of your life without needing to trust someone else with your data." }
                 </p>
             </crate::ui::Center>
-        },
-    });
-
-    let rendered = renderer.render().await;
-
-    actix_web::HttpResponse::Ok()
-        .content_type("text/html; charset=utf-8")
-        .body(format!("<!DOCTYPE html>{}", rendered))
+        }
+    }).await
 }
 
 pub async fn admin_index<S: Services>(
     _services: actix_web::web::Data<S>,
 ) -> actix_web::HttpResponse {
-    let renderer = ServerRenderer::<crate::ui::Page>::with_props(|| crate::ui::PageProps {
-        title: Some("Admin | Automate".to_string()),
-        children: html! {
+    render_page("Admin | Automate", || {
+        html! {
             <crate::ui::Center>
                 <h1>{ "Admin Dashboard" }</h1>
                 <p>{ "Welcome to the admin dashboard." }</p>
             </crate::ui::Center>
-        },
-    });
-
-    let rendered = renderer.render().await;
-
-    actix_web::HttpResponse::Ok()
-        .content_type("text/html; charset=utf-8")
-        .body(format!("<!DOCTYPE html>{}", rendered))
+        }
+    }).await
 }
 
 pub async fn not_found() -> actix_web::HttpResponse {
