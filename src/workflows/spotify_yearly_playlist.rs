@@ -12,6 +12,10 @@ impl Job for SpotifyYearlyPlaylistWorkflow {
         "workflow/spotify-yearly-playlist"
     }
 
+    fn propagate_parent() -> bool {
+        false
+    }
+
     async fn handle(
         &self,
         job: &Self::JobType,
