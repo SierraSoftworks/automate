@@ -3,7 +3,7 @@ use crate::{
     web::ui::{error_page, not_found},
 };
 use actix_web::{dev::HttpServiceFactory, web};
-use oauth2::{CsrfToken, TokenResponse};
+use oauth2::{CsrfToken, Scope, TokenResponse};
 use reqwest::Url;
 use serde::Deserialize;
 use yew::{ServerRenderer, html};
@@ -163,6 +163,8 @@ pub struct OAuth2Config {
     pub client_secret: String,
     pub auth_url: String,
     pub token_url: String,
+    #[serde(default)]
+    pub scopes: Vec<String>,
 }
 
 impl OAuth2Config {
@@ -183,6 +185,7 @@ impl OAuth2Config {
 
         let (url, _csrf) = client
             .authorize_url(|| CsrfToken::new_random())
+            .add_scopes(self.scopes.iter().cloned().map(Scope::new))
             .url()
             .clone();
         Ok(url)

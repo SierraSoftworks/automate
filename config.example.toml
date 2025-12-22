@@ -11,6 +11,11 @@ client_id = "xxxxx"
 client_secret = "xxxxx"
 auth_url = "https://accounts.spotify.com/authorize"
 token_url = "https://accounts.spotify.com/api/token"
+scopes = [
+    "user-library-read",
+    "playlist-modify-public",
+    "playlist-modify-private"
+]
 
 [web]
 address = "127.0.0.1:8080"
