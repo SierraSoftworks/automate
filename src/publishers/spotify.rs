@@ -80,7 +80,7 @@ impl SpotifyClient {
         playlist_id: impl ToString,
         track_uris: Vec<String>,
     ) -> Result<(), human_errors::Error> {
-        let _: () = self
+        let _: serde_json::Value = self
             .call_spotify(
                 reqwest::Method::POST,
                 format!("playlists/{}/tracks", playlist_id.to_string()),
