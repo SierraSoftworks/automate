@@ -39,7 +39,7 @@ impl Job for SpotifyAddToPlaylist {
                 .add_tracks_to_playlist(&playlist_id, chunk.to_vec())
                 .await?;
         }
-        
+
         Ok(())
     }
 }

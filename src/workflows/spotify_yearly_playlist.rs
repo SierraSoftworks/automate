@@ -28,21 +28,28 @@ impl Job for SpotifyYearlyPlaylistWorkflow {
         let new_tracks = collector.list(&services).await?;
 
         if !new_tracks.is_empty() {
-            let year_groups = new_tracks.iter().fold(
-                std::collections::HashMap::<i32, Vec<&crate::publishers::spotify::SpotifySavedTrack>>::new(),
-                |mut acc, track| {
-                    let year = track.added_at.year();
-                    acc.entry(year).or_default().push(track);
-                    acc
-                },
-            );
+            let year_groups =
+                new_tracks.iter().fold(
+                    std::collections::HashMap::<
+                        i32,
+                        Vec<&crate::publishers::spotify::SpotifySavedTrack>,
+                    >::new(),
+                    |mut acc, track| {
+                        let year = track.added_at.year();
+                        acc.entry(year).or_default().push(track);
+                        acc
+                    },
+                );
 
             for (year, tracks) in year_groups {
-                 crate::publishers::SpotifyAddToPlaylist::dispatch(
+                crate::publishers::SpotifyAddToPlaylist::dispatch(
                     crate::publishers::SpotifyAddToPlaylistPayload {
                         account_id: user.id.clone(),
                         name: format!("{} Liked Songs", year),
-                        description: Some(format!("A yearly playlist of all my liked songs from {}.", year)),
+                        description: Some(format!(
+                            "A yearly playlist of all my liked songs from {}.",
+                            year
+                        )),
                         access_token: token.clone(),
                         track_uris: tracks.iter().map(|t| t.track.uri.clone()).collect(),
                     },
