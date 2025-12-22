@@ -34,10 +34,12 @@ impl Job for SpotifyAddToPlaylist {
 
         let playlist_id = self.get_playlist_id(job, &services).await?;
 
-        client
-            .add_tracks_to_playlist(&playlist_id, job.track_uris.clone())
-            .await?;
-
+        for chunk in job.track_uris.chunks(100) {
+            client
+                .add_tracks_to_playlist(&playlist_id, chunk.to_vec())
+                .await?;
+        }
+        
         Ok(())
     }
 }
