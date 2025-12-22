@@ -10,13 +10,7 @@ pub enum Diff<ID, V> {
 
 #[allow(dead_code)]
 pub trait DifferentialCollector: Collector {
-    type Identifier: Eq
-        + std::hash::Hash
-        + Serialize
-        + DeserializeOwned
-        + Clone
-        + Send
-        + 'static;
+    type Identifier: Eq + std::hash::Hash + Serialize + DeserializeOwned + Clone + Send + 'static;
 
     fn kind(&self) -> &'static str;
 

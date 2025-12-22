@@ -51,13 +51,11 @@ impl IncrementalCollector for SpotifyLikedTracksCollector {
     ) -> Result<(Vec<Self::Item>, Self::Watermark), human_errors::Error> {
         let client = crate::publishers::spotify::SpotifyClient::new(self.access_token.clone());
 
-        let since = watermark.unwrap_or_else(|| chrono::DateTime::<chrono::Utc>::from(std::time::UNIX_EPOCH));
+        let since = watermark
+            .unwrap_or_else(|| chrono::DateTime::<chrono::Utc>::from(std::time::UNIX_EPOCH));
 
         let tracks = client.get_saved_tracks(since).await?;
-        let new_watermark = tracks.iter()
-            .map(|t| t.added_at)
-            .max()
-            .unwrap_or(since);
+        let new_watermark = tracks.iter().map(|t| t.added_at).max().unwrap_or(since);
 
         Ok((tracks, new_watermark))
     }

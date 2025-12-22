@@ -1,5 +1,5 @@
-use std::borrow::Cow;
 use crate::prelude::*;
+use std::borrow::Cow;
 
 use crate::collectors::{Collector, incremental::IncrementalCollector};
 use chrono::{DateTime, Utc};

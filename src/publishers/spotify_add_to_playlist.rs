@@ -1,6 +1,6 @@
 use crate::prelude::*;
 
-use super::{SpotifyClient};
+use super::SpotifyClient;
 
 #[derive(Serialize, Deserialize)]
 pub struct SpotifyAddToPlaylistPayload {
@@ -43,22 +43,51 @@ impl Job for SpotifyAddToPlaylist {
 }
 
 impl SpotifyAddToPlaylist {
-    async fn get_playlist_id(&self, job: &SpotifyAddToPlaylistPayload, services: &(impl Services + Send + Sync + 'static)) -> Result<String, human_errors::Error> {
-        
-        if let Some(playlist_id) = services.kv().get("spotify/playlist", format!("{}/{}", job.account_id, job.name)).await? {
+    async fn get_playlist_id(
+        &self,
+        job: &SpotifyAddToPlaylistPayload,
+        services: &(impl Services + Send + Sync + 'static),
+    ) -> Result<String, human_errors::Error> {
+        if let Some(playlist_id) = services
+            .kv()
+            .get(
+                "spotify/playlist",
+                format!("{}/{}", job.account_id, job.name),
+            )
+            .await?
+        {
             Ok(playlist_id)
         } else {
             let client = SpotifyClient::new(job.access_token.clone());
-            
-            if let Some(playlist) = client.get_playlists().await?
+
+            if let Some(playlist) = client
+                .get_playlists()
+                .await?
                 .into_iter()
                 .find(|p| p.name == job.name)
-                .map(|p| p.id) {
-                services.kv().set("spotify/playlist", format!("{}/{}", job.account_id, job.name), playlist.clone()).await?;
+                .map(|p| p.id)
+            {
+                services
+                    .kv()
+                    .set(
+                        "spotify/playlist",
+                        format!("{}/{}", job.account_id, job.name),
+                        playlist.clone(),
+                    )
+                    .await?;
                 Ok(playlist)
             } else {
-                let playlist = client.create_playlist(&job.name, false, false, job.description.clone()).await?;
-                services.kv().set("spotify/playlist", format!("{}/{}", job.account_id, job.name), playlist.id.clone()).await?;
+                let playlist = client
+                    .create_playlist(&job.name, false, false, job.description.clone())
+                    .await?;
+                services
+                    .kv()
+                    .set(
+                        "spotify/playlist",
+                        format!("{}/{}", job.account_id, job.name),
+                        playlist.id.clone(),
+                    )
+                    .await?;
                 Ok(playlist.id)
             }
         }

@@ -47,11 +47,15 @@ impl Config {
     }
 
     pub fn get_oauth2(&self, kind: &str) -> Result<OAuth2Config, human_errors::Error> {
-        self.oauth2.get(kind).cloned()
-            .ok_or_else(|| human_errors::user(format!("OAuth configuration for kind '{}' not found.", kind), &[
-                "Ensure that the OAuth configuration is present in your config file.",
-                "Check that the kind value is correct.",
-            ]))
+        self.oauth2.get(kind).cloned().ok_or_else(|| {
+            human_errors::user(
+                format!("OAuth configuration for kind '{}' not found.", kind),
+                &[
+                    "Ensure that the OAuth configuration is present in your config file.",
+                    "Check that the kind value is correct.",
+                ],
+            )
+        })
     }
 }
 

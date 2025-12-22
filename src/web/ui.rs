@@ -46,10 +46,19 @@ pub async fn admin_index<S: Services>(
 }
 
 pub async fn not_found() -> actix_web::HttpResponse {
-    error_page(404, "Not Found", "The page you are looking for does not exist.").await
+    error_page(
+        404,
+        "Not Found",
+        "The page you are looking for does not exist.",
+    )
+    .await
 }
 
-pub async fn error_page(code: u16, title: impl ToString, message: impl ToString) -> actix_web::HttpResponse {
+pub async fn error_page(
+    code: u16,
+    title: impl ToString,
+    message: impl ToString,
+) -> actix_web::HttpResponse {
     let title = title.to_string();
     let message = message.to_string();
 
@@ -66,8 +75,9 @@ pub async fn error_page(code: u16, title: impl ToString, message: impl ToString)
     let rendered = renderer.render().await;
 
     HttpResponseBuilder::new(
-        actix_web::http::StatusCode::from_u16(code).unwrap_or(actix_web::http::StatusCode::INTERNAL_SERVER_ERROR),
+        actix_web::http::StatusCode::from_u16(code)
+            .unwrap_or(actix_web::http::StatusCode::INTERNAL_SERVER_ERROR),
     )
-        .content_type("text/html; charset=utf-8")
-        .body(format!("<!DOCTYPE html>{}", rendered))
+    .content_type("text/html; charset=utf-8")
+    .body(format!("<!DOCTYPE html>{}", rendered))
 }

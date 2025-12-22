@@ -57,7 +57,9 @@ impl GitHubNotificationsWorkflow {
             description: Some(
                 format!(
                     "Reason: {}\nAuthor: {}",
-                    subject.map(|s| s.user.login).unwrap_or("unknown".to_string()),
+                    subject
+                        .map(|s| s.user.login)
+                        .unwrap_or("unknown".to_string()),
                     event.reason
                 )
                 .trim()

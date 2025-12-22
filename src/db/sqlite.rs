@@ -259,10 +259,7 @@ impl Queue for SqliteDatabase {
     }
 
     #[instrument("db.sqlite.dequeue", skip(self, partition, reserve_for), fields(otel.kind=?OpenTelemetrySpanKind::Consumer, job.kind=std::any::type_name::<T>()), err(Display))]
-    async fn dequeue<
-        P: Into<Cow<'static, str>> + Send,
-        T: DeserializeOwned + Send + 'static,
-    >(
+    async fn dequeue<P: Into<Cow<'static, str>> + Send, T: DeserializeOwned + Send + 'static>(
         &self,
         partition: P,
         reserve_for: chrono::Duration,

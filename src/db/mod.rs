@@ -6,9 +6,9 @@ mod cache;
 mod partition;
 mod sqlite;
 
+use crate::prelude::*;
 pub use partition::Partition;
 pub use sqlite::SqliteDatabase;
-use crate::prelude::*;
 
 #[allow(dead_code)]
 #[async_trait::async_trait]
@@ -59,10 +59,7 @@ pub trait Queue {
         delay: Option<chrono::Duration>,
     ) -> Result<(), errors::Error>;
 
-    async fn dequeue<
-        P: Into<Cow<'static, str>> + Send,
-        T: DeserializeOwned + Send + 'static,
-    >(
+    async fn dequeue<P: Into<Cow<'static, str>> + Send, T: DeserializeOwned + Send + 'static>(
         &self,
         partition: P,
         reserve_for: chrono::Duration,

@@ -31,9 +31,7 @@ impl<D: Clone, T> Clone for Partition<D, T> {
 }
 
 #[allow(dead_code)]
-impl<D: KeyValueStore, T: Serialize + DeserializeOwned + Send + 'static>
-    Partition<D, T>
-{
+impl<D: KeyValueStore, T: Serialize + DeserializeOwned + Send + 'static> Partition<D, T> {
     pub async fn get(&self, key: String) -> Result<Option<T>, human_errors::Error> {
         self.db.get(self.name.clone(), key).await
     }
@@ -77,9 +75,7 @@ impl<D: Queue, T: Serialize + DeserializeOwned + Send + 'static> Partition<D, T>
 }
 
 #[allow(dead_code)]
-impl<D: Cache, T: Serialize + DeserializeOwned + Clone + Send + 'static>
-    Partition<D, T>
-{
+impl<D: Cache, T: Serialize + DeserializeOwned + Clone + Send + 'static> Partition<D, T> {
     pub async fn cached<B>(
         &self,
         key: String,
