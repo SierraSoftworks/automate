@@ -16,13 +16,20 @@ pub fn configure<S: Services + Send + Sync + 'static>() -> impl HttpServiceFacto
         .route("/callback", web::get().to(oauth_callback::<S>))
 }
 
+#[instrument(
+    "web.oauth.setup",
+    skip(provider, services, host),
+    fields(oauth.provider = %provider, otel.kind=?OpenTelemetrySpanKind::Server),
+)]
 async fn oauth_setup<S: Services + Send + Sync + 'static>(
     provider: web::Path<String>,
     services: web::Data<S>,
-    host: web::Header<HostHeader>,
+    host: Host,
 ) -> impl actix_web::Responder {
     match services.config().oauth2.get(&*provider).cloned() {
         Some(cfg) => {
+            info!("Initiating OAuth2 login flow for provider '{}'", &*provider);
+
             match cfg.get_login_url(format!(
                 "{}/oauth/{provider}/callback",
                 services
@@ -30,7 +37,7 @@ async fn oauth_setup<S: Services + Send + Sync + 'static>(
                     .web
                     .base_url
                     .as_deref()
-                    .unwrap_or(&format!("https://{}", host.0.0))
+                    .unwrap_or(&host.hostname())
             )) {
                 Ok(url) => actix_web::HttpResponse::Found()
                     .append_header((actix_web::http::header::LOCATION, url.to_string()))
@@ -46,10 +53,21 @@ async fn oauth_setup<S: Services + Send + Sync + 'static>(
                 }
             }
         }
-        None => not_found().await,
+        None => {
+            warn!(
+                "OAuth provider '{}' not found in configuration.",
+                &*provider
+            );
+            not_found().await
+        }
     }
 }
 
+#[instrument(
+    "web.oauth.callback",
+    skip(provider, query, services),
+    fields(oauth.provider = %provider, otel.kind=?OpenTelemetrySpanKind::Server),
+)]
 async fn oauth_callback<S: Services + Send + Sync + 'static>(
     services: web::Data<S>,
     provider: web::Path<String>,
@@ -245,29 +263,51 @@ impl OAuth2RefreshToken {
     }
 }
 
-struct HostHeader(String);
+struct Host(String);
 
-impl actix_web::http::header::Header for HostHeader {
-    fn name() -> actix_web::http::header::HeaderName {
-        actix_web::http::header::HOST
-    }
-
-    fn parse<M: actix_web::HttpMessage>(msg: &M) -> Result<Self, actix_web::error::ParseError> {
-        let header_value = msg
-            .headers()
-            .get(actix_web::http::header::HOST)
-            .ok_or(actix_web::error::ParseError::Header)?;
-        let header_str = header_value
-            .to_str()
-            .map_err(|_| actix_web::error::ParseError::Header)?;
-        Ok(HostHeader(header_str.to_string()))
+impl Host {
+    pub fn hostname(&self) -> &str {
+        &self.0
     }
 }
 
-impl actix_web::http::header::TryIntoHeaderValue for HostHeader {
-    type Error = actix_web::http::header::InvalidHeaderValue;
+impl actix_web::FromRequest for Host {
+    type Error = actix_web::Error;
+    type Future = futures::future::Ready<Result<Self, Self::Error>>;
 
-    fn try_into_value(self) -> Result<actix_web::http::header::HeaderValue, Self::Error> {
-        actix_web::http::header::HeaderValue::from_str(&self.0)
+    fn from_request(
+        req: &actix_web::HttpRequest,
+        _payload: &mut actix_web::dev::Payload,
+    ) -> Self::Future {
+        let x_forwarded_host = req
+            .headers()
+            .get("x-forwarded-host")
+            .and_then(|h| h.to_str().ok());
+
+        let host = req
+            .headers()
+            .get(actix_web::http::header::HOST)
+            .and_then(|h| h.to_str().ok());
+
+        let x_forwarded_proto = req
+            .headers()
+            .get("x-forwarded-proto")
+            .and_then(|h| h.to_str().ok());
+
+        match (x_forwarded_host, host, x_forwarded_proto) {
+            (Some(host), _, None) => futures::future::ok(Host(format!("https://{}", host))),
+            (Some(host), _, Some(proto)) | (None, Some(host), Some(proto)) => {
+                futures::future::ok(Host(format!("{}://{}", proto, host)))
+            }
+            (None, Some(host), None) => futures::future::ok(Host(format!("https://{}", host))),
+            _ => {
+                let err: Box<dyn std::error::Error> = human_errors::user("Failed to determine host header from incoming OAuth2 setup request.", &[
+                    "Ensure that your requests include a Host header.",
+                    "If behind a proxy, ensure that the x-forwarded-host and x-forwarded-proto headers are set correctly.",
+                ]).into();
+
+                futures::future::err(err.into())
+            }
+        }
     }
 }
