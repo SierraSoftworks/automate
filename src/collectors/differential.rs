@@ -1,7 +1,7 @@
 use std::{borrow::Cow, collections::HashSet};
 use tracing_batteries::prelude::*;
 
-use crate::{collectors::Collector, db::KeyValueStore, services::Services};
+use crate::prelude::*;
 
 pub enum Diff<ID, V> {
     Added(ID, V),
@@ -12,8 +12,8 @@ pub enum Diff<ID, V> {
 pub trait DifferentialCollector: Collector {
     type Identifier: Eq
         + std::hash::Hash
-        + serde::Serialize
-        + serde::de::DeserializeOwned
+        + Serialize
+        + DeserializeOwned
         + Clone
         + Send
         + 'static;

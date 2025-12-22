@@ -1,8 +1,8 @@
 use std::{borrow::Cow, pin::Pin};
 
-use crate::db::{Cache, KeyValueStore};
+use crate::prelude::*;
 
-#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(Serialize, Deserialize)]
 struct CacheItem<T> {
     value: T,
     expires_at: chrono::DateTime<chrono::Utc>,
@@ -18,7 +18,7 @@ impl<KV: KeyValueStore + Sync + Send + 'static> Cache for KV {
         ttl: chrono::Duration,
     ) -> Result<T, human_errors::Error>
     where
-        T: serde::de::DeserializeOwned + serde::Serialize + Clone + Send + 'static,
+        T: DeserializeOwned + Serialize + Clone + Send + 'static,
         B: FnOnce() -> Pin<Box<dyn Future<Output = Result<T, human_errors::Error>> + Sync + Send>>
             + Sync
             + Send,

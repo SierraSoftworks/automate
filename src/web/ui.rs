@@ -1,10 +1,11 @@
+use actix_web::HttpResponseBuilder;
 use yew::{ServerRenderer, prelude::*};
 
 use crate::prelude::*;
 
-pub async fn index() -> impl actix_web::Responder {
+pub async fn index() -> actix_web::HttpResponse {
     let renderer = ServerRenderer::<crate::ui::Page>::with_props(|| crate::ui::PageProps {
-        title: Some("Automate | Sierra Softworks"),
+        title: Some("Automate | Sierra Softworks".to_string()),
         children: html! {
             <crate::ui::Center>
                 <h1>
@@ -26,9 +27,9 @@ pub async fn index() -> impl actix_web::Responder {
 
 pub async fn admin_index<S: Services>(
     _services: actix_web::web::Data<S>,
-) -> impl actix_web::Responder {
+) -> actix_web::HttpResponse {
     let renderer = ServerRenderer::<crate::ui::Page>::with_props(|| crate::ui::PageProps {
-        title: Some("Admin | Automate"),
+        title: Some("Admin | Automate".to_string()),
         children: html! {
             <crate::ui::Center>
                 <h1>{ "Admin Dashboard" }</h1>
@@ -44,20 +45,29 @@ pub async fn admin_index<S: Services>(
         .body(format!("<!DOCTYPE html>{}", rendered))
 }
 
-pub async fn not_found() -> impl actix_web::Responder {
-    let renderer = ServerRenderer::<crate::ui::Page>::with_props(|| crate::ui::PageProps {
-        title: None,
+pub async fn not_found() -> actix_web::HttpResponse {
+    error_page(404, "Not Found", "The page you are looking for does not exist.").await
+}
+
+pub async fn error_page(code: u16, title: impl ToString, message: impl ToString) -> actix_web::HttpResponse {
+    let title = title.to_string();
+    let message = message.to_string();
+
+    let renderer = ServerRenderer::<crate::ui::Page>::with_props(move || crate::ui::PageProps {
+        title: Some(format!("{} | Automate", title)),
         children: html! {
             <crate::ui::Center>
-                <h1><strong>{ "404" }</strong> { " Not Found" }</h1>
-                <p>{ "The page you are looking for does not exist." }</p>
+                <h1><strong>{ code }</strong> { title }</h1>
+                <p>{ message }</p>
             </crate::ui::Center>
         },
     });
 
     let rendered = renderer.render().await;
 
-    actix_web::HttpResponse::NotFound()
+    HttpResponseBuilder::new(
+        actix_web::http::StatusCode::from_u16(code).unwrap_or(actix_web::http::StatusCode::INTERNAL_SERVER_ERROR),
+    )
         .content_type("text/html; charset=utf-8")
         .body(format!("<!DOCTYPE html>{}", rendered))
 }

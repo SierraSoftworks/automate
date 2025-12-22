@@ -31,7 +31,7 @@ impl std::fmt::Display for WebhookEvent {
 }
 
 impl WebhookEvent {
-    pub fn json<T: serde::de::DeserializeOwned>(&self) -> Result<T, human_errors::Error> {
+    pub fn json<T: DeserializeOwned>(&self) -> Result<T, human_errors::Error> {
         serde_json::from_str(&self.body).wrap_err_as_user(
             "Failed to parse webhook event payload as the expected type.",
             &["Make sure the sender of the webhook is sending the expected payload format."],

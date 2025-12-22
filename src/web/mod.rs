@@ -3,9 +3,12 @@ use human_errors::ResultExt;
 
 use crate::{filter::Filterable, prelude::Services};
 
+mod oauth;
 mod telemetry;
 mod ui;
 mod webhooks;
+
+pub use oauth::{OAuth2Config, OAuth2RefreshToken};
 
 pub async fn run_web_server<S: Services + Clone + Send + Sync + 'static>(
     services: S,
@@ -25,6 +28,7 @@ pub async fn run_web_server<S: Services + Clone + Send + Sync + 'static>(
                 .app_data(web::Data::new(services.clone()))
                 .wrap(telemetry::TracingLogger)
                 .route("/", web::get().to(ui::index))
+                .service(oauth::configure::<S>())
                 .route("/webhooks/{kind:.*}", web::post().to(webhooks::handle::<S>))
                 .service(
                     web::resource("/admin")

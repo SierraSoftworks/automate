@@ -5,7 +5,7 @@ use chrono::{TimeDelta, Utc};
 use crate::prelude::*;
 
 pub trait Job {
-    type JobType: serde::Serialize + serde::de::DeserializeOwned + Send + 'static;
+    type JobType: Serialize + DeserializeOwned + Send + 'static;
 
     #[instrument("job.dispatch", skip(job, idempotency_key, services), fields(otel.kind=?OpenTelemetrySpanKind::Producer, job.kind = std::any::type_name::<Self::JobType>()), err(Display))]
     async fn dispatch(

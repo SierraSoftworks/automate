@@ -4,6 +4,14 @@ api_key = "xxxxxx"
 [connections.todoist]
 api_key = "xxxxxx"
 
+[oauth2.spotify]
+name = "Spotify"
+jobs = ["workflows/spotify-yearly-playlist"]
+client_id = "xxxxx"
+client_secret = "xxxxx"
+auth_url = "https://accounts.spotify.com/authorize"
+token_url = "https://accounts.spotify.com/api/token"
+
 [web]
 address = "127.0.0.1:8080"
 admin_acl = 'client_ip in ["127.0.0.1"]'

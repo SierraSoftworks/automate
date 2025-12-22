@@ -76,31 +76,3 @@ impl Job for TodoistCreateTask {
         Ok(())
     }
 }
-
-// async fn update(task_id: &str, update: UpdateTaskArgs, config: &TodoistConfig, _services: &impl crate::services::Services) -> Result<(), human_errors::Error> {
-//     let client = get_client(config)?;
-
-//     client.update_task(task_id, &update).await.wrap_err_as_user(
-//         "Failed to update Todoist task.",
-//         &[
-//             "Check that your Todoist API token is valid and has the necessary permissions.",
-//             "Ensure that the task ID is correct.",
-//         ],
-//     )?;
-
-//     Ok(())
-// }
-
-// async fn complete(task_id: &str, config: &TodoistConfig, _services: &impl crate::services::Services) -> Result<(), human_errors::Error> {
-//     let client = get_client(config)?;
-
-//     client.complete_task(task_id).await.wrap_err_as_user(
-//         "Failed to complete Todoist task.",
-//         &[
-//             "Check that your Todoist API token is valid and has the necessary permissions.",
-//             "Ensure that the task ID is correct.",
-//         ],
-//     )?;
-
-//     Ok(())
-// }

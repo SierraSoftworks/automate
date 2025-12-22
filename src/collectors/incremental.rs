@@ -1,10 +1,10 @@
 use std::borrow::Cow;
 use tracing_batteries::prelude::*;
 
-use crate::{collectors::Collector, db::KeyValueStore, services::Services};
+use crate::prelude::*;
 
 pub trait IncrementalCollector: Collector {
-    type Watermark: Ord + serde::Serialize + serde::de::DeserializeOwned + Send + 'static;
+    type Watermark: Ord + Serialize + DeserializeOwned + Send + 'static;
 
     fn kind(&self) -> &'static str;
 

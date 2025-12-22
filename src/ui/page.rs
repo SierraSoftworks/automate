@@ -5,7 +5,7 @@ const DEFAULT_STYLES: &str = include_str!("styles.css");
 
 #[derive(Properties, PartialEq)]
 pub struct PageProps {
-    pub title: Option<&'static str>,
+    pub title: Option<String>,
     #[prop_or_default]
     pub children: Html,
 }
@@ -15,7 +15,7 @@ pub fn page(props: &PageProps) -> Html {
     html! {
         <html>
             <head>
-                <title>{props.title.unwrap_or("Automate | Sierra Softworks")}</title>
+                <title>{props.title.clone().unwrap_or("Automate | Sierra Softworks".to_string())}</title>
                 <meta
                     http-equiv="Content-Type"
                     content="text/html; charset=utf-8"

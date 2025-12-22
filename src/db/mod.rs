@@ -8,23 +8,23 @@ mod sqlite;
 
 pub use partition::Partition;
 pub use sqlite::SqliteDatabase;
-use tracing_batteries::prelude::OpenTelemetryPropagationExtractor;
+use crate::prelude::*;
 
 #[allow(dead_code)]
 #[async_trait::async_trait]
 pub trait KeyValueStore {
-    async fn get<T: serde::de::DeserializeOwned + Send + 'static>(
+    async fn get<T: DeserializeOwned + Send + 'static>(
         &self,
         partition: impl Into<Cow<'static, str>> + Send,
         key: impl Into<Cow<'static, str>> + Send,
     ) -> Result<Option<T>, errors::Error>;
 
-    async fn list<T: serde::de::DeserializeOwned + Send + 'static>(
+    async fn list<T: DeserializeOwned + Send + 'static>(
         &self,
         partition: impl Into<Cow<'static, str>> + Send,
     ) -> Result<Vec<(String, T)>, errors::Error>;
 
-    async fn set<T: serde::Serialize + Send + 'static>(
+    async fn set<T: Serialize + Send + 'static>(
         &self,
         partition: impl Into<Cow<'static, str>> + Send,
         key: impl Into<Cow<'static, str>> + Send,
@@ -37,7 +37,7 @@ pub trait KeyValueStore {
         key: impl Into<Cow<'static, str>> + Send,
     ) -> Result<(), errors::Error>;
 
-    fn partition<T: serde::Serialize + serde::de::DeserializeOwned + Send + 'static>(
+    fn partition<T: Serialize + DeserializeOwned + Send + 'static>(
         &self,
         name: impl ToString,
     ) -> Partition<Self, T>
@@ -51,7 +51,7 @@ pub trait KeyValueStore {
 #[allow(dead_code)]
 #[async_trait::async_trait]
 pub trait Queue {
-    async fn enqueue<P: Into<Cow<'static, str>> + Send, T: serde::Serialize + Send + 'static>(
+    async fn enqueue<P: Into<Cow<'static, str>> + Send, T: Serialize + Send + 'static>(
         &self,
         partition: P,
         job: T,
@@ -61,7 +61,7 @@ pub trait Queue {
 
     async fn dequeue<
         P: Into<Cow<'static, str>> + Send,
-        T: serde::de::DeserializeOwned + Send + 'static,
+        T: DeserializeOwned + Send + 'static,
     >(
         &self,
         partition: P,
@@ -74,7 +74,7 @@ pub trait Queue {
         msg: QueueMessage<T>,
     ) -> Result<(), errors::Error>;
 
-    fn partition<T: serde::Serialize + serde::de::DeserializeOwned + Send + 'static>(
+    fn partition<T: Serialize + DeserializeOwned + Send + 'static>(
         &self,
         name: impl ToString,
     ) -> Partition<Self, T>
@@ -96,12 +96,12 @@ pub trait Cache {
         ttl: chrono::Duration,
     ) -> Result<T, human_errors::Error>
     where
-        T: serde::de::DeserializeOwned + serde::Serialize + Clone + Send + 'static,
+        T: DeserializeOwned + Serialize + Clone + Send + 'static,
         B: FnOnce() -> Pin<Box<dyn Future<Output = Result<T, human_errors::Error>> + Sync + Send>>
             + Sync
             + Send;
 
-    fn partition<T: serde::Serialize + serde::de::DeserializeOwned + Send + 'static>(
+    fn partition<T: Serialize + DeserializeOwned + Send + 'static>(
         &self,
         name: impl ToString,
     ) -> Partition<Self, T>

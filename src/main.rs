@@ -72,6 +72,8 @@ async fn run() -> Result<(), human_errors::Error> {
         crate::workflows::CronJob.run(services.clone()),
 
         (
+            crate::publishers::SpotifyAddToPlaylist.run(services.clone()),
+
             crate::publishers::TodoistCreateTask.run(services.clone()),
             crate::publishers::TodoistUpsertTask.run(services.clone()),
             crate::publishers::TodoistCompleteTask.run(services.clone()),
@@ -92,6 +94,7 @@ async fn run() -> Result<(), human_errors::Error> {
             crate::workflows::GitHubNotificationsCleanupWorkflow.run(services.clone()),
             crate::workflows::GitHubReleasesWorkflow.run(services.clone()),
             crate::workflows::RssWorkflow.run(services.clone()),
+            crate::workflows::SpotifyYearlyPlaylistWorkflow.run(services.clone()),
             crate::workflows::XkcdWorkflow.run(services.clone()),
             crate::workflows::YouTubeWorkflow.run(services.clone()),
         ).race()

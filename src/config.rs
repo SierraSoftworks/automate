@@ -1,8 +1,10 @@
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
 use crate::prelude::*;
+use crate::web::*;
 use crate::webhooks::*;
 use crate::workflows::*;
 
@@ -10,6 +12,8 @@ use crate::workflows::*;
 pub struct Config {
     #[serde(default)]
     pub connections: ConnectionConfigs,
+    #[serde(default)]
+    pub oauth2: HashMap<String, OAuth2Config>,
     #[serde(default)]
     pub web: WebConfig,
     #[serde(default)]
@@ -41,6 +45,14 @@ impl Config {
         )?;
         Ok(config)
     }
+
+    pub fn get_oauth2(&self, kind: &str) -> Result<OAuth2Config, human_errors::Error> {
+        self.oauth2.get(kind).cloned()
+            .ok_or_else(|| human_errors::user(format!("OAuth configuration for kind '{}' not found.", kind), &[
+                "Ensure that the OAuth configuration is present in your config file.",
+                "Check that the kind value is correct.",
+            ]))
+    }
 }
 
 #[derive(Default, Clone, Deserialize)]
@@ -59,6 +71,9 @@ pub struct WebConfig {
 
     #[serde(default)]
     pub admin_acl: Filter,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_url: Option<String>,
 }
 
 fn default_listen_address() -> String {

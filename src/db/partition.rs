@@ -31,7 +31,7 @@ impl<D: Clone, T> Clone for Partition<D, T> {
 }
 
 #[allow(dead_code)]
-impl<D: KeyValueStore, T: serde::Serialize + serde::de::DeserializeOwned + Send + 'static>
+impl<D: KeyValueStore, T: Serialize + DeserializeOwned + Send + 'static>
     Partition<D, T>
 {
     pub async fn get(&self, key: String) -> Result<Option<T>, human_errors::Error> {
@@ -52,7 +52,7 @@ impl<D: KeyValueStore, T: serde::Serialize + serde::de::DeserializeOwned + Send 
 }
 
 #[allow(dead_code)]
-impl<D: Queue, T: serde::Serialize + serde::de::DeserializeOwned + Send + 'static> Partition<D, T> {
+impl<D: Queue, T: Serialize + DeserializeOwned + Send + 'static> Partition<D, T> {
     pub async fn enqueue(
         &self,
         item: T,
@@ -77,7 +77,7 @@ impl<D: Queue, T: serde::Serialize + serde::de::DeserializeOwned + Send + 'stati
 }
 
 #[allow(dead_code)]
-impl<D: Cache, T: serde::Serialize + serde::de::DeserializeOwned + Clone + Send + 'static>
+impl<D: Cache, T: Serialize + DeserializeOwned + Clone + Send + 'static>
     Partition<D, T>
 {
     pub async fn cached<B>(

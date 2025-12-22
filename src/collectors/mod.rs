@@ -5,6 +5,7 @@ mod calendar;
 mod github_notifications;
 mod github_releases;
 mod rss;
+mod spotify_liked_tracks;
 mod xkcd;
 mod youtube;
 
@@ -18,6 +19,7 @@ pub use github_notifications::{
 };
 pub use github_releases::GitHubReleasesCollector;
 pub use rss::RssCollector;
+pub use spotify_liked_tracks::SpotifyLikedTracksCollector;
 pub use xkcd::XkcdCollector;
 pub use youtube::YouTubeCollector;
 

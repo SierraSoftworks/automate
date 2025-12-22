@@ -1,10 +1,9 @@
 use std::borrow::Cow;
-use tracing_batteries::prelude::*;
+use crate::prelude::*;
 
 use crate::collectors::{Collector, incremental::IncrementalCollector};
 use chrono::{DateTime, Utc};
 use feed_rs::{model::Entry, parser::parse};
-use human_errors::ResultExt;
 
 pub struct RssCollector {
     pub feed_url: String,

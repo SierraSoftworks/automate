@@ -1,10 +1,9 @@
 use std::{borrow::Cow, collections::HashMap, sync::Arc};
 
-use human_errors::{self as errors, ResultExt};
+use human_errors::{self as errors};
 use tokio_rusqlite::{Connection, OptionalExtension};
-use tracing_batteries::prelude::*;
 
-use crate::db::{KeyValueStore, Queue};
+use crate::prelude::*;
 
 #[derive(Clone)]
 pub struct SqliteDatabase {
@@ -100,7 +99,7 @@ impl SqliteDatabase {
 #[async_trait::async_trait]
 impl KeyValueStore for SqliteDatabase {
     #[instrument("db.sqlite.get", skip(self, partition, key), fields(otel.kind=?OpenTelemetrySpanKind::Client), err(Display))]
-    async fn get<T: serde::de::DeserializeOwned + Send + 'static>(
+    async fn get<T: DeserializeOwned + Send + 'static>(
         &self,
         partition: impl Into<Cow<'static, str>> + Send,
         key: impl Into<Cow<'static, str>> + Send,
@@ -133,7 +132,7 @@ impl KeyValueStore for SqliteDatabase {
     }
 
     #[instrument("db.sqlite.list", skip(self, partition), fields(otel.kind=?OpenTelemetrySpanKind::Client), err(Display))]
-    async fn list<T: serde::de::DeserializeOwned + Send + 'static>(
+    async fn list<T: DeserializeOwned + Send + 'static>(
         &self,
         partition: impl Into<Cow<'static, str>> + Send,
     ) -> std::result::Result<Vec<(String, T)>, errors::Error> {
@@ -262,7 +261,7 @@ impl Queue for SqliteDatabase {
     #[instrument("db.sqlite.dequeue", skip(self, partition, reserve_for), fields(otel.kind=?OpenTelemetrySpanKind::Consumer, job.kind=std::any::type_name::<T>()), err(Display))]
     async fn dequeue<
         P: Into<Cow<'static, str>> + Send,
-        T: serde::de::DeserializeOwned + Send + 'static,
+        T: DeserializeOwned + Send + 'static,
     >(
         &self,
         partition: P,
