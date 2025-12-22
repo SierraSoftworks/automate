@@ -26,112 +26,129 @@ async fn oauth_setup<S: Services + Send + Sync + 'static>(
     services: web::Data<S>,
     host: Host,
 ) -> impl actix_web::Responder {
-    match services.config().oauth2.get(&*provider).cloned() {
-        Some(cfg) => {
-            info!("Initiating OAuth2 login flow for provider '{}'", &*provider);
+    if let Some(base_url) = host.base_url(services.as_ref()) {
+        match services.config().oauth2.get(&*provider).cloned() {
+            Some(cfg) => {
+                info!("Initiating OAuth2 login flow for provider '{}'", &*provider);
 
-            match cfg.get_login_url(format!(
-                "{}/oauth/{provider}/callback",
-                services
-                    .config()
-                    .web
-                    .base_url
-                    .as_deref()
-                    .unwrap_or(&host.hostname())
-            )) {
-                Ok(url) => actix_web::HttpResponse::Found()
-                    .append_header((actix_web::http::header::LOCATION, url.to_string()))
-                    .finish(),
-                Err(e) => {
-                    error!("Failed to get OAuth login URL: {}", e);
-                    error_page(
-                        500,
-                        "Internal Server Error",
-                        "Failed to initiate OAuth login process.",
-                    )
-                    .await
+                match cfg.get_login_url(format!("{base_url}/oauth/{provider}/callback")) {
+                    Ok(url) => actix_web::HttpResponse::Found()
+                        .append_header((actix_web::http::header::LOCATION, url.to_string()))
+                        .finish(),
+                    Err(e) => {
+                        error!("Failed to get OAuth login URL: {}", e);
+                        error_page(
+                            500,
+                            "Internal Server Error",
+                            "Failed to initiate OAuth login process.",
+                        )
+                        .await
+                    }
                 }
             }
+            None => {
+                warn!(
+                    "OAuth provider '{}' not found in configuration.",
+                    &*provider
+                );
+                not_found().await
+            }
         }
-        None => {
-            warn!(
-                "OAuth provider '{}' not found in configuration.",
-                &*provider
-            );
-            not_found().await
-        }
+    } else {
+        error_page(
+            400,
+            "Bad Request",
+            "Your request did not include the required Host header.",
+        )
+        .await
     }
 }
 
 #[instrument(
     "web.oauth.callback",
-    skip(provider, query, services),
-    fields(oauth.provider = %provider, otel.kind=?OpenTelemetrySpanKind::Server),
+    skip(provider, query, services, host),
+    fields(oauth.provider = %provider, otel.kind=?OpenTelemetrySpanKind::Server, host = ?host.hostname()),
 )]
 async fn oauth_callback<S: Services + Send + Sync + 'static>(
     services: web::Data<S>,
     provider: web::Path<String>,
+    host: Host,
     query: web::Query<std::collections::HashMap<String, String>>,
 ) -> actix_web::HttpResponse {
-    if let Some(config) = services.config().oauth2.get(&*provider).cloned() {
-        if let Some(code) = query.get("code") {
-            match config.handle_callback(code.clone()).await {
-                Ok(token) => {
-                    let partitions = config.jobs.clone();
-                    for partition in partitions.into_iter() {
-                        if let Err(e) = services
-                            .queue()
-                            .enqueue(partition, token.clone(), None, None)
-                            .await
-                        {
-                            error!("Failed to enqueue OAuth token storage task: {}", e);
-                            return error_page(
-                                500,
-                                "Internal Server Error",
-                                "Failed to store OAuth token, please try again later.",
-                            )
-                            .await;
-                        }
-                    }
-
-                    let renderer = ServerRenderer::<crate::ui::Page>::with_props(|| {
-                        ui::PageProps {
-                            title: None,
-                            children: html! {
-                                <ui::Center>
-                                    <h1>{ "Login Complete" }</h1>
-                                    <p>{ "You have successfully completed signing into your account, you can close this window." }</p>
-                                </ui::Center>
-                            },
-                        }
-                    });
-
-                    let rendered = renderer.render().await;
-
-                    actix_web::HttpResponse::Ok()
-                        .content_type("text/html; charset=utf-8")
-                        .body(format!("<!DOCTYPE html>{}", rendered))
-                }
-                Err(e) => {
-                    error!("OAuth callback handling failed: {}", e);
-                    return error_page(
-                        500,
-                        "Internal Server Error",
-                        "Failed to complete OAuth token exchange.",
+    if let Some(base_url) = host.base_url(services.as_ref()) {
+        if let Some(config) = services.config().oauth2.get(&*provider).cloned() {
+            if let Some(code) = query.get("code") {
+                match config
+                    .handle_callback(
+                        format!("{base_url}/oauth/{provider}/callback"),
+                        code.clone(),
                     )
-                    .await;
+                    .await
+                {
+                    Ok(token) => {
+                        let partitions = config.jobs.clone();
+                        for partition in partitions.into_iter() {
+                            if let Err(e) = services
+                                .queue()
+                                .enqueue(partition, token.clone(), None, None)
+                                .await
+                            {
+                                error!("Failed to enqueue OAuth token storage task: {}", e);
+                                return error_page(
+                                    500,
+                                    "Internal Server Error",
+                                    "Failed to store OAuth token, please try again later.",
+                                )
+                                .await;
+                            }
+                        }
+
+                        let renderer = ServerRenderer::<crate::ui::Page>::with_props(|| {
+                            ui::PageProps {
+                                title: None,
+                                children: html! {
+                                    <ui::Center>
+                                        <h1>{ "Login Complete" }</h1>
+                                        <p>{ "You have successfully completed signing into your account, you can close this window." }</p>
+                                    </ui::Center>
+                                },
+                            }
+                        });
+
+                        let rendered = renderer.render().await;
+
+                        actix_web::HttpResponse::Ok()
+                            .content_type("text/html; charset=utf-8")
+                            .body(format!("<!DOCTYPE html>{}", rendered))
+                    }
+                    Err(e) => {
+                        error!("OAuth callback handling failed: {}", e);
+                        return error_page(
+                            500,
+                            "Internal Server Error",
+                            "Failed to complete OAuth token exchange.",
+                        )
+                        .await;
+                    }
                 }
+            } else {
+                return error_page(
+                    400,
+                    "Bad Request",
+                    "Missing 'code' parameter in OAuth callback.",
+                )
+                .await;
             }
         } else {
-            return error_page(
-                400,
-                "Bad Request",
-                "Missing 'code' parameter in OAuth callback.",
-            )
-            .await;
+            return error_page(400, "Bad Request", "Invalid OAuth provider specified.").await;
         }
     } else {
-        return error_page(400, "Bad Request", "Invalid OAuth provider specified.").await;
+        error_page(
+            400,
+            "Bad Request",
+            "Your request did not include the required Host header.",
+        )
+        .await
     }
 }
 
@@ -158,28 +175,36 @@ impl OAuth2Config {
             .set_token_uri(oauth2::TokenUrl::new(self.token_url.clone()).map_err_as_user(&[
                 "Ensure that you have provided a valid `oauth2.xxx.token_url` in your configuration file.",
             ])?)
-            // Set the URL the user will be redirected to after the authorization process.
             .set_redirect_uri(
                 oauth2::RedirectUrl::new(redirect_url.to_string()).map_err_as_system(&[
                     "Ensure that your proxy is sending the x-forwarded-host and x-forwarded-proto headers correctly.",
                 ])?,
             );
 
-        let (url, _csrf) = client.authorize_url(|| CsrfToken::new_random()).url().clone();
+        let (url, _csrf) = client
+            .authorize_url(|| CsrfToken::new_random())
+            .url()
+            .clone();
         Ok(url)
     }
 
     pub async fn handle_callback(
         &self,
-        code: String,
+        redirect_url: impl ToString,
+        code: impl ToString,
     ) -> Result<OAuth2RefreshToken, human_errors::Error> {
         let client = oauth2::basic::BasicClient::new(oauth2::ClientId::new(self.client_id.clone()))
             .set_client_secret(oauth2::ClientSecret::new(self.client_secret.clone()))
             .set_auth_uri(oauth2::AuthUrl::new(self.auth_url.clone()).map_err_as_system(&[])?)
-            .set_token_uri(oauth2::TokenUrl::new(self.token_url.clone()).map_err_as_system(&[])?);
+            .set_token_uri(oauth2::TokenUrl::new(self.token_url.clone()).map_err_as_system(&[])?)
+            .set_redirect_uri(
+                oauth2::RedirectUrl::new(redirect_url.to_string()).map_err_as_system(&[
+                    "Ensure that your proxy is sending the x-forwarded-host and x-forwarded-proto headers correctly.",
+                ])?,
+            );
 
         let token_result = client
-            .exchange_code(oauth2::AuthorizationCode::new(code))
+            .exchange_code(oauth2::AuthorizationCode::new(code.to_string()))
             .request_async(&reqwest::Client::new())
             .await
             .wrap_err_as_user(
@@ -270,11 +295,19 @@ impl OAuth2RefreshToken {
     }
 }
 
-struct Host(String);
+struct Host(Option<String>);
 
 impl Host {
-    pub fn hostname(&self) -> &str {
-        &self.0
+    pub fn hostname(&self) -> Option<&str> {
+        self.0.as_deref()
+    }
+
+    pub fn base_url(&self, services: &impl Services) -> Option<String> {
+        if let Some(base_url) = &services.config().web.base_url {
+            Some(base_url.clone())
+        } else {
+            self.hostname().map(|h| h.to_string())
+        }
     }
 }
 
@@ -302,19 +335,14 @@ impl actix_web::FromRequest for Host {
             .and_then(|h| h.to_str().ok());
 
         match (x_forwarded_host, host, x_forwarded_proto) {
-            (Some(host), _, None) => futures::future::ok(Host(format!("https://{}", host))),
+            (Some(host), _, None) => futures::future::ok(Host(Some(format!("https://{}", host)))),
             (Some(host), _, Some(proto)) | (None, Some(host), Some(proto)) => {
-                futures::future::ok(Host(format!("{}://{}", proto, host)))
+                futures::future::ok(Host(Some(format!("{}://{}", proto, host))))
             }
-            (None, Some(host), None) => futures::future::ok(Host(format!("https://{}", host))),
-            _ => {
-                let err: Box<dyn std::error::Error> = human_errors::user("Failed to determine host header from incoming OAuth2 setup request.", &[
-                    "Ensure that your requests include a Host header.",
-                    "If behind a proxy, ensure that the x-forwarded-host and x-forwarded-proto headers are set correctly.",
-                ]).into();
-
-                futures::future::err(err.into())
+            (None, Some(host), None) => {
+                futures::future::ok(Host(Some(format!("https://{}", host))))
             }
+            _ => futures::future::ok(Host(None)),
         }
     }
 }
