@@ -86,6 +86,7 @@ impl SpotifyClient {
                 format!("playlists/{}/tracks", playlist_id.to_string()),
                 Some(serde_json::json!({
                     "uris": track_uris,
+                    "position": 0,
                 })),
             )
             .await?;
