@@ -6,7 +6,7 @@ api_key = "xxxxxx"
 
 [oauth2.spotify]
 name = "Spotify"
-jobs = ["workflows/spotify-yearly-playlist"]
+jobs = ["workflow/spotify-yearly-playlist"]
 client_id = "xxxxx"
 client_secret = "xxxxx"
 auth_url = "https://accounts.spotify.com/authorize"
