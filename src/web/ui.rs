@@ -28,7 +28,8 @@ pub async fn admin_index<S: Services>(
                 <p>{ "Welcome to the admin dashboard." }</p>
             </crate::ui::Center>
         }
-    }).await
+    })
+    .await
 }
 
 pub async fn not_found() -> actix_web::HttpResponse {

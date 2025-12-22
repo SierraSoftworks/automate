@@ -1,5 +1,7 @@
 use crate::{
-    prelude::*, ui::render_page, web::ui::{error_page, not_found}
+    prelude::*,
+    ui::render_page,
+    web::ui::{error_page, not_found},
 };
 use actix_web::{dev::HttpServiceFactory, web};
 use oauth2::{CsrfToken, Scope, TokenResponse};

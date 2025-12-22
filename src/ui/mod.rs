@@ -8,7 +8,8 @@ pub use page::*;
 
 pub async fn render_page<F>(title: impl ToString, children: F) -> actix_web::HttpResponse
 where
-    F: Fn() -> VNode + 'static + Send,{
+    F: Fn() -> VNode + 'static + Send,
+{
     let title = title.to_string();
     let renderer = ServerRenderer::<Page>::with_props(move || PageProps {
         title: Some(title.clone()),
