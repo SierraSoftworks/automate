@@ -3,7 +3,7 @@ use crate::{
     web::ui::{error_page, not_found},
 };
 use actix_web::{dev::HttpServiceFactory, web};
-use oauth2::TokenResponse;
+use oauth2::{CsrfToken, TokenResponse};
 use reqwest::Url;
 use serde::Deserialize;
 use yew::{ServerRenderer, html};
@@ -152,14 +152,21 @@ impl OAuth2Config {
     pub fn get_login_url(&self, redirect_url: impl ToString) -> Result<Url, human_errors::Error> {
         let client = oauth2::basic::BasicClient::new(oauth2::ClientId::new(self.client_id.clone()))
             .set_client_secret(oauth2::ClientSecret::new(self.client_secret.clone()))
-            .set_auth_uri(oauth2::AuthUrl::new(self.auth_url.clone()).map_err_as_system(&[])?)
-            .set_token_uri(oauth2::TokenUrl::new(self.token_url.clone()).map_err_as_system(&[])?)
+            .set_auth_uri(oauth2::AuthUrl::new(self.auth_url.clone()).map_err_as_user(&[
+                "Ensure that you have provided a valid `oauth2.xxx.auth_url` in your configuration file.",
+            ])?)
+            .set_token_uri(oauth2::TokenUrl::new(self.token_url.clone()).map_err_as_user(&[
+                "Ensure that you have provided a valid `oauth2.xxx.token_url` in your configuration file.",
+            ])?)
             // Set the URL the user will be redirected to after the authorization process.
             .set_redirect_uri(
-                oauth2::RedirectUrl::new(redirect_url.to_string()).map_err_as_system(&[])?,
+                oauth2::RedirectUrl::new(redirect_url.to_string()).map_err_as_system(&[
+                    "Ensure that your proxy is sending the x-forwarded-host and x-forwarded-proto headers correctly.",
+                ])?,
             );
 
-        Ok(client.auth_uri().url().clone())
+        let (url, _csrf) = client.authorize_url(|| CsrfToken::new_random()).url().clone();
+        Ok(url)
     }
 
     pub async fn handle_callback(
