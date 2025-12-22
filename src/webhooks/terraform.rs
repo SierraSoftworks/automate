@@ -30,7 +30,7 @@ impl Job for TerraformWebhook {
     type JobType = WebhookEvent;
 
     fn partition() -> &'static str {
-        "webhook/terraform"
+        "webhooks/terraform"
     }
 
     #[instrument("webhooks.terraform.handle", skip(self, job, services), fields(job = %job))]
