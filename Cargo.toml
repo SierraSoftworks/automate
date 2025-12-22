@@ -20,7 +20,7 @@ html-escape = "0.2.13"
 human-errors = "0.2.1"
 openssl-sys = { version = "0.9.111", features = ["vendored"], optional = true }
 regex = "1.12.2"
-reqwest = { version = "0.12.26", features = ["rustls-tls"] }
+reqwest = { version = "0.12.27", features = ["rustls-tls"] }
 rusqlite = { version = "0.37.0", features = ["bundled", "chrono"] }
 scraper = "0.25.0"
 serde = { version = "1.0.219", features = ["alloc", "derive"] }
