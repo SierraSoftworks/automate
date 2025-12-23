@@ -44,7 +44,7 @@ async fn main() {
     // Load environment variables from .env file if it exists
     // These will override process-level environment variables
     if let Err(err) = Config::load_env_file(&args.env) {
-        eprintln!("{}", err);
+        eprintln!("{}", human_errors::pretty(&err));
         std::process::exit(2);
     }
 
@@ -58,7 +58,7 @@ async fn main() {
         ));
 
     if let Err(err) = run(args).await {
-        eprintln!("{}", err);
+        eprintln!("{}", human_errors::pretty(&err));
         telemetry.record_error(&err);
         telemetry.shutdown();
         std::process::exit(1);
