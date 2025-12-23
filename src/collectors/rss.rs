@@ -56,6 +56,9 @@ impl IncrementalCollector for RssCollector {
                     "Check that your network connection is working properly.",
                 ],
             )?
+            .error_for_status().wrap_err_as_user(format!("We received an unexpected error response from URL '{}'.", &self.feed_url), &[
+                "Check that the URL is correct and that the server is reachable.",
+            ])?
             .bytes()
             .await
             .wrap_err_as_user(
