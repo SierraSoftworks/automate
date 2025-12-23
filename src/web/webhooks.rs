@@ -39,6 +39,7 @@ pub async fn handle<S: Services>(
         .await
     {
         error!("Failed to enqueue webhook payload: {}", err);
+        sentry::capture_error(&err);
         return actix_web::HttpResponse::InternalServerError().finish();
     }
 

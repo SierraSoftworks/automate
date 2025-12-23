@@ -60,6 +60,7 @@ async fn oauth_authorize<S: Services + Send + Sync + 'static>(
                         .finish(),
                     Err(e) => {
                         error!("Failed to get OAuth login URL: {}", e);
+                        sentry::capture_error(&e);
                         error_page(
                             500,
                             "Internal Server Error",
@@ -137,6 +138,7 @@ async fn oauth_callback<S: Services + Send + Sync + 'static>(
                     }
                     Err(e) => {
                         error!("OAuth callback handling failed: {}", e);
+                        sentry::capture_error(&e);
                         return error_page(
                             500,
                             "Internal Server Error",

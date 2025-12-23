@@ -86,6 +86,7 @@ where
                     outcome
                 }
                 Err(error) => {
+                    sentry::capture_error(&error);
                     Span::current().record(
                         "http.status_code",
                         display(error.as_response_error().status_code()),
