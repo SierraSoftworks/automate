@@ -1,14 +1,14 @@
 [connections.github]
-api_key = "xxxxxx"
+api_key = "${{ env.GITHUB_API_KEY }}"
 
 [connections.todoist]
-api_key = "xxxxxx"
+api_key = "${{ env.TODOIST_API_KEY }}"
 
 [oauth2.spotify]
 name = "Spotify"
 jobs = ["workflow/spotify-yearly-playlist"]
-client_id = "xxxxx"
-client_secret = "xxxxx"
+client_id = "${{ env.SPOTIFY_CLIENT_ID }}"
+client_secret = "${{ env.SPOTIFY_CLIENT_SECRET }}"
 auth_url = "https://accounts.spotify.com/authorize"
 token_url = "https://accounts.spotify.com/api/token"
 scopes = [

@@ -25,18 +25,27 @@ use crate::{prelude::*, workflows::CronJob};
 #[command(version, about, long_about = None)]
 #[command(propagate_version = true)]
 struct Args {
+    #[arg(short, long, help = "Path to the configuration file")]
     config: Option<String>,
+
+    #[arg(short, long, help = "Path to an environment file to load (if it exists).", default_value = ".env")]
+    env: String,
 }
 
 #[tokio::main]
 async fn main() {
+    let args = Args::parse();
+
+    // Load environment variables from .env file if it exists
+    // These will override process-level environment variables
+    if let Err(err) = Config::load_env_file(&args.env) {
+        eprintln!("{}", err);
+        std::process::exit(2);
+    }
+
     let telemetry = tracing_batteries::Session::new("automate", env!("CARGO_PKG_VERSION"))
         .with_battery(
-            tracing_batteries::OpenTelemetry::new("https://refinery.sierrasoftworks.com")
-                .with_header(
-                    "x-honeycomb-team",
-                    "hcaik_01kc5cbks0wtpdg3pndrxkxyswg7ngh59mvxk00hrb69dyp446jvchds8h",
-                )
+            tracing_batteries::OpenTelemetry::new("")
                 .with_stdout(true),
         )
         .with_battery(tracing_batteries::Sentry::new(
@@ -46,7 +55,7 @@ async fn main() {
             "https://analytics.sierrasoftworks.com",
         ));
 
-    if let Err(err) = run().await {
+    if let Err(err) = run(args).await {
         eprintln!("{}", err);
         telemetry.record_error(&err);
         telemetry.shutdown();
@@ -56,9 +65,9 @@ async fn main() {
     }
 }
 
-#[instrument("main.run", err(Display))]
-async fn run() -> Result<(), human_errors::Error> {
-    let args = Args::parse();
+#[instrument("main.run", skip(args), err(Display))]
+async fn run(args: Args) -> Result<(), human_errors::Error> {
+    
 
     let config = Config::load(args.config.unwrap_or_else(|| "config.toml".into()))?;
 

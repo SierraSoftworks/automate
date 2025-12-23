@@ -86,7 +86,10 @@ impl Job for TerraformWebhook {
                                 .map(|n| {
                                     format!(
                                         "- \\[{}\\] {} (by {} at {})",
-                                        n.trigger, n.message, n.run_updated_by.as_deref().unwrap_or("unknown"), n.run_updated_at
+                                        n.trigger,
+                                        n.message,
+                                        n.run_updated_by.as_deref().unwrap_or("unknown"),
+                                        n.run_updated_at
                                     )
                                 })
                                 .collect::<Vec<_>>()

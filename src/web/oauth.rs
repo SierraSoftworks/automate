@@ -200,7 +200,7 @@ impl OAuth2Config {
             );
 
         let (url, _csrf) = client
-            .authorize_url(|| CsrfToken::new_random())
+            .authorize_url(CsrfToken::new_random)
             .add_scopes(self.scopes.iter().cloned().map(Scope::new))
             .url()
             .clone();
