@@ -28,7 +28,12 @@ struct Args {
     #[arg(short, long, help = "Path to the configuration file")]
     config: Option<String>,
 
-    #[arg(short, long, help = "Path to an environment file to load (if it exists).", default_value = ".env")]
+    #[arg(
+        short,
+        long,
+        help = "Path to an environment file to load (if it exists).",
+        default_value = ".env"
+    )]
     env: String,
 }
 
@@ -44,10 +49,7 @@ async fn main() {
     }
 
     let telemetry = tracing_batteries::Session::new("automate", env!("CARGO_PKG_VERSION"))
-        .with_battery(
-            tracing_batteries::OpenTelemetry::new("")
-                .with_stdout(true),
-        )
+        .with_battery(tracing_batteries::OpenTelemetry::new("").with_stdout(true))
         .with_battery(tracing_batteries::Sentry::new(
             "https://64422db58bbf92837d6484d1b8117d5a@o219072.ingest.us.sentry.io/4506753155137536",
         ))
@@ -67,8 +69,6 @@ async fn main() {
 
 #[instrument("main.run", skip(args), err(Display))]
 async fn run(args: Args) -> Result<(), human_errors::Error> {
-    
-
     let config = Config::load(args.config.unwrap_or_else(|| "config.toml".into()))?;
 
     let db = db::SqliteDatabase::open("database.sqlite").await.unwrap();
