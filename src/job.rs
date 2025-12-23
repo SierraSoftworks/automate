@@ -95,7 +95,10 @@ pub trait Job {
                         .instrument(span)
                         .await
                     {
-                        sentry::capture_error(&err);
+                        if err.is(human_errors::Kind::System) {
+                            sentry::capture_error(&err);
+                        }
+                        
                         root_span.set_status(opentelemetry::trace::Status::error(err.to_string()));
                         error!(error = %err, "An error occurred while processing job '{}' (traceparent: {traceparent}): {err}", queue.name());
                     } else {
