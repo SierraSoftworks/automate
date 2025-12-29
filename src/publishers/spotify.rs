@@ -18,6 +18,11 @@ impl SpotifyClient {
         }
     }
 
+    #[instrument(
+        "spotify.get_current_user",
+        skip(self),
+        err(Display)
+    )]
     pub async fn get_current_user(&self) -> Result<SpotifyUser, human_errors::Error> {
         let user: SpotifyUser = self
             .call_spotify(reqwest::Method::GET, "me", None::<()>)
@@ -26,6 +31,11 @@ impl SpotifyClient {
         Ok(user)
     }
 
+    #[instrument(
+        "spotify.get_saved_tracks",
+        skip(self, since),
+        err(Display)
+    )]
     pub async fn get_saved_tracks(
         &self,
         since: chrono::DateTime<chrono::Utc>,
@@ -42,6 +52,11 @@ impl SpotifyClient {
         Ok(tracks)
     }
 
+    #[instrument(
+        "spotify.get_playlists",
+        skip(self),
+        err(Display)
+    )]
     pub async fn get_playlists(&self) -> Result<Vec<SpotifyPlaylist>, human_errors::Error> {
         let playlists = self
             .call_spotify_paginated(reqwest::Method::GET, "me/playlists", None::<()>, |_| true)
@@ -50,6 +65,11 @@ impl SpotifyClient {
         Ok(playlists)
     }
 
+    #[instrument(
+        "spotify.create_playlist",
+        skip(self, name, description),
+        err(Display)
+    )]
     pub async fn create_playlist(
         &self,
         name: impl ToString,
@@ -75,6 +95,11 @@ impl SpotifyClient {
         Ok(playlist)
     }
 
+    #[instrument(
+        "spotify.add_tracks_to_playlist",
+        skip(self, playlist_id, track_uris),
+        err(Display)
+    )]
     pub async fn add_tracks_to_playlist(
         &self,
         playlist_id: impl ToString,
