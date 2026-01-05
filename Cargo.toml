@@ -18,7 +18,7 @@ hex = "0.4.3"
 htmd = "0.5.0"
 hmac = "0.12.1"
 html-escape = "0.2.13"
-human-errors = { version = "0.2.2", features = ["pretty"] }
+human-errors = { version = "0.2.3", features = ["pretty"] }
 openssl-sys = { version = "0.9.111", features = ["vendored"], optional = true }
 regex = "1.12.2"
 reqwest = { version = "0.12.27", features = ["rustls-tls"] }
