@@ -8,7 +8,7 @@ actix-web = "4.12.1"
 async-trait = "0.1.89"
 calcard = "0.3.2"
 chrono = { version = "0.4.40", features = ["serde"] }
-clap = { version = "4.5.53", features = ["cargo", "derive", "string"] }
+clap = { version = "4.5.54", features = ["cargo", "derive", "string"] }
 cron = "0.15.0"
 croner = { version = "3.0.1", features = ["serde"] }
 dotenvy = "0.15"
