@@ -45,7 +45,7 @@ impl SentryAlertsWebhook {
         signature: &str,
     ) -> Result<(), human_errors::Error> {
         // Create HMAC-SHA256 instance with the secret
-        let mut mac = HmacSha256::new_from_slice(secret.as_bytes()).wrap_err_as_user(
+        let mut mac = HmacSha256::new_from_slice(secret.as_bytes()).wrap_user_err(
             "Failed to create HMAC instance with the provided secret.",
             &[
                 "Ensure that you have provided a valid webhooks.sentry.secret in your configuration.",
@@ -57,13 +57,13 @@ impl SentryAlertsWebhook {
         mac.update(body.as_bytes());
 
         // Decode the expected signature from hex
-        let expected_signature = hex::decode(signature).map_err_as_user(&[
+        let expected_signature = hex::decode(signature).or_user_err(&[
             "The signature in the Sentry-Hook-Signature header is not valid hex.",
             "Ensure that you are only sending Sentry webhooks to this endpoint.",
         ])?;
 
         // Verify the signature
-        mac.verify_slice(&expected_signature).wrap_err_as_user(
+        mac.verify_slice(&expected_signature).wrap_user_err(
             "Webhook signature verification failed (signatures did not match).".to_string(),
             &[
                 "Ensure that the configured webhooks.sentry.secret matches the client secret in your Sentry integration settings.",

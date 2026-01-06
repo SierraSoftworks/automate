@@ -65,7 +65,7 @@ impl Job for TodoistCreateTask {
                 ..Default::default()
             })
             .await
-            .wrap_err_as_user(
+            .wrap_user_err(
                 format!("Failed to create Todoist task '{}'.", job.title),
                 &[
                     "Check that your Todoist API token is valid and has the necessary permissions.",

@@ -45,19 +45,19 @@ impl Job for TerraformWebhook {
                     "Make sure you are only sending Terraform Cloud webhook events to this endpoint."
                 ]))?;
 
-            let expected_tag = hex::decode(expected_hash).wrap_err_as_user(
+            let expected_tag = hex::decode(expected_hash).wrap_user_err(
                 "Invalid X-TFE-Notification-Signature header format in Terraform webhook",
                 &["Make sure the sender of the webhook is sending a valid HMAC SHA-512 signature."],
             )?;
 
             let mut mac = HmacSha512::new_from_slice(secret.as_bytes())
-                .map_err_as_user(&[
+                .or_user_err(&[
                     "Make sure that you have provided a valid webhooks.terraform.secret in your config file."
                 ])?;
 
             mac.update(job.body.as_bytes());
             mac.verify_slice(expected_tag.as_slice())
-                .wrap_err_as_user("The Terraform webhook's signature did not match the content of the webhook payload.",
+                .wrap_user_err("The Terraform webhook's signature did not match the content of the webhook payload.",
                 &[
                     "Make sure the sender of the webhook is sending the correct signature using the configured secret."
                 ])?;
@@ -117,7 +117,7 @@ impl Job for TerraformWebhook {
                         title: format!("**Terraform Cloud**: {}", message),
                         description: Some(format!(
                             "```\n{}\n```",
-                            serde_json::to_string_pretty(&details).map_err_as_system(&[
+                            serde_json::to_string_pretty(&details).or_system_err(&[
                                 "Please report this issue to the development team on GitHub."
                             ])?
                         )),

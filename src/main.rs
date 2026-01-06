@@ -108,7 +108,7 @@ async fn run(args: Args) -> Result<(), human_errors::Error> {
             crate::workflows::YouTubeWorkflow.run(services.clone()),
         ).race()
     ).race().await
-        .map_err_as_user(&[
+        .or_user_err(&[
             "Restart the application and try again after addressing any issues reported in the logs.",
         ])?;
 

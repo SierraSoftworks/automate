@@ -59,7 +59,7 @@ impl TailscaleWebhook {
                         ]
                     ))?;
 
-                let signature = hex::decode(signature).map_err_as_user(&[
+                let signature = hex::decode(signature).or_user_err(&[
                     "The signature in the Tailscale-Webhook-Signature header is not valid hex.",
                     "Ensure that you are only sending Tailscale webhooks to this endpoint.",
                     "Check that the webhook is configured correctly at https://login.tailscale.com/admin/settings/webhooks"
@@ -105,7 +105,7 @@ impl TailscaleWebhook {
 
         // Create HMAC-SHA256 instance with the secret
         let mut mac = HmacSha256::new_from_slice(secret.as_bytes())
-            .wrap_err_as_user(
+            .wrap_user_err(
                 "Failed to create HMAC instance with the provided secret.",
                 &[
                     "Ensure that you have provided a valid webhooks.tailscale.secret in your configuration.",
@@ -118,7 +118,7 @@ impl TailscaleWebhook {
 
         // Verify the signature
         mac.verify_slice(&expected_signature)
-            .wrap_err_as_user(
+            .wrap_user_err(
                 "Webhook signature verification failed (signatures did not match).".to_string(),
                 &["Ensure that the configured webhooks.tailscale.secret matches that on https://login.tailscale.com/admin/settings/webhooks"]
             )?;

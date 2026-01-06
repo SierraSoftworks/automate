@@ -20,7 +20,7 @@ const ADVICE_REPORT_DEV: &[&str] =
 
 impl SqliteDatabase {
     pub async fn open(path: &str) -> Result<Self, errors::Error> {
-        let connection = Connection::open(path).await.wrap_err_as_user(
+        let connection = Connection::open(path).await.wrap_user_err(
             format!("Unable to open SQLite database file '{path}'."),
             &["Make sure the file path is correct and accessible."],
         )?;
@@ -35,7 +35,7 @@ impl SqliteDatabase {
 
     #[cfg(test)]
     pub async fn open_in_memory() -> Result<Self, errors::Error> {
-        let connection = Connection::open_in_memory().await.map_err_as_system(&[
+        let connection = Connection::open_in_memory().await.or_system_err(&[
             "Make sure that there is enough memory available to create an in-memory database.",
         ])?;
 
@@ -58,7 +58,7 @@ impl SqliteDatabase {
                 )
             })
             .await
-            .wrap_err_as_system(
+            .wrap_system_err(
                 "Failed to initialize the migrations table.",
                 ADVICE_DB_ERROR,
             )?;
@@ -71,7 +71,7 @@ impl SqliteDatabase {
                 })
             })
             .await
-            .wrap_err_as_system(
+            .wrap_system_err(
                 "Failed to determine the latest database migration version.",
                 ADVICE_DB_ERROR,
             )?;
@@ -86,7 +86,7 @@ impl SqliteDatabase {
                     transaction.commit()
                 })
                 .await
-                .wrap_err_as_system(
+                .wrap_system_err(
                     format!("Failed to apply database migration v{}.", i + 1),
                     ADVICE_REPORT_DEV,
                 )?;
@@ -128,7 +128,7 @@ impl KeyValueStore for SqliteDatabase {
                 .optional()
             })
             .await
-            .map_err_as_system(ADVICE_REPORT_DEV)?)
+            .or_system_err(ADVICE_REPORT_DEV)?)
     }
 
     #[instrument("db.sqlite.list", skip(self, partition), fields(otel.kind=?OpenTelemetrySpanKind::Client), err(Display))]
@@ -141,7 +141,7 @@ impl KeyValueStore for SqliteDatabase {
             .call(move |c| {
                 let mut stmt = c
                     .prepare("SELECT key, value FROM kv WHERE partition = ?1")
-                    .map_err_as_system(ADVICE_DB_ERROR)?;
+                    .or_system_err(ADVICE_DB_ERROR)?;
 
                 let query_iter = stmt
                     .query_map([&partition], |r| {
@@ -156,14 +156,14 @@ impl KeyValueStore for SqliteDatabase {
                         })?;
                         Ok((key, deserialized))
                     })
-                    .map_err_as_system(ADVICE_DB_ERROR)?;
+                    .or_system_err(ADVICE_DB_ERROR)?;
 
                 query_iter
                     .collect::<Result<Vec<_>, _>>()
-                    .map_err_as_system(ADVICE_DB_ERROR)
+                    .or_system_err(ADVICE_DB_ERROR)
             })
             .await
-            .map_err_as_system(ADVICE_DB_ERROR)
+            .or_system_err(ADVICE_DB_ERROR)
     }
 
     #[instrument("db.sqlite.set", skip(self, partition, key, value), fields(otel.kind=?OpenTelemetrySpanKind::Client), err(Display))]
@@ -173,7 +173,7 @@ impl KeyValueStore for SqliteDatabase {
         key: impl Into<Cow<'static, str>> + Send,
         value: T,
     ) -> std::result::Result<(), errors::Error> {
-        let serialized = serde_json::to_string(&value).wrap_err_as_system(
+        let serialized = serde_json::to_string(&value).wrap_system_err(
             "Failed to serialize value for storage in the key/value store.",
             ADVICE_REPORT_DEV,
         )?;
@@ -190,7 +190,7 @@ impl KeyValueStore for SqliteDatabase {
                 )
             })
             .await
-            .map_err_as_system(ADVICE_DB_ERROR)?;
+            .or_system_err(ADVICE_DB_ERROR)?;
         Ok(())
     }
 
@@ -211,7 +211,7 @@ impl KeyValueStore for SqliteDatabase {
                 )
             })
             .await
-            .map_err_as_system(ADVICE_DB_ERROR)?;
+            .or_system_err(ADVICE_DB_ERROR)?;
         Ok(())
     }
 }
@@ -232,7 +232,7 @@ impl Queue for SqliteDatabase {
         });
 
         let partition = partition.into();
-        let serialized = serde_json::to_string(&job).wrap_err_as_system(
+        let serialized = serde_json::to_string(&job).wrap_system_err(
             "Failed to serialize the queue message for storage.",
             ADVICE_REPORT_DEV,
         )?;
@@ -253,7 +253,7 @@ impl Queue for SqliteDatabase {
                 )
             })
             .await
-            .map_err_as_system(ADVICE_DB_ERROR)?;
+            .or_system_err(ADVICE_DB_ERROR)?;
 
         Ok(())
     }
@@ -272,7 +272,7 @@ impl Queue for SqliteDatabase {
 
             let partition = partition.clone();
             let message = self.connection.call(move |c| {
-                let tx = c.transaction().map_err_as_system(ADVICE_DB_ERROR)?;
+                let tx = c.transaction().or_system_err(ADVICE_DB_ERROR)?;
 
                 let message = tx.query_one("SELECT key, payload, scheduledAt, traceparent, tracestate FROM queues WHERE partition = ?1 AND hiddenUntil < CURRENT_TIMESTAMP LIMIT 1", [&partition], |row| {
                     let key: String = row.get(0)?;
@@ -297,7 +297,7 @@ impl Queue for SqliteDatabase {
                         traceparent,
                         tracestate,
                     })
-                }).optional().map_err_as_system(ADVICE_DB_ERROR)?;
+                }).optional().or_system_err(ADVICE_DB_ERROR)?;
 
                 if let Some(msg) = &message {
                     tx.execute(
@@ -305,13 +305,13 @@ impl Queue for SqliteDatabase {
                         SET reservedBy = ?1, hiddenUntil = ?2
                         WHERE partition = ?3 AND key = ?4",
                         (&reservation_id, &reserved_until, &partition, &msg.key),
-                    ).map_err_as_system(ADVICE_DB_ERROR)?;
+                    ).or_system_err(ADVICE_DB_ERROR)?;
                 }
 
-                tx.commit().map_err_as_system(ADVICE_DB_ERROR)?;
+                tx.commit().or_system_err(ADVICE_DB_ERROR)?;
 
                 Result::<_, human_errors::Error>::Ok(message)
-            }).await.map_err_as_system(ADVICE_DB_ERROR)?;
+            }).await.or_system_err(ADVICE_DB_ERROR)?;
 
             if let Some(msg) = message {
                 return Ok(msg);
@@ -336,7 +336,7 @@ impl Queue for SqliteDatabase {
                 )
             })
             .await
-            .map_err_as_system(ADVICE_DB_ERROR)?;
+            .or_system_err(ADVICE_DB_ERROR)?;
         Ok(())
     }
 }

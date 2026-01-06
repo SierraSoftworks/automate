@@ -37,7 +37,7 @@ impl Config {
             return Ok(());
         }
 
-        dotenvy::from_path_override(path).wrap_err_as_user(
+        dotenvy::from_path_override(path).wrap_user_err(
             format!(
                 "We could not load your environment file '{}'.",
                 path.display()
@@ -53,7 +53,7 @@ impl Config {
 
     pub fn load(path: impl Into<PathBuf>) -> Result<Self, human_errors::Error> {
         let path = path.into();
-        let contents = std::fs::read_to_string(&path).wrap_err_as_user(
+        let contents = std::fs::read_to_string(&path).wrap_user_err(
             format!("We could not read your config file '{}'.", path.display()),
             &[
                 "Ensure the file exists and is readable.",
@@ -77,7 +77,7 @@ impl Config {
             }
         })?;
 
-        let config: Config = toml::from_str(&contents).wrap_err_as_user(
+        let config: Config = toml::from_str(&contents).wrap_user_err(
             "Your configuration file could not be loaded.",
             &[
                 "Ensure that the file is valid TOML.",
