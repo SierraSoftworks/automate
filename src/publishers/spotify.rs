@@ -177,15 +177,15 @@ impl SpotifyClient {
 
         let req = req
             .build()
-            .map_err_as_system(&["Report this issue to the development team on GitHub."])?;
+            .or_system_err(&["Report this issue to the development team on GitHub."])?;
 
         let resp = self
             .client
             .execute(req)
             .await
-            .map_err_as_user(&["Make sure that your internet connection is working."])?
+            .or_user_err(&["Make sure that your internet connection is working."])?
             .error_for_status()
-            .wrap_err_as_user(
+            .wrap_user_err(
                 "Failed to call Spotify's API",
                 &[
                     "Ensure that your internet connection is working.",
@@ -193,7 +193,7 @@ impl SpotifyClient {
                 ],
             )?;
 
-        resp.json().await.map_err_as_user(&[
+        resp.json().await.or_user_err(&[
             "Ensure that your internet connection is working.",
             "Check that Spotify's service is operational.",
         ])

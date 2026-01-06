@@ -56,7 +56,7 @@ impl Job for CalendarWorkflow {
                         "Calendar item '{}' matched filter, creating Todoist task",
                         item.summary
                     );
-                    let identifier_string = serde_json::to_string(&id).map_err_as_system(&[
+                    let identifier_string = serde_json::to_string(&id).or_system_err(&[
                         "Report this issue to the development team on GitHub.",
                     ])?;
                     crate::publishers::TodoistUpsertTask::dispatch(
@@ -83,7 +83,7 @@ impl Job for CalendarWorkflow {
                         "Calendar item '{}' did not match filter, skipping Todoist creation",
                         item.summary
                     );
-                    let identifier_string = serde_json::to_string(&id).map_err_as_system(&[
+                    let identifier_string = serde_json::to_string(&id).or_system_err(&[
                         "Report this issue to the development team on GitHub.",
                     ])?;
                     crate::publishers::TodoistCompleteTask::dispatch(
@@ -97,7 +97,7 @@ impl Job for CalendarWorkflow {
                     .await?;
                 }
                 Diff::Removed(id) => {
-                    let identifier_string = serde_json::to_string(&id).map_err_as_system(&[
+                    let identifier_string = serde_json::to_string(&id).or_system_err(&[
                         "Report this issue to the development team on GitHub.",
                     ])?;
                     crate::publishers::TodoistCompleteTask::dispatch(

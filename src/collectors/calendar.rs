@@ -66,14 +66,14 @@ impl DifferentialCollector for CalendarCollector {
         let client = reqwest::Client::builder()
             .user_agent("SierraSoftworks/automate-rs")
             .build()
-            .map_err_as_system(&["Report this issue to the development team on GitHub."])?;
+            .or_system_err(&["Report this issue to the development team on GitHub."])?;
 
         let response = client
             .get(&self.url)
             .header("Accept", "text/calendar")
             .send()
             .await
-            .wrap_err_as_user(
+            .wrap_user_err(
                 "We were unable to fetch your calendar.",
                 &[
                     "Make sure that your network connection is working properly.",
@@ -115,7 +115,7 @@ impl DifferentialCollector for CalendarCollector {
             }
         }
 
-        let content = response.text().await.map_err_as_user(&[
+        let content = response.text().await.or_user_err(&[
             "Make sure that you have provided a valid URL for your calendar.",
         ])?;
 
