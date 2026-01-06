@@ -67,7 +67,7 @@ impl Job for TodoistUpsertTask {
                 duration_unit: job.duration.map(|_| "minute".into()),
                 priority: job.priority,
                 ..Default::default()
-            }).await.wrap_err_as_user(
+            }).await.wrap_user_err(
                 format!("Failed to update Todoist task '{}'.", job.title),
                 &[
                     "Check that your Todoist API token is valid and has the necessary permissions.",
@@ -76,7 +76,7 @@ impl Job for TodoistUpsertTask {
             )?;
 
             if task.is_completed {
-                client.0.reopen_task(&existing_task.id).await.wrap_err_as_user(
+                client.0.reopen_task(&existing_task.id).await.wrap_user_err(
                     format!("Failed to reopen completed Todoist task '{}'.", job.title),
                     &[
                         "Check that your Todoist API token is valid and has the necessary permissions.",
@@ -126,7 +126,7 @@ impl Job for TodoistUpsertTask {
                     ..Default::default()
                 })
                 .await
-                .wrap_err_as_user(
+                .wrap_user_err(
                     format!("Failed to create Todoist task '{}'.", job.title),
                     &[
                         "Check that your Todoist API token is valid and has the necessary permissions.",

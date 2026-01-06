@@ -187,14 +187,14 @@ impl OAuth2Config {
     pub fn get_login_url(&self, redirect_url: impl ToString) -> Result<Url, human_errors::Error> {
         let client = oauth2::basic::BasicClient::new(oauth2::ClientId::new(self.client_id.clone()))
             .set_client_secret(oauth2::ClientSecret::new(self.client_secret.clone()))
-            .set_auth_uri(oauth2::AuthUrl::new(self.auth_url.clone()).map_err_as_user(&[
+            .set_auth_uri(oauth2::AuthUrl::new(self.auth_url.clone()).or_user_err(&[
                 "Ensure that you have provided a valid `oauth2.xxx.auth_url` in your configuration file.",
             ])?)
-            .set_token_uri(oauth2::TokenUrl::new(self.token_url.clone()).map_err_as_user(&[
+            .set_token_uri(oauth2::TokenUrl::new(self.token_url.clone()).or_user_err(&[
                 "Ensure that you have provided a valid `oauth2.xxx.token_url` in your configuration file.",
             ])?)
             .set_redirect_uri(
-                oauth2::RedirectUrl::new(redirect_url.to_string()).map_err_as_system(&[
+                oauth2::RedirectUrl::new(redirect_url.to_string()).or_system_err(&[
                     "Ensure that your proxy is sending the x-forwarded-host and x-forwarded-proto headers correctly.",
                 ])?,
             );
@@ -214,10 +214,10 @@ impl OAuth2Config {
     ) -> Result<OAuth2RefreshToken, human_errors::Error> {
         let client = oauth2::basic::BasicClient::new(oauth2::ClientId::new(self.client_id.clone()))
             .set_client_secret(oauth2::ClientSecret::new(self.client_secret.clone()))
-            .set_auth_uri(oauth2::AuthUrl::new(self.auth_url.clone()).map_err_as_system(&[])?)
-            .set_token_uri(oauth2::TokenUrl::new(self.token_url.clone()).map_err_as_system(&[])?)
+            .set_auth_uri(oauth2::AuthUrl::new(self.auth_url.clone()).or_system_err(&[])?)
+            .set_token_uri(oauth2::TokenUrl::new(self.token_url.clone()).or_system_err(&[])?)
             .set_redirect_uri(
-                oauth2::RedirectUrl::new(redirect_url.to_string()).map_err_as_system(&[
+                oauth2::RedirectUrl::new(redirect_url.to_string()).or_system_err(&[
                     "Ensure that your proxy is sending the x-forwarded-host and x-forwarded-proto headers correctly.",
                 ])?,
             );
@@ -226,7 +226,7 @@ impl OAuth2Config {
             .exchange_code(oauth2::AuthorizationCode::new(code.to_string()))
             .request_async(&reqwest::Client::new())
             .await
-            .wrap_err_as_user(
+            .wrap_user_err(
                 format!("Failed to obtain OAuth access token for {}.", &self.name),
                 &[
                     "Ensure that your OAuth client credentials are correct.",
@@ -256,8 +256,8 @@ impl OAuth2Config {
     ) -> Result<OAuth2RefreshToken, human_errors::Error> {
         let client = oauth2::basic::BasicClient::new(oauth2::ClientId::new(self.client_id.clone()))
             .set_client_secret(oauth2::ClientSecret::new(self.client_secret.clone()))
-            .set_auth_uri(oauth2::AuthUrl::new(self.auth_url.clone()).map_err_as_system(&[])?)
-            .set_token_uri(oauth2::TokenUrl::new(self.token_url.clone()).map_err_as_system(&[])?);
+            .set_auth_uri(oauth2::AuthUrl::new(self.auth_url.clone()).or_system_err(&[])?)
+            .set_token_uri(oauth2::TokenUrl::new(self.token_url.clone()).or_system_err(&[])?);
 
         if !token_entry.needs_refresh() {
             return Ok(token_entry.clone());
@@ -271,7 +271,7 @@ impl OAuth2Config {
             ))
             .request_async(&http_client)
             .await
-            .wrap_err_as_user(
+            .wrap_user_err(
                 format!("Failed to refresh OAuth access token for {}.", &self.name),
                 &[
                     "Ensure that your OAuth credentials are correct.",

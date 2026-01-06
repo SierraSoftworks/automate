@@ -18,7 +18,7 @@ pub async fn run_web_server<S: Services + Clone + Send + Sync + 'static>(
             addr = "0.0.0.0";
         }
 
-        let port = port.parse::<u16>().wrap_err_as_user(
+        let port = port.parse::<u16>().wrap_user_err(
             "The port number in the web.address field is not a valid number.",
             &["Ensure that the port is a valid integer between 0 and 65535."],
         )?;
@@ -46,9 +46,17 @@ pub async fn run_web_server<S: Services + Clone + Send + Sync + 'static>(
                 )
                 .default_service(web::to(ui::not_found))
         })
-        .bind((addr, port))?;
+        .bind((addr, port))
+        .or_user_err(&[
+            "Failed to bind the web server to the specified address and port.",
+            "Ensure that the port is not already in use by another process.",
+            "Ensure that you have permission to bind to the specified port.",
+        ])?;
 
-        server.run().await?;
+        server.run().await.or_system_err(&[
+            "The web server encountered an error while running.",
+            "Check the logs for more information.",
+        ])?;
         Ok(())
     } else {
         Err(human_errors::user(

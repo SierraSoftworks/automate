@@ -38,7 +38,7 @@ impl Job for TodoistCompleteTask {
             .get::<TodoistUpsertTaskState>("todoist/task", job.unique_key.clone())
             .await?
         {
-            client.0.complete_task(&existing_task.id).await.wrap_err_as_user(
+            client.0.complete_task(&existing_task.id).await.wrap_user_err(
                 format!("Failed to complete Todoist task '{}'.", &existing_task.id),
                 &[
                     "Check that your Todoist API token is valid and has the necessary permissions.",

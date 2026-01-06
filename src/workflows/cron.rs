@@ -96,7 +96,7 @@ impl Job for CronJob {
         let next_run = job
             .cron
             .find_next_occurrence(&now, false)
-            .wrap_err_as_user(
+            .wrap_user_err(
                 "We could not determine the next time at which this cron job should be dispatched.",
                 &["Please ensure the cron schedule is valid."],
             )?;

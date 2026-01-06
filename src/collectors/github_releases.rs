@@ -102,7 +102,7 @@ impl IncrementalCollector for GitHubReleasesCollector {
             headers.insert(
                 reqwest::header::AUTHORIZATION,
                 reqwest::header::HeaderValue::from_str(&format!("Bearer {}", api_key))
-                    .map_err_as_system(&["Report the issue to the development team on GitHub."])?,
+                    .or_system_err(&["Report the issue to the development team on GitHub."])?,
             );
         }
 
@@ -110,10 +110,10 @@ impl IncrementalCollector for GitHubReleasesCollector {
             .user_agent("SierraSoftworks/automate-rs")
             .default_headers(headers)
             .build()
-            .map_err_as_system(&["Report the issue to the development team on GitHub."])?;
+            .or_system_err(&["Report the issue to the development team on GitHub."])?;
 
         let response = client.get(format!("{}/repos/{}/releases", self.api_url, self.repo))
-            .send().await.wrap_err_as_user("We were unable to fetch GitHub releases from GitHub.", &[
+            .send().await.wrap_user_err("We were unable to fetch GitHub releases from GitHub.", &[
                 "Make sure that your network connection is working properly.",
                 "Check https://www.githubstatus.com/ for any ongoing issues with GitHub's services.",
             ])?;
@@ -161,7 +161,7 @@ impl IncrementalCollector for GitHubReleasesCollector {
             }
         }
 
-        let releases: Vec<GitHubReleaseItem> = response.json().await.wrap_err_as_user(
+        let releases: Vec<GitHubReleaseItem> = response.json().await.wrap_user_err(
             format!(
                 "Failed to read the content of the GitHub Releases from URL '{}'.",
                 &self.api_url

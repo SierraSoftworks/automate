@@ -52,7 +52,7 @@ impl Job for RssWorkflow {
         job: &Self::JobType,
         services: impl Services + Send + Sync + 'static,
     ) -> Result<(), human_errors::Error> {
-        let base_url: reqwest::Url = job.homepage.parse().wrap_err_as_user(
+        let base_url: reqwest::Url = job.homepage.parse().wrap_user_err(
             format!("The feed URL you provided could not be parsed as a valid URL ({}).", &job.homepage),
             &[
                 "Ensure that the feed URL is correctly formatted, it should be a fully qualified URL (including the scheme, e.g., https://).",

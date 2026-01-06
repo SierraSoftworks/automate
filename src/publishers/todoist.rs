@@ -47,7 +47,7 @@ impl TodoistClient {
                 key,
                 move || {
                     Box::pin(async move {
-                        client.get_projects().await.wrap_err_as_user(
+                        client.get_projects().await.wrap_user_err(
                 "Failed to fetch Todoist projects.",
                 &[
                     "Check that your Todoist API token is valid and has the necessary permissions.",
@@ -93,7 +93,7 @@ impl TodoistClient {
                     key,
                     move || {
                         Box::pin(async move {
-                            client.get_sections().await.wrap_err_as_user(
+                            client.get_sections().await.wrap_user_err(
                     "Failed to fetch Todoist sections.",
                     &[
                         "Check that your Todoist API token is valid and has the necessary permissions.",

@@ -39,7 +39,7 @@ impl GitHubNotificationsCollector {
             let client = self.get_client(services)?;
 
             let response = client.get(url)
-                .send().await.wrap_err_as_user("We were unable to fetch GitHub notification subject state from GitHub.", &[
+                .send().await.wrap_user_err("We were unable to fetch GitHub notification subject state from GitHub.", &[
                     "Make sure that your network connection is working properly.",
                     "Check https://www.githubstatus.com/ for any ongoing issues with GitHub's services.",
                 ])?;
@@ -75,7 +75,7 @@ impl GitHubNotificationsCollector {
                 }
             }
 
-            let issue: GitHubSubjectInformation = response.json().await.wrap_err_as_user(
+            let issue: GitHubSubjectInformation = response.json().await.wrap_user_err(
                 format!(
                     "Failed to read the content of the GitHub notification subject from URL '{}'.",
                     url
@@ -105,7 +105,7 @@ impl GitHubNotificationsCollector {
 
         let response = client
             .delete(format!("{}/notifications/threads/{}", self.api_url, thread_id))
-            .send().await.wrap_err_as_user("We were unable to mark the GitHub notification as read.", &[
+            .send().await.wrap_user_err("We were unable to mark the GitHub notification as read.", &[
                 "Make sure that your network connection is working properly.",
                 "Check https://www.githubstatus.com/ for any ongoing issues with GitHub's services.",
             ])?;
@@ -146,7 +146,7 @@ impl GitHubNotificationsCollector {
             headers.insert(
                 reqwest::header::AUTHORIZATION,
                 reqwest::header::HeaderValue::from_str(&format!("Bearer {}", api_key))
-                    .map_err_as_system(&["Report the issue to the development team on GitHub."])?,
+                    .or_system_err(&["Report the issue to the development team on GitHub."])?,
             );
         }
 
@@ -154,7 +154,7 @@ impl GitHubNotificationsCollector {
             .user_agent("SierraSoftworks/automate-rs")
             .default_headers(headers)
             .build()
-            .map_err_as_system(&["Report the issue to the development team on GitHub."])?;
+            .or_system_err(&["Report the issue to the development team on GitHub."])?;
 
         Ok(client)
     }
@@ -202,7 +202,7 @@ impl IncrementalCollector for GitHubNotificationsCollector {
 
         let response = client.get(format!("{}/notifications", self.api_url))
             .header("If-Modified-Since", watermark.as_deref().unwrap_or("Thu, 01 Jan 1970 00:00:00 GMT"))
-            .send().await.wrap_err_as_user("We were unable to fetch GitHub notifications from GitHub.", &[
+            .send().await.wrap_user_err("We were unable to fetch GitHub notifications from GitHub.", &[
                 "Make sure that your network connection is working properly.",
                 "Check https://www.githubstatus.com/ for any ongoing issues with GitHub's services.",
             ])?;
@@ -251,7 +251,7 @@ impl IncrementalCollector for GitHubNotificationsCollector {
             .unwrap_or("Thu, 01 Jan 1970 00:00:00 GMT")
             .to_string();
 
-        let notifications: Vec<GitHubNotificationsItem> = response.json().await.wrap_err_as_user(
+        let notifications: Vec<GitHubNotificationsItem> = response.json().await.wrap_user_err(
             format!(
                 "Failed to read the content of the GitHub Releases from URL '{}'.",
                 &self.api_url

@@ -49,7 +49,7 @@ impl IncrementalCollector for RssCollector {
     ) -> Result<(Vec<Self::Item>, Self::Watermark), human_errors::Error> {
         let content = reqwest::get(&self.feed_url)
             .await
-            .wrap_err_as_user(
+            .wrap_user_err(
                 format!("Failed to fetch RSS feed from URL '{}'.", &self.feed_url),
                 &[
                     "Check that the URL is correct and that the server is reachable.",
@@ -57,7 +57,7 @@ impl IncrementalCollector for RssCollector {
                 ],
             )?
             .error_for_status()
-            .wrap_err_as_user(
+            .wrap_user_err(
                 format!(
                     "We received an unexpected error response from URL '{}'.",
                     &self.feed_url
@@ -66,7 +66,7 @@ impl IncrementalCollector for RssCollector {
             )?
             .bytes()
             .await
-            .wrap_err_as_user(
+            .wrap_user_err(
                 format!(
                     "Failed to read the content of the RSS feed from URL '{}'.",
                     &self.feed_url
@@ -78,7 +78,7 @@ impl IncrementalCollector for RssCollector {
             )?;
 
         let items: Vec<Entry> = parse(&content[..])
-            .wrap_err_as_user(
+            .wrap_user_err(
                 format!(
                     "Failed to parse RSS feed information from URL '{}'.",
                     self.feed_url
