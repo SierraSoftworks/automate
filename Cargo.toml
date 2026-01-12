@@ -13,7 +13,7 @@ cron = "0.15.0"
 croner = { version = "3.0.1", features = ["serde"] }
 dotenvy = "0.15"
 feed-rs = "2.3.1"
-futures-concurrency = "7.6.3"
+futures-concurrency = "7.7.0"
 hex = "0.4.3"
 htmd = "0.5.0"
 hmac = "0.12.1"
