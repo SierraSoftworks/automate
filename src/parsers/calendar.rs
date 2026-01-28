@@ -80,7 +80,7 @@ impl Calendar {
     ) -> Result<Vec<CalendarEvent>, human_errors::Error> {
         let expanded = self
             .icalendar
-            .expand_dates(calcard::common::timezone::Tz::UTC, 10000);
+            .expand_dates(calcard::common::timezone::Tz::UTC, 100000);
         expanded.events.iter().filter(|event| match event.end {
             calcard::icalendar::dates::TimeOrDelta::Delta(d) => event.start + d,
             calcard::icalendar::dates::TimeOrDelta::Time(t) => t
