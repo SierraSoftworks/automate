@@ -75,7 +75,7 @@ impl Job for TodoistUpsertTask {
                 ],
             )?;
 
-            if task.is_completed {
+            if task.completed_at.is_some() {
                 client.0.reopen_task(&existing_task.id).await.wrap_user_err(
                     format!("Failed to reopen completed Todoist task '{}'.", job.title),
                     &[

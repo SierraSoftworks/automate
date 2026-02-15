@@ -18,6 +18,27 @@ const ADVICE_DB_ERROR: &[&str] = &[
 const ADVICE_REPORT_DEV: &[&str] =
     &["Please report this issue to the development team via GitHub."];
 
+const MIGRATIONS: &[&str] = &[
+    "CREATE TABLE IF NOT EXISTS kv (
+        partition TEXT NOT NULL,
+        key TEXT NOT NULL,
+        value TEXT NOT NULL,
+        PRIMARY KEY (partition, key)
+    )",
+    "CREATE TABLE IF NOT EXISTS queues (
+        partition TEXT NOT NULL,
+        key TEXT NOT NULL,
+        payload TEXT,
+        scheduledAt DATETIME DEFAULT CURRENT_TIMESTAMP,
+        hiddenUntil DATETIME DEFAULT CURRENT_TIMESTAMP,
+        reservedBy TEXT,
+        PRIMARY KEY (partition, key)
+    )",
+    "CREATE INDEX IF NOT EXISTS idx_queues_partition_hidden ON queues (partition, hiddenUntil)",
+    "ALTER TABLE queues ADD COLUMN traceparent TEXT",
+    "ALTER TABLE queues ADD COLUMN tracestate TEXT",
+];
+
 impl SqliteDatabase {
     pub async fn open(path: &str) -> Result<Self, errors::Error> {
         let connection = Connection::open(path).await.wrap_user_err(
@@ -340,27 +361,6 @@ impl Queue for SqliteDatabase {
         Ok(())
     }
 }
-
-const MIGRATIONS: &[&str] = &[
-    "CREATE TABLE IF NOT EXISTS kv (
-        partition TEXT NOT NULL,
-        key TEXT NOT NULL,
-        value TEXT NOT NULL,
-        PRIMARY KEY (partition, key)
-    )",
-    "CREATE TABLE IF NOT EXISTS queues (
-        partition TEXT NOT NULL,
-        key TEXT NOT NULL,
-        payload TEXT,
-        scheduledAt DATETIME DEFAULT CURRENT_TIMESTAMP,
-        hiddenUntil DATETIME DEFAULT CURRENT_TIMESTAMP,
-        reservedBy TEXT,
-        PRIMARY KEY (partition, key)
-    )",
-    "CREATE INDEX IF NOT EXISTS idx_queues_partition_hidden ON queues (partition, hiddenUntil)",
-    "ALTER TABLE queues ADD COLUMN traceparent TEXT",
-    "ALTER TABLE queues ADD COLUMN tracestate TEXT",
-];
 
 #[cfg(test)]
 mod tests {

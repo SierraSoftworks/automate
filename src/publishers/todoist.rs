@@ -47,12 +47,26 @@ impl TodoistClient {
                 key,
                 move || {
                     Box::pin(async move {
-                        client.get_projects().await.wrap_user_err(
-                "Failed to fetch Todoist projects.",
-                &[
-                    "Check that your Todoist API token is valid and has the necessary permissions.",
-                ],
-            )
+                      let mut projects = Vec::new();
+                      let mut cursor = None;
+
+                      loop {
+                        let response = client.get_projects(None, cursor).await.wrap_user_err(
+                            "Failed to fetch Todoist projects.",
+                            &[
+                                "Check that your Todoist API token is valid and has the necessary permissions.",
+                            ],
+                        )?;
+
+                        projects.extend(response.results);
+                        cursor = response.next_cursor;
+
+                        if cursor.is_none() {
+                            break;
+                        }
+                      }
+
+                      Ok(projects)
                     })
                 },
                 chrono::Duration::hours(24),
@@ -93,12 +107,23 @@ impl TodoistClient {
                     key,
                     move || {
                         Box::pin(async move {
-                            client.get_sections().await.wrap_user_err(
-                    "Failed to fetch Todoist sections.",
-                    &[
-                        "Check that your Todoist API token is valid and has the necessary permissions.",
-                    ],
-                )
+                          let mut sections = Vec::new();
+                          let mut cursor = None;
+                          loop {
+                            let response = client.get_sections(None, cursor).await.wrap_user_err(
+                                "Failed to fetch Todoist sections.",
+                                &[
+                                    "Check that your Todoist API token is valid and has the necessary permissions.",
+                                ],
+                            )?;
+                            sections.extend(response.results);
+                            cursor = response.next_cursor;
+                            if cursor.is_none() {
+                                break;
+                            }
+                          }
+
+                          Ok(sections)
                         })
                     },
                     chrono::Duration::hours(24),

@@ -3,6 +3,7 @@ use human_errors::ResultExt;
 
 use crate::{filter::Filterable, prelude::Services};
 
+mod admin;
 mod oauth;
 mod telemetry;
 mod ui;
@@ -42,7 +43,7 @@ pub async fn run_web_server<S: Services + Clone + Send + Sync + 'static>(
                                     .unwrap_or(false)
                             })
                         }))
-                        .to(ui::admin_index::<S>),
+                        .to(admin::admin_index::<S>),
                 )
                 .default_service(web::to(ui::not_found))
         })
