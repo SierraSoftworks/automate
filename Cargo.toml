@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-actix-web = "4.12.1"
+actix-web = "4.13.0"
 async-trait = "0.1.89"
 calcard = "0.3.2"
 chrono = { version = "0.4.43", features = ["serde"] }
