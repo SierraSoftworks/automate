@@ -6,7 +6,7 @@ mod db;
 
 pub use helpers::*;
 pub use page::*;
-pub use db::KeyValueView;
+pub use db::{KeyValueView, QueueMessageDisplay, QueueView};
 
 pub async fn render_page<F>(title: impl ToString, children: F) -> actix_web::HttpResponse
 where

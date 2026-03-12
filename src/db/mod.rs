@@ -81,6 +81,12 @@ pub trait Queue {
         msg: QueueMessage<T>,
     ) -> Result<(), errors::Error>;
 
+    async fn peek<P: Into<Cow<'static, str>> + Send, T: DeserializeOwned + Send + 'static>(
+        &self,
+        partition: P,
+        max_items: usize,
+    ) -> Result<Vec<PeekedMessage<T>>, errors::Error>;
+
     fn partition<T: Serialize + DeserializeOwned + Send + 'static>(
         &self,
         name: impl ToString,
@@ -90,6 +96,16 @@ pub trait Queue {
     {
         Partition::new(self.clone(), name.to_string())
     }
+}
+
+pub struct PeekedMessage<T> {
+    pub key: String,
+    pub payload: T,
+    pub scheduled_at: chrono::DateTime<chrono::Utc>,
+    pub hidden_until: chrono::DateTime<chrono::Utc>,
+    pub reserved_by: Option<String>,
+    pub traceparent: Option<String>,
+    pub tracestate: Option<String>,
 }
 
 #[allow(dead_code)]

@@ -68,6 +68,10 @@ impl<D: Queue, T: Serialize + DeserializeOwned + Send + 'static> Partition<D, T>
     pub async fn complete(&self, msg: QueueMessage<T>) -> Result<(), human_errors::Error> {
         self.db.complete(self.name.clone(), msg).await
     }
+
+    pub async fn peek(&self, max_items: usize) -> Result<Vec<PeekedMessage<T>>, human_errors::Error> {
+        self.db.peek(self.name.clone(), max_items).await
+    }
 }
 
 #[allow(dead_code)]

@@ -3,9 +3,11 @@ html {
 }
 
 body {
-    height: 100vh;
+    min-height: 100vh;
     width: 100vw;
     margin: 0;
+    display: flex;
+    flex-direction: column;
 }
 
 h1 {
@@ -29,10 +31,8 @@ h1>strong {
 }
 
 footer {
-    position: absolute;
-    bottom: 1rem;
-    left: 0;
-    right: 0;
+    margin-top: auto;
+    padding: 1rem 0;
     text-align: center;
     font-size: 0.8rem;
     opacity: 0.7;
@@ -124,6 +124,73 @@ a>button:focus {
   font-size: 0.85rem;
   color: #555;
   line-height: 1.55;
+}
+
+/* Queue message view */
+.queue-entries {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  border: 1px solid #e8e8e8;
+  border-radius: 4px;
+  overflow: hidden;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.06);
+}
+
+.queue-entry {
+  background: #fff;
+  border-top: 1px solid #f0f0f0;
+}
+
+.queue-entry:first-child {
+  border-top: none;
+}
+
+.queue-entry-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.65rem 1rem;
+  border-bottom: 1px solid #f4f4f4;
+  background: #fafafa;
+}
+
+.queue-entry-key {
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: #333;
+  word-break: break-all;
+}
+
+.queue-status {
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 0.2rem 0.55rem;
+  border-radius: 3px;
+  white-space: nowrap;
+  margin-left: 1rem;
+}
+
+.status-pending  { color: #2e7d32; background: #f1f8f1; }
+.status-delayed  { color: #0F5A80; background: #f0f6fa; }
+.status-reserved { color: #b45309; background: #fdf6ec; }
+
+.queue-entry-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 1.5rem;
+  padding: 0.5rem 1rem;
+  font-size: 0.8rem;
+  color: #666;
+  border-bottom: 1px solid #f4f4f4;
+}
+
+.queue-meta-label {
+  font-weight: 600;
+  color: #444;
 }
 
 /* Key-Value Partition View */

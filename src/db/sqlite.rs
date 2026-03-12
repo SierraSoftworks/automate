@@ -239,7 +239,8 @@ impl KeyValueStore for SqliteDatabase {
 
 #[async_trait::async_trait]
 impl Queue for SqliteDatabase {
-    #[instrument("db.sqlite.enqueue", skip(self, partition, job, idempotency_key, delay), fields(otel.kind=?OpenTelemetrySpanKind::Producer, job.kind=std::any::type_name::<T>()), err(Display))]
+    #[instrument("db.sqlite.enqueue", skip(self, partition, job, idempotency_key, delay), fields(otel.kind=?OpenTelemetrySpanKind::Producer, job.kind=std::any::type_name::<T>()
+    ), err(Display))]
     async fn enqueue<P: Into<Cow<'static, str>> + Send, T: serde::Serialize + Send + 'static>(
         &self,
         partition: P,
@@ -279,7 +280,8 @@ impl Queue for SqliteDatabase {
         Ok(())
     }
 
-    #[instrument("db.sqlite.dequeue", skip(self, partition, reserve_for), fields(otel.kind=?OpenTelemetrySpanKind::Consumer, job.kind=std::any::type_name::<T>()), err(Display))]
+    #[instrument("db.sqlite.dequeue", skip(self, partition, reserve_for), fields(otel.kind=?OpenTelemetrySpanKind::Consumer, job.kind=std::any::type_name::<T>()
+    ), err(Display))]
     async fn dequeue<P: Into<Cow<'static, str>> + Send, T: DeserializeOwned + Send + 'static>(
         &self,
         partition: P,
@@ -425,6 +427,62 @@ impl Queue for SqliteDatabase {
             .await
             .or_system_err(ADVICE_DB_ERROR)?;
         Ok(())
+    }
+
+    #[instrument("db.sqlite.peek", skip(self, partition, max_items), fields(otel.kind=?OpenTelemetrySpanKind::Client
+    ), err(Display))]
+    async fn peek<P: Into<Cow<'static, str>> + Send, T: DeserializeOwned + Send + 'static>(
+        &self,
+        partition: P,
+        max_items: usize,
+    ) -> std::result::Result<Vec<super::PeekedMessage<T>>, errors::Error> {
+        let partition = partition.into();
+        self.connection
+            .call(move |c| {
+                let mut stmt = c
+                    .prepare(
+                        "SELECT key, payload, scheduledAt, hiddenUntil, reservedBy, \
+                         traceparent, tracestate \
+                         FROM queues WHERE partition = ?1 \
+                         ORDER BY scheduledAt ASC LIMIT ?2",
+                    )
+                    .or_system_err(ADVICE_DB_ERROR)?;
+
+                let iter = stmt
+                    .query_map((&*partition, max_items as i64), |row| {
+                        let key: String = row.get(0)?;
+                        let payload_str: String = row.get(1)?;
+                        let scheduled_at: chrono::DateTime<chrono::Utc> = row.get(2)?;
+                        let hidden_until: chrono::DateTime<chrono::Utc> = row.get(3)?;
+                        let reserved_by: Option<String> = row.get(4)?;
+                        let traceparent: Option<String> = row.get(5)?;
+                        let tracestate: Option<String> = row.get(6)?;
+
+                        let payload: T = serde_json::from_str(&payload_str).map_err(|e| {
+                            rusqlite::Error::FromSqlConversionFailure(
+                                1,
+                                rusqlite::types::Type::Text,
+                                Box::new(e),
+                            )
+                        })?;
+
+                        Ok(super::PeekedMessage {
+                            key,
+                            payload,
+                            scheduled_at,
+                            hidden_until,
+                            reserved_by,
+                            traceparent,
+                            tracestate,
+                        })
+                    })
+                    .or_system_err(ADVICE_DB_ERROR)?;
+
+                iter.collect::<Result<Vec<_>, _>>()
+                    .or_system_err(ADVICE_DB_ERROR)
+            })
+            .await
+            .or_system_err(ADVICE_DB_ERROR)
     }
 }
 
