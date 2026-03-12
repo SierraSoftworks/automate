@@ -54,3 +54,158 @@ a>button:hover,
 a>button:focus {
   background: #117bb0;
 }
+
+/* Admin layout */
+.admin-content {
+  margin: 5rem 0;
+  padding: 0 40px 5rem;
+}
+
+.admin-intro {
+  color: #555;
+  font-size: 0.95rem;
+  line-height: 1.6;
+  margin: 0 0 2rem;
+}
+
+/* Admin endpoint listing */
+.admin-endpoints {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  border: 1px solid #e8e8e8;
+  border-radius: 4px;
+  overflow: hidden;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.06);
+  margin-bottom: 2rem;
+}
+
+.admin-endpoint {
+  display: grid;
+  grid-template-columns: 64px 1fr;
+  background: #fff;
+}
+
+.admin-endpoint + .admin-endpoint {
+  border-top: 1px solid #f0f0f0;
+}
+
+.admin-endpoint-method {
+  padding: 0.9rem 0.75rem;
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  color: #0F5A80;
+  background: #f5fafd;
+  border-right: 1px solid #e8e8e8;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+}
+
+.admin-endpoint-detail {
+  padding: 0.75rem 1rem;
+}
+
+.admin-endpoint-path {
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: #1a1a1a;
+  margin-bottom: 0.4rem;
+}
+
+.admin-endpoint-path em {
+  font-style: normal;
+  color: #0F5A80;
+}
+
+.admin-endpoint-desc {
+  font-size: 0.85rem;
+  color: #555;
+  line-height: 1.55;
+}
+
+/* Key-Value Partition View */
+.kv-view {
+  font-family: sans-serif;
+}
+
+.kv-header {
+  display: flex;
+  align-items: baseline;
+  gap: 1rem;
+  margin-bottom: 1.5rem;
+  padding-bottom: 0.75rem;
+  border-bottom: 1px solid #e0e0e0;
+}
+
+.kv-partition {
+  font-size: 1.5rem;
+  font-weight: 300;
+  color: #1a1a1a;
+}
+
+.kv-count {
+  font-size: 0.85rem;
+  color: #888;
+}
+
+.kv-empty {
+  padding: 2rem 0;
+  color: #888;
+  font-size: 0.95rem;
+}
+
+.kv-entries {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  border: 1px solid #e8e8e8;
+  border-radius: 4px;
+  overflow: hidden;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.06);
+}
+
+.kv-entry {
+  display: grid;
+  grid-template-columns: 280px 1fr;
+  background: #fff;
+}
+
+.kv-entry + .kv-entry {
+  border-top: 1px solid #f0f0f0;
+}
+
+.kv-entry:hover {
+  background: #fafafa;
+}
+
+.kv-entry-key {
+  padding: 0.75rem 1rem;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: #333;
+  word-break: break-all;
+  border-right: 1px solid #f0f0f0;
+  background: #fafafa;
+  display: flex;
+  align-items: flex-start;
+}
+
+.kv-entry-value {
+  margin: 0;
+  padding: 0.75rem 1rem;
+  font-size: 0.8rem;
+  line-height: 1.5;
+  color: #444;
+  background: transparent;
+  overflow-x: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.kv-entry-value code {
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+}
+

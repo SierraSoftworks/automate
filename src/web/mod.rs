@@ -32,7 +32,7 @@ pub async fn run_web_server<S: Services + Clone + Send + Sync + 'static>(
                 .service(oauth::configure::<S>())
                 .route("/webhooks/{kind:.*}", web::post().to(webhooks::handle::<S>))
                 .service(
-                    web::resource("/admin")
+                    web::scope("/admin")
                         .guard(actix_web::guard::fn_guard(|ctx| {
                             ctx.app_data().is_some_and(|services: &web::Data<S>| {
                                 services
@@ -43,7 +43,12 @@ pub async fn run_web_server<S: Services + Clone + Send + Sync + 'static>(
                                     .unwrap_or(false)
                             })
                         }))
-                        .to(admin::admin_index::<S>),
+                        .route("", web::get().to(admin::admin_index::<S>))
+                        .route("/", web::get().to(admin::admin_index::<S>))
+                        .route(
+                            "/db/{partition}/keys",
+                            web::get().to(admin::admin_db_partition_keys::<S>),
+                        ),
                 )
                 .default_service(web::to(ui::not_found))
         })

@@ -2,9 +2,11 @@ use yew::{ServerRenderer, virtual_dom::VNode};
 
 mod helpers;
 mod page;
+mod db;
 
 pub use helpers::*;
 pub use page::*;
+pub use db::KeyValueView;
 
 pub async fn render_page<F>(title: impl ToString, children: F) -> actix_web::HttpResponse
 where
