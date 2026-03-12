@@ -26,9 +26,16 @@ fn relative_time(dt: chrono::DateTime<chrono::Utc>) -> String {
 }
 
 pub async fn admin_index<S: Services>(
-    _services: web::Data<S>,
+    services: web::Data<S>,
 ) -> actix_web::HttpResponse {
-    render_page("Admin | Automate", || {
+    let kv_partitions = services.kv().partitions().await.unwrap_or_default();
+    let queue_partitions = services.queue().partitions().await.unwrap_or_default();
+
+    let kv_set: std::collections::BTreeSet<String> = kv_partitions.into_iter().collect();
+    let queue_set: std::collections::BTreeSet<String> = queue_partitions.into_iter().collect();
+    let all_partitions: Vec<String> = kv_set.union(&queue_set).cloned().collect();
+
+    render_page("Admin | Automate", move || {
         html! {
             <div class="admin-content">
                 <h1>{ "Admin " }<strong>{ "Dashboard" }</strong></h1>
@@ -63,6 +70,39 @@ pub async fn admin_index<S: Services>(
                             </div>
                         </div>
                     </div>
+                </div>
+
+                <div class="partition-section">
+                    <h2>{ "Partitions" }</h2>
+                    {
+                        if all_partitions.is_empty() {
+                            html! { <p class="partition-empty">{ "No partitions found." }</p> }
+                        } else {
+                            html! {
+                                <div class="partition-list">
+                                    { for all_partitions.iter().map(|p| {
+                                        let has_kv = kv_set.contains(p);
+                                        let has_queue = queue_set.contains(p);
+                                        let kv_href = format!("/admin/db/{p}/keys");
+                                        let queue_href = format!("/admin/db/{p}/messages");
+                                        html! {
+                                            <div class="partition-item">
+                                                <span class="partition-name">{ p }</span>
+                                                <span class="partition-actions">
+                                                    { if has_kv { html! {
+                                                        <a class="partition-action" href={kv_href}>{ "keys" }</a>
+                                                    }} else { html! {} } }
+                                                    { if has_queue { html! {
+                                                        <a class="partition-action" href={queue_href}>{ "messages" }</a>
+                                                    }} else { html! {} } }
+                                                </span>
+                                            </div>
+                                        }
+                                    }) }
+                                </div>
+                            }
+                        }
+                    }
                 </div>
             </div>
         }

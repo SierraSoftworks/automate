@@ -37,6 +37,8 @@ pub trait KeyValueStore {
         key: impl Into<Cow<'static, str>> + Send,
     ) -> Result<(), errors::Error>;
 
+    async fn partitions(&self) -> Result<Vec<String>, errors::Error>;
+
     fn partition<T: Serialize + DeserializeOwned + Send + 'static>(
         &self,
         name: impl ToString,
@@ -86,6 +88,8 @@ pub trait Queue {
         partition: P,
         max_items: usize,
     ) -> Result<Vec<PeekedMessage<T>>, errors::Error>;
+
+    async fn partitions(&self) -> Result<Vec<String>, errors::Error>;
 
     fn partition<T: Serialize + DeserializeOwned + Send + 'static>(
         &self,

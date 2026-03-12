@@ -193,6 +193,71 @@ a>button:focus {
   color: #444;
 }
 
+/* Partition discovery list */
+.partition-section {
+  margin-top: 2.5rem;
+}
+
+.partition-section > h2 {
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #888;
+  margin: 0 0 0.75rem;
+}
+
+.partition-list {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid #e8e8e8;
+  border-radius: 4px;
+  overflow: hidden;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.06);
+}
+
+.partition-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.65rem 1rem;
+  background: #fff;
+  border-top: 1px solid #f0f0f0;
+}
+
+.partition-item:first-child {
+  border-top: none;
+}
+
+.partition-name {
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+  font-size: 0.85rem;
+  color: #1a1a1a;
+}
+
+.partition-actions {
+  display: flex;
+  gap: 0.75rem;
+}
+
+.partition-action {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: #0F5A80;
+  letter-spacing: 0.03em;
+  text-decoration: none;
+}
+
+.partition-action:hover {
+  text-decoration: underline;
+}
+
+.partition-empty {
+  font-size: 0.85rem;
+  color: #999;
+  margin: 0;
+}
+
 /* Key-Value Partition View */
 .kv-view {
   font-family: sans-serif;

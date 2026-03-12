@@ -235,6 +235,25 @@ impl KeyValueStore for SqliteDatabase {
             .or_system_err(ADVICE_DB_ERROR)?;
         Ok(())
     }
+
+    #[instrument("db.sqlite.kv_partitions", skip(self), fields(otel.kind=?OpenTelemetrySpanKind::Client), err(Display))]
+    async fn partitions(&self) -> std::result::Result<Vec<String>, errors::Error> {
+        self.connection
+            .call(|c| {
+                let mut stmt = c
+                    .prepare("SELECT DISTINCT partition FROM kv ORDER BY partition ASC")
+                    .or_system_err(ADVICE_DB_ERROR)?;
+
+                let iter = stmt
+                    .query_map([], |row| row.get(0))
+                    .or_system_err(ADVICE_DB_ERROR)?;
+
+                iter.collect::<Result<Vec<_>, _>>()
+                    .or_system_err(ADVICE_DB_ERROR)
+            })
+            .await
+            .or_system_err(ADVICE_DB_ERROR)
+    }
 }
 
 #[async_trait::async_trait]
@@ -476,6 +495,25 @@ impl Queue for SqliteDatabase {
                             tracestate,
                         })
                     })
+                    .or_system_err(ADVICE_DB_ERROR)?;
+
+                iter.collect::<Result<Vec<_>, _>>()
+                    .or_system_err(ADVICE_DB_ERROR)
+            })
+            .await
+            .or_system_err(ADVICE_DB_ERROR)
+    }
+
+    #[instrument("db.sqlite.queue_partitions", skip(self), fields(otel.kind=?OpenTelemetrySpanKind::Client), err(Display))]
+    async fn partitions(&self) -> std::result::Result<Vec<String>, errors::Error> {
+        self.connection
+            .call(|c| {
+                let mut stmt = c
+                    .prepare("SELECT DISTINCT partition FROM queues ORDER BY partition ASC")
+                    .or_system_err(ADVICE_DB_ERROR)?;
+
+                let iter = stmt
+                    .query_map([], |row| row.get(0))
                     .or_system_err(ADVICE_DB_ERROR)?;
 
                 iter.collect::<Result<Vec<_>, _>>()
