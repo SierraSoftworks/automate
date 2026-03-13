@@ -30,7 +30,7 @@ impl Job for GitHubNotificationsCleanupWorkflow {
     type JobType = GitHubNotificationsCleanupConfig;
 
     fn partition() -> &'static str {
-        "workflow/github-notifications-cleanup"
+        "github/notifications/cleanup"
     }
 
     #[instrument(

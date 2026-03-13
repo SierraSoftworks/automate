@@ -6,15 +6,7 @@ use crate::prelude::*;
 pub trait IncrementalCollector: Collector {
     type Watermark: Ord + Serialize + DeserializeOwned + Send + 'static;
 
-    fn kind(&self) -> &'static str;
-
-    fn partition(&self, namespace: Option<&'static str>) -> String {
-        if let Some(ns) = namespace {
-            format!("collector::{ns}::{}", self.kind())
-        } else {
-            format!("collector::{}", self.kind())
-        }
-    }
+    fn partition(&self) -> &'static str;
 
     fn key(&self) -> Cow<'static, str>;
 
@@ -29,10 +21,10 @@ pub trait IncrementalCollector: Collector {
         &self,
         services: &impl Services,
     ) -> Result<Vec<Self::Item>, human_errors::Error> {
-        let partition = self.partition(None);
+        let partition = self.partition();
         let key = self.key();
 
-        let current_watermark = services.kv().get(partition.clone(), key.clone()).await?;
+        let current_watermark = services.kv().get(partition, key.clone()).await?;
 
         let (new_items, new_watermark) = self.fetch_since(current_watermark, services).await?;
         services.kv().set(partition, key, new_watermark).await?;

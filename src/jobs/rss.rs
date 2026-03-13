@@ -45,7 +45,7 @@ impl Job for RssWorkflow {
     type JobType = RssConfig;
 
     fn partition() -> &'static str {
-        "workflow/rss-todoist"
+        "rss/todoist"
     }
 
     #[instrument("workflow.rss.setup", skip(self, services), err(Display))]

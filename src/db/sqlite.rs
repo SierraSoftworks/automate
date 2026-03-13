@@ -37,6 +37,20 @@ const MIGRATIONS: &[&str] = &[
     "CREATE INDEX IF NOT EXISTS idx_queues_partition_hidden ON queues (partition, hiddenUntil)",
     "ALTER TABLE queues ADD COLUMN traceparent TEXT",
     "ALTER TABLE queues ADD COLUMN tracestate TEXT",
+    // Migration 6: rename partitions to hierarchical /‑delimited scheme
+    "UPDATE kv SET partition = 'calendar/ics'        WHERE partition = 'collector::calendar';
+     UPDATE kv SET partition = 'github/notifications' WHERE partition = 'collector::github_notifications';
+     UPDATE kv SET partition = 'github/releases'      WHERE partition = 'collector::github_releases';
+     UPDATE kv SET partition = 'rss/feed'             WHERE partition = 'collector::rss';
+     UPDATE kv SET partition = 'spotify/liked-tracks' WHERE partition = 'collector::spotify/tracks';
+     UPDATE queues SET partition = 'calendar/todoist'               WHERE partition = 'workflow/calendar-todoist';
+     UPDATE queues SET partition = 'github/notifications/todoist'   WHERE partition = 'workflow/github-notifications-todoist';
+     UPDATE queues SET partition = 'github/notifications/cleanup'   WHERE partition = 'workflow/github-notifications-cleanup';
+     UPDATE queues SET partition = 'github/releases/todoist'        WHERE partition = 'workflow/github-releases-todoist';
+     UPDATE queues SET partition = 'rss/todoist'                    WHERE partition = 'workflow/rss-todoist';
+     UPDATE queues SET partition = 'spotify/yearly-playlist'        WHERE partition = 'workflow/spotify-yearly-playlist';
+     UPDATE queues SET partition = 'xkcd/todoist'                   WHERE partition = 'workflow/xkcd-todoist';
+     UPDATE queues SET partition = 'youtube/todoist'                WHERE partition = 'workflow/youtube-todoist';",
 ];
 
 impl SqliteDatabase {
@@ -101,7 +115,7 @@ impl SqliteDatabase {
             self.connection
                 .call(move |c| {
                     let transaction = c.transaction()?;
-                    transaction.execute(migration, [])?;
+                    transaction.execute_batch(migration)?;
                     transaction.execute("INSERT INTO migrations (id) VALUES (?1)", [i + 1])?;
 
                     transaction.commit()

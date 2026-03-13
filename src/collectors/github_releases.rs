@@ -77,8 +77,8 @@ impl Collector for GitHubReleasesCollector {
 impl IncrementalCollector for GitHubReleasesCollector {
     type Watermark = chrono::DateTime<chrono::Utc>;
 
-    fn kind(&self) -> &'static str {
-        "github_releases"
+    fn partition(&self) -> &'static str {
+        "github/releases"
     }
 
     fn key(&self) -> std::borrow::Cow<'static, str> {
@@ -363,7 +363,7 @@ mod tests {
         services
             .kv()
             .set(
-                collector.partition(None),
+                collector.partition(),
                 collector.key(),
                 chrono::DateTime::parse_from_rfc3339("2024-03-01T10:00:00Z")
                     .unwrap()

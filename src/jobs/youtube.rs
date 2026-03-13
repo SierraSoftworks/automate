@@ -36,7 +36,7 @@ impl Job for YouTubeWorkflow {
     type JobType = YouTubeConfig;
 
     fn partition() -> &'static str {
-        "workflow/youtube-todoist"
+        "youtube/todoist"
     }
 
     #[instrument("workflow.youtube.setup", skip(self, services), err(Display))]

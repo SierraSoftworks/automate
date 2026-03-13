@@ -134,7 +134,7 @@ impl Job for GitHubNotificationsWorkflow {
     type JobType = GitHubNotificationsConfig;
 
     fn partition() -> &'static str {
-        "workflow/github-notifications-todoist"
+        "github/notifications/todoist"
     }
 
     #[instrument(

@@ -92,7 +92,10 @@ impl TailscaleWebhook {
 
         if (timestamp - Utc::now()).abs() > chrono::Duration::minutes(5) {
             return Err(human_errors::user(
-                "The Tailscale webhook signature timestamp is too old or too far in the future.",
+                format!(
+                    "The Tailscale webhook signature timestamp is too old or too far in the future (got {})",
+                    timestamp
+                ),
                 &[
                     "Ensure that the system clock on this server is accurate.",
                     "Check that the webhook is configured correctly at https://login.tailscale.com/admin/settings/webhooks",
@@ -155,7 +158,13 @@ impl Job for TailscaleWebhook {
                 .map(|(_, value)| value.as_str());
 
             if let Some(signature) = signature {
-                Self::verify_signature(secret, &job.body, signature)?;
+                if let Err(err) = Self::verify_signature(secret, &job.body, signature) {
+                    warn!(
+                        "Failed to verify Tailscale webhook signature, rejecting request: {}",
+                        err
+                    );
+                    return Ok(());
+                }
             } else {
                 warn!(
                     "Received Tailscale webhook without signature, but secret is configured; rejecting request."

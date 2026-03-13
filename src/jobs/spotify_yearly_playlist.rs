@@ -11,7 +11,7 @@ impl Job for SpotifyYearlyPlaylistWorkflow {
     type JobType = OAuth2RefreshToken;
 
     fn partition() -> &'static str {
-        "workflow/spotify-yearly-playlist"
+        "spotify/yearly-playlist"
     }
 
     fn propagate_parent() -> bool {
