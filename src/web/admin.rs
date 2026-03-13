@@ -28,75 +28,43 @@ fn relative_time(dt: chrono::DateTime<chrono::Utc>) -> String {
 pub async fn admin_index<S: Services>(
     services: web::Data<S>,
 ) -> actix_web::HttpResponse {
-    let kv_partitions = services.kv().partitions().await.unwrap_or_default();
     let queue_partitions = services.queue().partitions().await.unwrap_or_default();
-
-    let kv_set: std::collections::BTreeSet<String> = kv_partitions.into_iter().collect();
-    let queue_set: std::collections::BTreeSet<String> = queue_partitions.into_iter().collect();
-    let all_partitions: Vec<String> = kv_set.union(&queue_set).cloned().collect();
 
     render_page("Admin | Automate", move || {
         html! {
             <div class="admin-content">
                 <h1>{ "Admin " }<strong>{ "Dashboard" }</strong></h1>
                 <p class="admin-intro">
-                    { "The following admin endpoints are available. All endpoints require a request
-                       to originate from an address permitted by the " }
+                    { "All endpoints require a request to originate from an address permitted by the " }
                     <code>{ "web.admin_acl" }</code>
                     { " filter." }
                 </p>
-                <div class="admin-endpoints">
-                    <div class="admin-endpoint">
-                        <div class="admin-endpoint-method">{ "GET" }</div>
-                        <div class="admin-endpoint-detail">
-                            <div class="admin-endpoint-path">{ "/admin/db/" }<em>{ "{partition}" }</em>{ "/keys" }</div>
-                            <div class="admin-endpoint-desc">
-                                { "Lists every row key and its JSON value stored in the named key-value
-                                   partition. Replace " }<em>{ "{partition}" }</em>
-                                { " with the exact partition name used by the application, for example " }
-                                <code>{ "/admin/db/github_notifications/keys" }</code>{ "." }
-                            </div>
-                        </div>
-                    </div>
-                    <div class="admin-endpoint">
-                        <div class="admin-endpoint-method">{ "GET" }</div>
-                        <div class="admin-endpoint-detail">
-                            <div class="admin-endpoint-path">{ "/admin/db/" }<em>{ "{partition}" }</em>{ "/messages" }</div>
-                            <div class="admin-endpoint-desc">
-                                { "Shows up to 100 queued messages in the named queue partition, including
-                                   each message's status (Pending, Delayed, or Reserved), scheduled time,
-                                   availability window, traceparent, and JSON payload. For example " }
-                                <code>{ "/admin/db/github_notifications/messages" }</code>{ "." }
-                            </div>
-                        </div>
+
+                <div class="partition-section">
+                    <h2>{ "Key-Value Store" }</h2>
+                    <div class="partition-list">
+                        <a class="partition-item" href="/admin/db">
+                            <span class="partition-name">{ "All partitions" }</span>
+                            <span class="partition-action">{ "view" }</span>
+                        </a>
                     </div>
                 </div>
 
                 <div class="partition-section">
-                    <h2>{ "Partitions" }</h2>
+                    <h2>{ "Queue Partitions" }</h2>
                     {
-                        if all_partitions.is_empty() {
-                            html! { <p class="partition-empty">{ "No partitions found." }</p> }
+                        if queue_partitions.is_empty() {
+                            html! { <p class="partition-empty">{ "No queue partitions found." }</p> }
                         } else {
                             html! {
                                 <div class="partition-list">
-                                    { for all_partitions.iter().map(|p| {
-                                        let has_kv = kv_set.contains(p);
-                                        let has_queue = queue_set.contains(p);
-                                        let kv_href = format!("/admin/db/{p}/keys");
-                                        let queue_href = format!("/admin/db/{p}/messages");
+                                    { for queue_partitions.iter().map(|p| {
+                                        let href = format!("/admin/queue/{p}");
                                         html! {
-                                            <div class="partition-item">
+                                            <a class="partition-item" href={href}>
                                                 <span class="partition-name">{ p }</span>
-                                                <span class="partition-actions">
-                                                    { if has_kv { html! {
-                                                        <a class="partition-action" href={kv_href}>{ "keys" }</a>
-                                                    }} else { html! {} } }
-                                                    { if has_queue { html! {
-                                                        <a class="partition-action" href={queue_href}>{ "messages" }</a>
-                                                    }} else { html! {} } }
-                                                </span>
-                                            </div>
+                                                <span class="partition-action">{ "view" }</span>
+                                            </a>
                                         }
                                     }) }
                                 </div>
@@ -110,50 +78,69 @@ pub async fn admin_index<S: Services>(
     .await
 }
 
-pub async fn admin_db_partition_keys<S: Services>(
+pub async fn admin_db_overview<S: Services>(
     services: web::Data<S>,
-    partition: web::Path<String>,
 ) -> actix_web::HttpResponse {
-    let partition_name = partition.into_inner();
-
-    let entries: Vec<(String, serde_json::Value)> = match services
+    let all_entries = match services
         .kv()
-        .list::<serde_json::Value>(partition_name.clone())
+        .scan::<serde_json::Value>()
         .await
     {
         Ok(entries) => entries,
         Err(err) => {
             let message = err.to_string();
-            return render_page(
-                format!("{partition_name} | DB | Admin | Automate"),
-                move || {
-                    html! {
-                        <crate::ui::Center>
-                            <h1>{ "Failed to load partition" }</h1>
-                            <p>{ message.clone() }</p>
-                        </crate::ui::Center>
-                    }
-                },
-            )
+            return render_page("DB | Admin | Automate", move || {
+                html! {
+                    <crate::ui::Center>
+                        <h1>{ "Failed to scan key-value store" }</h1>
+                        <p>{ message.clone() }</p>
+                    </crate::ui::Center>
+                }
+            })
             .await;
         }
     };
 
-    let title = format!("{partition_name} | DB | Admin | Automate");
-    render_page(title, move || {
+    let mut groups: std::collections::BTreeMap<String, Vec<(String, serde_json::Value)>> =
+        std::collections::BTreeMap::new();
+    for (partition, key, value) in all_entries {
+        groups.entry(partition).or_default().push((key, value));
+    }
+    let partitions: Vec<(String, Vec<(String, serde_json::Value)>)> =
+        groups.into_iter().collect();
+
+    render_page("DB | Admin | Automate", move || {
         html! {
             <div class="admin-content">
-                <crate::ui::KeyValueView
-                    partition={partition_name.clone()}
-                    entries={entries.clone()}
-                />
+                {
+                    if partitions.is_empty() {
+                        html! {
+                            <crate::ui::Center>
+                                <p>{ "The key-value store is empty." }</p>
+                            </crate::ui::Center>
+                        }
+                    } else {
+                        html! {
+                            <div class="kv-overview">
+                                { for partitions.iter().map(|(partition, entries)| {
+                                    html! {
+                                        <crate::ui::KeyValueView
+                                            partition={partition.clone()}
+                                            entries={entries.clone()}
+                                        />
+                                    }
+                                }) }
+                            </div>
+                        }
+                    }
+                }
             </div>
         }
     })
     .await
 }
 
-pub async fn admin_queue_partition_messages<S: Services>(
+pub async fn admin_queue_partition<S: Services>(
     services: web::Data<S>,
     partition: web::Path<String>,
 ) -> actix_web::HttpResponse {

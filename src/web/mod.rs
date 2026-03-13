@@ -45,13 +45,10 @@ pub async fn run_web_server<S: Services + Clone + Send + Sync + 'static>(
                         }))
                         .route("", web::get().to(admin::admin_index::<S>))
                         .route("/", web::get().to(admin::admin_index::<S>))
+                        .route("/db", web::get().to(admin::admin_db_overview::<S>))
                         .route(
-                            "/db/{partition:.*}/keys",
-                            web::get().to(admin::admin_db_partition_keys::<S>),
-                        )
-                        .route(
-                            "/db/{partition:.*}/messages",
-                            web::get().to(admin::admin_queue_partition_messages::<S>),
+                            "/queue/{partition:.*}",
+                            web::get().to(admin::admin_queue_partition::<S>),
                         ),
                 )
                 .default_service(web::to(ui::not_found))

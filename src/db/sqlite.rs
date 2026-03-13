@@ -268,6 +268,42 @@ impl KeyValueStore for SqliteDatabase {
             .await
             .or_system_err(ADVICE_DB_ERROR)
     }
+
+    #[instrument("db.sqlite.kv_scan", skip(self), fields(otel.kind=?OpenTelemetrySpanKind::Client), err(Display))]
+    async fn scan<T: DeserializeOwned + Send + 'static>(
+        &self,
+    ) -> std::result::Result<Vec<(String, String, T)>, errors::Error> {
+        self.connection
+            .call(|c| {
+                let mut stmt = c
+                    .prepare(
+                        "SELECT partition, key, value FROM kv \
+                         ORDER BY partition ASC, key ASC",
+                    )
+                    .or_system_err(ADVICE_DB_ERROR)?;
+
+                let iter = stmt
+                    .query_map([], |row| {
+                        let partition: String = row.get(0)?;
+                        let key: String = row.get(1)?;
+                        let value_str: String = row.get(2)?;
+                        let value: T = serde_json::from_str(&value_str).map_err(|e| {
+                            rusqlite::Error::FromSqlConversionFailure(
+                                2,
+                                rusqlite::types::Type::Text,
+                                Box::new(e),
+                            )
+                        })?;
+                        Ok((partition, key, value))
+                    })
+                    .or_system_err(ADVICE_DB_ERROR)?;
+
+                iter.collect::<Result<Vec<_>, _>>()
+                    .or_system_err(ADVICE_DB_ERROR)
+            })
+            .await
+            .or_system_err(ADVICE_DB_ERROR)
+    }
 }
 
 #[async_trait::async_trait]

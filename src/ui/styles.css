@@ -223,10 +223,17 @@ a>button:focus {
   padding: 0.65rem 1rem;
   background: #fff;
   border-top: 1px solid #f0f0f0;
+  text-decoration: none;
+  color: inherit;
+  transition: background 100ms ease;
 }
 
 .partition-item:first-child {
   border-top: none;
+}
+
+.partition-item:hover {
+  background: #f5fafd;
 }
 
 .partition-name {
@@ -235,27 +242,24 @@ a>button:focus {
   color: #1a1a1a;
 }
 
-.partition-actions {
-  display: flex;
-  gap: 0.75rem;
-}
-
 .partition-action {
   font-size: 0.75rem;
   font-weight: 600;
   color: #0F5A80;
   letter-spacing: 0.03em;
-  text-decoration: none;
-}
-
-.partition-action:hover {
-  text-decoration: underline;
 }
 
 .partition-empty {
   font-size: 0.85rem;
   color: #999;
   margin: 0;
+}
+
+/* Stacked key-value partition sections on /admin/db */
+.kv-overview {
+  display: flex;
+  flex-direction: column;
+  gap: 2.5rem;
 }
 
 /* Key-Value Partition View */

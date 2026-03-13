@@ -39,6 +39,10 @@ pub trait KeyValueStore {
 
     async fn partitions(&self) -> Result<Vec<String>, errors::Error>;
 
+    async fn scan<T: DeserializeOwned + Send + 'static>(
+        &self,
+    ) -> Result<Vec<(String, String, T)>, errors::Error>;
+
     fn partition<T: Serialize + DeserializeOwned + Send + 'static>(
         &self,
         name: impl ToString,
@@ -102,6 +106,7 @@ pub trait Queue {
     }
 }
 
+#[allow(dead_code)]
 pub struct PeekedMessage<T> {
     pub key: String,
     pub payload: T,
