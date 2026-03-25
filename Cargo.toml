@@ -9,7 +9,7 @@ async-trait = "0.1.89"
 calcard = "0.3.2"
 chrono = { version = "0.4.44", features = ["serde"] }
 clap = { version = "4.6.0", features = ["cargo", "derive", "string"] }
-cron = "0.15.0"
+cron = "0.16.0"
 croner = { version = "3.0.1", features = ["serde"] }
 dotenvy = "0.15"
 feed-rs = "2.3.1"
