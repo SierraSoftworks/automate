@@ -16,7 +16,7 @@ feed-rs = "2.3.1"
 futures-concurrency = "7.7.1"
 hex = "0.4.3"
 htmd = "0.5.3"
-hmac = "0.13.0-rc.6"
+hmac = "0.13.0"
 html-escape = "0.2.13"
 human-errors = { version = "0.2.3", features = ["pretty"] }
 openssl-sys = { version = "0.9.112", features = ["vendored"], optional = true }
