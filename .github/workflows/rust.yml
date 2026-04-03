@@ -158,7 +158,7 @@ jobs:
         run: ${{ matrix.builder }} build --release --target ${{ matrix.target }} ${{ matrix.cargo-flags }}
 
       - name: Upload GitHub Release Artifacts
-        uses: SierraSoftworks/gh-releases@v1.0.8
+        uses: SierraSoftworks/gh-releases@v1.0.9
         if: github.event_name == 'release'
         with:
           files: "target/${{ matrix.target }}/release/${{ env.APP_NAME }}${{ matrix.extension }} | ${{ env.APP_NAME }}-${{ matrix.os }}-${{ matrix.arch }}${{ matrix.extension }}"
