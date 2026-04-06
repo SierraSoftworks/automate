@@ -15,7 +15,7 @@ dotenvy = "0.15"
 feed-rs = "2.3.1"
 futures-concurrency = "7.7.1"
 hex = "0.4.3"
-htmd = "0.5.3"
+htmd = "0.5.4"
 hmac = "0.13.0"
 html-escape = "0.2.13"
 human-errors = { version = "0.2.3", features = ["pretty"] }
