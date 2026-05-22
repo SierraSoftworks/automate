@@ -25,7 +25,7 @@ reqwest = { version = "0.12.27", features = ["rustls-tls"] }
 rusqlite = { version = "0.37.0", features = ["bundled", "chrono"] }
 scraper = "0.27.0"
 serde = { version = "1.0.219", features = ["alloc", "derive"] }
-serde_json = { version = "1.0.149", features = ["alloc"] }
+serde_json = { version = "1.0.150", features = ["alloc"] }
 sha2 = "0.11.0"
 sha256 = "1.6.0"
 todoist-api = "1.0.0-alpha.1"
