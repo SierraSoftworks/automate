@@ -56,7 +56,7 @@ async fn main() {
         .with_battery(tracing_batteries::Umami::new(
             "https://analytics.sierrasoftworks.com",
             "1dc61b17-a026-478d-aee9-70ef2878fd03",
-        ));
+        ).with_initial_page("/.app/"));
 
     if let Err(err) = run(args).await {
         eprintln!("{}", human_errors::pretty(&err));
