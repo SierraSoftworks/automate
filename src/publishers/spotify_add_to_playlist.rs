@@ -24,17 +24,17 @@ impl Job for SpotifyAddToPlaylist {
 
     #[instrument(
         "publishers.spotify_add_to_playlist.handle",
-        skip(self, job, services),
+        skip(self, ctx, job),
         err(Display)
     )]
     async fn handle(
         &self,
+        ctx: JobContext<impl Services + Send + Sync + 'static>,
         job: &Self::JobType,
-        services: impl Services + Send + Sync + 'static,
     ) -> Result<(), human_errors::Error> {
         let client = SpotifyClient::new(job.access_token.clone());
 
-        let playlist_id = self.get_playlist_id(job, &services).await?;
+        let playlist_id = self.get_playlist_id(job, ctx.services()).await?;
 
         for chunk in job.track_uris.chunks(100) {
             client

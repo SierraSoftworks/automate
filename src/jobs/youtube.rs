@@ -48,15 +48,16 @@ impl Job for YouTubeWorkflow {
         CronJob::schedule(&config.workflows.youtube, services).await
     }
 
-    #[instrument("workflow.youtube.handle", skip(self, job, services), fields(job = %job))]
+    #[instrument("workflow.youtube.handle", skip(self, ctx, job), fields(job = %job))]
     async fn handle(
         &self,
+        ctx: JobContext<impl Services + Send + Sync + 'static>,
         job: &Self::JobType,
-        services: impl Services + Send + Sync + 'static,
     ) -> Result<(), human_errors::Error> {
+        let services = ctx.services();
         let collector = YouTubeCollector::new(&job.channel_id);
 
-        let items = collector.list(&services).await?;
+        let items = collector.list(services).await?;
 
         for item in items.into_iter() {
             match job.filter.matches(&item) {
@@ -84,7 +85,7 @@ impl Job for YouTubeWorkflow {
                     ..Default::default()
                 },
                 None,
-                &services,
+                services,
             )
             .await?;
         }

@@ -38,12 +38,14 @@ impl Job for AzureMonitorWebhook {
         "webhooks/azure-monitor"
     }
 
-    #[instrument("webhooks.azure_monitor.handle", skip(self, job, services), fields(job = %job))]
+    #[instrument("webhooks.azure_monitor.handle", skip(self, ctx, job), fields(job = %job))]
     async fn handle(
         &self,
+        ctx: JobContext<impl Services + Send + Sync + 'static>,
         job: &Self::JobType,
-        services: impl Services + Send + Sync + 'static,
     ) -> Result<(), human_errors::Error> {
+        let services = ctx.services();
+
         let event: AzureMonitorAlertEventPayload = job.json()?;
 
         match event.data.essentials.monitor_condition {
@@ -69,7 +71,7 @@ impl Job for AzureMonitorWebhook {
                         priority: Some(event.data.essentials.severity.priority()),
                         config: services.config().webhooks.azure_monitor.todoist.clone(),
                         ..Default::default()
-                    }, None, &services).await?;
+                    }, None, services).await?;
 
                 Ok(())
             }
@@ -82,7 +84,7 @@ impl Job for AzureMonitorWebhook {
                         ..Default::default()
                     },
                     None,
-                    &services,
+                    services,
                 )
                 .await?;
                 Ok(())

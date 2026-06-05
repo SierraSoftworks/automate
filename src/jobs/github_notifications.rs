@@ -151,24 +151,26 @@ impl Job for GitHubNotificationsWorkflow {
         CronJob::schedule(&config.workflows.github_notifications, services).await
     }
 
-    #[instrument("workflow.github_notifications.handle", skip(self, job, services), fields(job = %job))]
+    #[instrument("workflow.github_notifications.handle", skip(self, ctx, job), fields(job = %job))]
     async fn handle(
         &self,
+        ctx: JobContext<impl Services + Send + Sync + 'static>,
         job: &Self::JobType,
-        services: impl Services + Send + Sync + 'static,
     ) -> Result<(), human_errors::Error> {
         // Handle delayed auto-close checks
         if let Some(event) = job.event.as_ref() {
+            let services = ctx.services();
+
             // Check the status of the subject to see if it's still open/active/etc.
             let collector = GitHubNotificationsCollector::new();
-            let subject = collector.get_subject(&event.subject, &services).await?;
+            let subject = collector.get_subject(&event.subject, services).await?;
 
             match subject {
                 None => {
                     TodoistUpsertTask::dispatch(
                         self.build_task(event, job, None),
                         Some(event.id.clone().into()),
-                        &services,
+                        services,
                     )
                     .await?
                 }
@@ -176,13 +178,13 @@ impl Job for GitHubNotificationsWorkflow {
                     TodoistUpsertTask::dispatch(
                         self.build_task(event, job, Some(subject)),
                         Some(event.id.clone().into()),
-                        &services,
+                        services,
                     )
                     .await?
                 }
                 _ => {
                     // Closed/Resolved/Merged/etc., mark as done
-                    collector.mark_as_done(&event.id, &services).await?;
+                    collector.mark_as_done(&event.id, services).await?;
                     TodoistCompleteTask::dispatch(
                         #[allow(clippy::needless_update)]
                         TodoistCompleteTaskPayload {
@@ -191,7 +193,7 @@ impl Job for GitHubNotificationsWorkflow {
                             ..Default::default()
                         },
                         Some(event.id.clone().into()),
-                        &services,
+                        services,
                     )
                     .await?;
                 }
@@ -199,7 +201,8 @@ impl Job for GitHubNotificationsWorkflow {
 
             Ok(())
         } else {
-            self.collect_new_notifications(job, services).await
+            self.collect_new_notifications(job, ctx.into_services())
+                .await
         }
     }
 }

@@ -46,12 +46,14 @@ impl Job for GrafanaWebhook {
         "webhooks/grafana"
     }
 
-    #[instrument("webhooks.grafana.handle", skip(self, job, services), fields(job = %job))]
+    #[instrument("webhooks.grafana.handle", skip(self, ctx, job), fields(job = %job))]
     async fn handle(
         &self,
+        ctx: JobContext<impl Services + Send + Sync + 'static>,
         job: &Self::JobType,
-        services: impl Services + Send + Sync + 'static,
     ) -> Result<(), human_errors::Error> {
+        let services = ctx.services();
+
         // Validate the authorization header if a secret is configured
         if let Some(expected_secret) = &services.config().webhooks.grafana.secret {
             if !expected_secret.is_empty() {
@@ -160,7 +162,7 @@ impl Job for GrafanaWebhook {
                         due: starts_at
                             .map(crate::publishers::TodoistDueDate::DateTime)
                             .unwrap_or_else(|| {
-                                crate::publishers::TodoistDueDate::DateTime(Utc::now())
+                                crate::publishers::TodoistDueDate::DateTime(ctx.scheduled_at())
                             }),
                         priority: Some(priority),
                         config: services.config().webhooks.grafana.todoist.clone(),
@@ -173,7 +175,7 @@ impl Job for GrafanaWebhook {
                             .unwrap_or_else(|| event.title.clone())
                             .into(),
                     ),
-                    &services,
+                    services,
                 )
                 .await?;
 
@@ -192,7 +194,7 @@ impl Job for GrafanaWebhook {
                         config: services.config().webhooks.grafana.todoist.clone(),
                     },
                     None,
-                    &services,
+                    services,
                 )
                 .await?;
 
@@ -364,7 +366,9 @@ mod tests {
             headers: HashMap::new(),
         };
 
-        let result = webhook.handle(&event, services).await;
+        let result = webhook
+            .handle(JobContext::new(services, Utc::now(), None, None), &event)
+            .await;
         assert!(result.is_ok(), "Webhook should handle firing alert");
     }
 
@@ -408,7 +412,9 @@ mod tests {
             headers: HashMap::new(),
         };
 
-        let result = webhook.handle(&event, services).await;
+        let result = webhook
+            .handle(JobContext::new(services, Utc::now(), None, None), &event)
+            .await;
         assert!(result.is_ok(), "Webhook should handle resolved alert");
     }
 
@@ -425,7 +431,9 @@ mod tests {
             headers: HashMap::new(),
         };
 
-        let result = webhook.handle(&event, services).await;
+        let result = webhook
+            .handle(JobContext::new(services, Utc::now(), None, None), &event)
+            .await;
         assert!(result.is_err(), "Webhook should reject invalid JSON");
     }
 

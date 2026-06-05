@@ -83,14 +83,20 @@ impl TailscaleWebhook {
     /// Tailscale signs webhooks using HMAC-SHA256 with the webhook secret, and includes
     /// the signature in the Tailscale-Webhook-Signature header in the format:
     /// `t=<timestamp>,v1=<hex_signature>`
+    ///
+    /// The `now` parameter is the point in time against which the signature
+    /// timestamp is validated. This should be the time at which the request was
+    /// originally received (rather than the current time) so that retries of a
+    /// previously received request continue to validate successfully.
     fn verify_signature(
         secret: &str,
         body: &str,
         signature_header: &str,
+        now: DateTime<Utc>,
     ) -> Result<(), human_errors::Error> {
         let (timestamp, expected_signature) = Self::parse_signature(signature_header)?;
 
-        if (timestamp - Utc::now()).abs() > chrono::Duration::minutes(5) {
+        if (timestamp - now).abs() > chrono::Duration::minutes(5) {
             return Err(human_errors::user(
                 format!(
                     "The Tailscale webhook signature timestamp is too old or too far in the future (got {})",
@@ -139,12 +145,14 @@ impl Job for TailscaleWebhook {
         "webhooks/tailscale"
     }
 
-    #[instrument("webhooks.tailscale.handle", skip(self, job, services), fields(job = %job))]
+    #[instrument("webhooks.tailscale.handle", skip(self, ctx, job), fields(job = %job))]
     async fn handle(
         &self,
+        ctx: JobContext<impl Services + Send + Sync + 'static>,
         job: &Self::JobType,
-        services: impl Services + Send + Sync + 'static,
     ) -> Result<(), human_errors::Error> {
+        let services = ctx.services();
+
         // Validate the Tailscale webhook signature header
         // https://tailscale.com/kb/1213/webhooks#verifying-an-event-signature
         let secret = &services.config().webhooks.tailscale.secret;
@@ -158,7 +166,12 @@ impl Job for TailscaleWebhook {
                 .map(|(_, value)| value.as_str());
 
             if let Some(signature) = signature {
-                if let Err(err) = Self::verify_signature(secret, &job.body, signature) {
+                // Validate the signature against the time the request was
+                // originally received (the message's scheduled time) so that
+                // retries of a previously received webhook continue to validate.
+                if let Err(err) =
+                    Self::verify_signature(secret, &job.body, signature, ctx.scheduled_at())
+                {
                     warn!(
                         "Failed to verify Tailscale webhook signature, rejecting request: {}",
                         err
@@ -229,7 +242,7 @@ impl Job for TailscaleWebhook {
                 ..Default::default()
             },
             None,
-            &services,
+            services,
         )
         .await?;
 
@@ -283,8 +296,32 @@ mod tests {
         let body = r#"{"version":1,"timestamp":"2024-01-01T00:00:00Z","type":"test","tailnet":"example.com","message":"Test message","data":{}}"#;
         let signature = generate_signature(secret, &timestamp, body);
 
-        let result = TailscaleWebhook::verify_signature(secret, body, &signature);
+        let result = TailscaleWebhook::verify_signature(secret, body, &signature, Utc::now());
         result.expect("Valid signature should verify successfully");
+    }
+
+    #[test]
+    fn test_verify_signature_valid_on_retry() {
+        // Simulates a retry: the signature timestamp is well outside the
+        // five-minute window relative to the current time, but validation is
+        // performed against the time the request was originally received, so it
+        // should still succeed.
+        let secret = "test_secret_key";
+        let received_at = Utc::now() - chrono::Duration::hours(6);
+        let timestamp = received_at.timestamp().to_string();
+        let body = r#"{"version":1,"timestamp":"2024-01-01T00:00:00Z","type":"test","tailnet":"example.com","message":"Test message","data":{}}"#;
+        let signature = generate_signature(secret, &timestamp, body);
+
+        // Validating against the current time should fail (too old).
+        let result = TailscaleWebhook::verify_signature(secret, body, &signature, Utc::now());
+        assert!(
+            result.is_err(),
+            "Signature should be rejected when validated against the current time"
+        );
+
+        // Validating against the original receipt time should succeed.
+        let result = TailscaleWebhook::verify_signature(secret, body, &signature, received_at);
+        result.expect("Signature should verify against the original receipt time on retry");
     }
 
     #[test]
@@ -294,7 +331,7 @@ mod tests {
         let wrong_signature =
             "t=1663781880,v1=0000000000000000000000000000000000000000000000000000000000000000";
 
-        let result = TailscaleWebhook::verify_signature(secret, body, wrong_signature);
+        let result = TailscaleWebhook::verify_signature(secret, body, wrong_signature, Utc::now());
         assert!(
             result.is_err(),
             "Invalid signature should fail verification"
@@ -309,7 +346,7 @@ mod tests {
         let body = r#"{"version":1,"timestamp":"2024-01-01T00:00:00Z","type":"test","tailnet":"example.com","message":"Test message","data":{}}"#;
         let signature = generate_signature(wrong_secret, &timestamp, body);
 
-        let result = TailscaleWebhook::verify_signature(secret, body, &signature);
+        let result = TailscaleWebhook::verify_signature(secret, body, &signature, Utc::now());
         assert!(
             result.is_err(),
             "Signature with wrong secret should fail verification"
@@ -324,7 +361,8 @@ mod tests {
         let tampered_body = r#"{"version":1,"timestamp":"2024-01-01T00:00:00Z","type":"test","tailnet":"example.com","message":"Tampered message","data":{}}"#;
         let signature = generate_signature(secret, &timestamp, original_body);
 
-        let result = TailscaleWebhook::verify_signature(secret, tampered_body, &signature);
+        let result =
+            TailscaleWebhook::verify_signature(secret, tampered_body, &signature, Utc::now());
         assert!(result.is_err(), "Tampered body should fail verification");
     }
 
@@ -334,7 +372,7 @@ mod tests {
         let body = r#"{"version":1,"timestamp":"2024-01-01T00:00:00Z","type":"test","tailnet":"example.com","message":"Test message","data":{}}"#;
         let invalid_format = "not_a_valid_format";
 
-        let result = TailscaleWebhook::verify_signature(secret, body, invalid_format);
+        let result = TailscaleWebhook::verify_signature(secret, body, invalid_format, Utc::now());
         assert!(result.is_err(), "Invalid format should fail");
     }
 
@@ -345,7 +383,8 @@ mod tests {
         let missing_timestamp =
             "v1=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
-        let result = TailscaleWebhook::verify_signature(secret, body, missing_timestamp);
+        let result =
+            TailscaleWebhook::verify_signature(secret, body, missing_timestamp, Utc::now());
         assert!(result.is_err(), "Missing timestamp should fail");
     }
 
@@ -355,7 +394,8 @@ mod tests {
         let body = r#"{"version":1,"timestamp":"2024-01-01T00:00:00Z","type":"test","tailnet":"example.com","message":"Test message","data":{}}"#;
         let missing_signature = "t=1663781880";
 
-        let result = TailscaleWebhook::verify_signature(secret, body, missing_signature);
+        let result =
+            TailscaleWebhook::verify_signature(secret, body, missing_signature, Utc::now());
         assert!(result.is_err(), "Missing signature should fail");
     }
 
@@ -366,7 +406,7 @@ mod tests {
         let body = "";
         let signature = generate_signature(secret, &timestamp, body);
 
-        let result = TailscaleWebhook::verify_signature(secret, body, &signature);
+        let result = TailscaleWebhook::verify_signature(secret, body, &signature, Utc::now());
         result.expect("Empty body with valid signature should verify successfully");
     }
 

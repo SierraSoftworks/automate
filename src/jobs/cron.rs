@@ -88,20 +88,18 @@ impl Job for CronJob {
         false
     }
 
-    #[instrument("workflow.cron.handle", skip(self, job, services), fields(job = %job))]
+    #[instrument("workflow.cron.handle", skip(self, ctx, job), fields(job = %job))]
     async fn handle(
         &self,
+        ctx: JobContext<impl Services + Send + Sync + 'static>,
         job: &Self::JobType,
-        services: impl Services + Send + Sync + 'static,
     ) -> Result<(), human_errors::Error> {
+        let services = ctx.services();
         let now = Utc::now();
-        let next_run = job
-            .cron
-            .find_next_occurrence(&now, false)
-            .wrap_user_err(
-                "We could not determine the next time at which this cron job should be dispatched.",
-                &["Please ensure the cron schedule is valid."],
-            )?;
+        let next_run = job.cron.find_next_occurrence(&now, false).wrap_user_err(
+            "We could not determine the next time at which this cron job should be dispatched.",
+            &["Please ensure the cron schedule is valid."],
+        )?;
 
         // Enqueue the job to be run at the next scheduled time
         services

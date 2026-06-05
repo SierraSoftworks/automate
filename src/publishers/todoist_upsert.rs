@@ -33,16 +33,13 @@ impl Job for TodoistUpsertTask {
         "todoist/upsert-task"
     }
 
-    #[instrument(
-        "publishers.todoist_upsert.handle",
-        skip(self, job, services),
-        err(Display)
-    )]
+    #[instrument("publishers.todoist_upsert.handle", skip(self, ctx, job), err(Display))]
     async fn handle(
         &self,
+        ctx: JobContext<impl Services + Send + Sync + 'static>,
         job: &Self::JobType,
-        services: impl Services + Send + Sync + 'static,
     ) -> Result<(), human_errors::Error> {
+        let services = ctx.services();
         let config = services.config().connections.todoist.merge(&job.config);
 
         let client = TodoistClient::new(&config)?;
@@ -101,14 +98,14 @@ impl Job for TodoistUpsertTask {
                 .await?;
         } else {
             let project_id = client
-                .get_project_id(config.project.as_deref().unwrap_or("Inbox"), &services)
+                .get_project_id(config.project.as_deref().unwrap_or("Inbox"), services)
                 .await?;
             let section_id = client
                 .get_section_id(
                     config.project.as_deref().unwrap_or("Inbox"),
                     &project_id,
                     config.section.as_deref(),
-                    &services,
+                    services,
                 )
                 .await?;
 

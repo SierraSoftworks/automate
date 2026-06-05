@@ -35,12 +35,14 @@ impl Job for HoneycombWebhook {
         "webhooks/honeycomb"
     }
 
-    #[instrument("webhooks.honeycomb.handle", skip(self, job, services), fields(job = %job))]
+    #[instrument("webhooks.honeycomb.handle", skip(self, ctx, job), fields(job = %job))]
     async fn handle(
         &self,
+        ctx: JobContext<impl Services + Send + Sync + 'static>,
         job: &Self::JobType,
-        services: impl Services + Send + Sync + 'static,
     ) -> Result<(), human_errors::Error> {
+        let services = ctx.services();
+
         if let Some(secret) = job.headers.get("X-Honeycomb-Webhook-Token") {
             if !services
                 .config()
@@ -102,13 +104,13 @@ impl Job for HoneycombWebhook {
                     event.name
                 ),
                 description: event.description,
-                due: TodoistDueDate::DateTime(chrono::Utc::now()),
+                due: TodoistDueDate::DateTime(ctx.scheduled_at()),
                 priority: Some(4),
                 config: services.config().webhooks.honeycomb.todoist.clone(),
                 ..Default::default()
             },
             None,
-            &services,
+            services,
         )
         .await?;
 

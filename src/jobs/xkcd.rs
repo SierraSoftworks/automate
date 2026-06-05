@@ -47,15 +47,16 @@ impl Job for XkcdWorkflow {
         CronJob::schedule(&config.workflows.xkcd, services).await
     }
 
-    #[instrument("workflow.xkcd.handle", skip(self, job, services), fields(job = %job))]
+    #[instrument("workflow.xkcd.handle", skip(self, ctx, job), fields(job = %job))]
     async fn handle(
         &self,
+        ctx: JobContext<impl Services + Send + Sync + 'static>,
         job: &Self::JobType,
-        services: impl Services + Send + Sync + 'static,
     ) -> Result<(), human_errors::Error> {
+        let services = ctx.services();
         let collector = XkcdCollector::new();
 
-        let items = collector.list(&services).await?;
+        let items = collector.list(services).await?;
 
         for item in items.into_iter() {
             match job.filter.matches(&item) {
@@ -81,7 +82,7 @@ impl Job for XkcdWorkflow {
                     ..Default::default()
                 },
                 None,
-                &services,
+                services,
             )
             .await?;
         }

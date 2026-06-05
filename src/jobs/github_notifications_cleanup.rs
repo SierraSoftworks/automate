@@ -50,12 +50,13 @@ impl Job for GitHubNotificationsCleanupWorkflow {
 
     async fn handle(
         &self,
+        ctx: JobContext<impl Services + Send + Sync + 'static>,
         job: &Self::JobType,
-        services: impl Services + Send + Sync + 'static,
     ) -> Result<(), human_errors::Error> {
+        let services = ctx.services();
         let collector = GitHubNotificationsCollector::new();
 
-        let (notifications, _) = collector.fetch_since(None, &services).await?;
+        let (notifications, _) = collector.fetch_since(None, services).await?;
 
         for notification in notifications {
             if !job.filter.matches(&notification)? {
@@ -63,11 +64,11 @@ impl Job for GitHubNotificationsCleanupWorkflow {
             }
 
             if let Some(subject) = collector
-                .get_subject(&notification.subject, &services)
+                .get_subject(&notification.subject, services)
                 .await?
                 && !subject.is_open()
             {
-                collector.mark_as_done(&notification.id, &services).await?;
+                collector.mark_as_done(&notification.id, services).await?;
             }
         }
 

@@ -57,12 +57,13 @@ impl Job for RssWorkflow {
         CronJob::schedule(&config.workflows.rss, services).await
     }
 
-    #[instrument("workflow.rss.handle", skip(self, job, services), fields(job = %job))]
+    #[instrument("workflow.rss.handle", skip(self, ctx, job), fields(job = %job))]
     async fn handle(
         &self,
+        ctx: JobContext<impl Services + Send + Sync + 'static>,
         job: &Self::JobType,
-        services: impl Services + Send + Sync + 'static,
     ) -> Result<(), human_errors::Error> {
+        let services = ctx.services();
         let base_url: reqwest::Url = job.homepage.parse().wrap_user_err(
             format!("The feed URL you provided could not be parsed as a valid URL ({}).", &job.homepage),
             &[
@@ -71,7 +72,7 @@ impl Job for RssWorkflow {
 
         let collector = RssCollector::new(&job.url);
 
-        let items = collector.list(&services).await?;
+        let items = collector.list(services).await?;
 
         for item in items.into_iter() {
             match job.filter.matches(&RssEntryFilter(&item)) {
@@ -111,7 +112,7 @@ impl Job for RssWorkflow {
                     ..Default::default()
                 },
                 None,
-                &services,
+                services,
             )
             .await?;
         }
