@@ -5,6 +5,7 @@ mod github_notifications_cleanup;
 mod github_releases;
 mod rss;
 mod spotify_yearly_playlist;
+mod todoist_cleanup;
 mod xkcd;
 mod youtube;
 
