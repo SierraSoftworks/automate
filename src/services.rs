@@ -10,6 +10,10 @@ use crate::config::Config;
 /// single concrete type to remain object-safe.
 pub type AppServices = ServicesContainer<crate::db::SqliteDatabase>;
 
+/// The user agent applied to the shared HTTP client used across collectors and
+/// publishers.
+pub const HTTP_USER_AGENT: &str = "SierraSoftworks/automate";
+
 pub trait Services
 where
     Self: Sized,
@@ -19,11 +23,19 @@ where
     fn kv(&self) -> impl crate::db::KeyValueStore + Clone + Send + Sync + 'static;
     fn queue(&self) -> impl crate::db::Queue + Clone + Send + Sync + 'static;
     fn cache(&self) -> impl crate::db::Cache + Clone + Send + Sync + 'static;
+
+    /// A shared [`reqwest::Client`] configured with the default user agent.
+    ///
+    /// Cloning a [`reqwest::Client`] is cheap and shares the underlying
+    /// connection pool, so collectors and publishers should prefer this over
+    /// constructing their own clients.
+    fn http_client(&self) -> reqwest::Client;
 }
 
 pub struct ServicesContainer<D: crate::db::KeyValueStore + crate::db::Queue + crate::db::Cache> {
     pub config: Arc<Config>,
     pub database: D,
+    pub http_client: reqwest::Client,
 }
 
 impl<D: crate::db::KeyValueStore + crate::db::Queue + crate::db::Cache + Clone> Clone
@@ -33,6 +45,7 @@ impl<D: crate::db::KeyValueStore + crate::db::Queue + crate::db::Cache + Clone> 
         Self {
             config: self.config.clone(),
             database: self.database.clone(),
+            http_client: self.http_client.clone(),
         }
     }
 }
@@ -42,9 +55,15 @@ where
     D: crate::db::KeyValueStore + crate::db::Queue + crate::db::Cache,
 {
     pub fn new(config: crate::config::Config, database: D) -> Self {
+        let http_client = reqwest::Client::builder()
+            .user_agent(HTTP_USER_AGENT)
+            .build()
+            .expect("Failed to build the default HTTP client.");
+
         Self {
             config: Arc::new(config),
             database,
+            http_client,
         }
     }
 }
@@ -82,5 +101,9 @@ where
 
     fn cache(&self) -> impl crate::db::Cache + Clone + Send + Sync + 'static {
         self.database.clone()
+    }
+
+    fn http_client(&self) -> reqwest::Client {
+        self.http_client.clone()
     }
 }

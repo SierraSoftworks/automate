@@ -36,9 +36,7 @@ impl GitHubNotificationsCollector {
         services: &(impl crate::services::Services + Send + Sync + 'static),
     ) -> Result<Option<GitHubSubjectInformation>, human_errors::Error> {
         if let Some(url) = &subject.url {
-            let client = self.get_client(services)?;
-
-            let response = client.get(url)
+            let response = self.request(services, reqwest::Method::GET, url)
                 .send().await.wrap_user_err("We were unable to fetch GitHub notification subject state from GitHub.", &[
                     "Make sure that your network connection is working properly.",
                     "Check https://www.githubstatus.com/ for any ongoing issues with GitHub's services.",
@@ -101,10 +99,12 @@ impl GitHubNotificationsCollector {
         thread_id: &str,
         services: &(impl crate::services::Services + Send + Sync + 'static),
     ) -> Result<(), human_errors::Error> {
-        let client = self.get_client(services)?;
-
-        let response = client
-            .delete(format!("{}/notifications/threads/{}", self.api_url, thread_id))
+        let response = self
+            .request(
+                services,
+                reqwest::Method::DELETE,
+                format!("{}/notifications/threads/{}", self.api_url, thread_id),
+            )
             .send().await.wrap_user_err("We were unable to mark the GitHub notification as read.", &[
                 "Make sure that your network connection is working properly.",
                 "Check https://www.githubstatus.com/ for any ongoing issues with GitHub's services.",
@@ -134,29 +134,23 @@ impl GitHubNotificationsCollector {
         }
     }
 
-    fn get_client(
+    fn request(
         &self,
         services: &impl crate::services::Services,
-    ) -> Result<reqwest::Client, human_errors::Error> {
-        let mut headers = reqwest::header::HeaderMap::new();
-        headers.insert("X-GitHub-Api-Version", "2022-11-28".parse().unwrap());
-        headers.insert("Accept", "application/vnd.github+json".parse().unwrap());
+        method: reqwest::Method,
+        url: impl reqwest::IntoUrl,
+    ) -> reqwest::RequestBuilder {
+        let mut request = services
+            .http_client()
+            .request(method, url)
+            .header("X-GitHub-Api-Version", "2022-11-28")
+            .header("Accept", "application/vnd.github+json");
 
         if let Some(api_key) = services.config().connections.github.api_key.as_ref() {
-            headers.insert(
-                reqwest::header::AUTHORIZATION,
-                reqwest::header::HeaderValue::from_str(&format!("Bearer {}", api_key))
-                    .or_system_err(&["Report the issue to the development team on GitHub."])?,
-            );
+            request = request.bearer_auth(api_key);
         }
 
-        let client = reqwest::Client::builder()
-            .user_agent("SierraSoftworks/automate-rs")
-            .default_headers(headers)
-            .build()
-            .or_system_err(&["Report the issue to the development team on GitHub."])?;
-
-        Ok(client)
+        request
     }
 }
 
@@ -198,9 +192,7 @@ impl IncrementalCollector for GitHubNotificationsCollector {
         watermark: Option<Self::Watermark>,
         services: &impl crate::services::Services,
     ) -> Result<(Vec<Self::Item>, Self::Watermark), human_errors::Error> {
-        let client = self.get_client(services)?;
-
-        let response = client.get(format!("{}/notifications", self.api_url))
+        let response = self.request(services, reqwest::Method::GET, format!("{}/notifications", self.api_url))
             .header("If-Modified-Since", watermark.as_deref().unwrap_or("Thu, 01 Jan 1970 00:00:00 GMT"))
             .send().await.wrap_user_err("We were unable to fetch GitHub notifications from GitHub.", &[
                 "Make sure that your network connection is working properly.",

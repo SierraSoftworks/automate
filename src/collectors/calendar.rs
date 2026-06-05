@@ -61,14 +61,13 @@ impl DifferentialCollector for CalendarCollector {
         }
     }
 
-    #[instrument("collectors.calendar.fetch", skip(self), err(Display))]
-    async fn fetch(&self) -> Result<Vec<Self::Item>, human_errors::Error> {
-        let client = reqwest::Client::builder()
-            .user_agent("SierraSoftworks/automate-rs")
-            .build()
-            .or_system_err(&["Report this issue to the development team on GitHub."])?;
-
-        let response = client
+    #[instrument("collectors.calendar.fetch", skip(self, services), err(Display))]
+    async fn fetch(
+        &self,
+        services: &impl Services,
+    ) -> Result<Vec<Self::Item>, human_errors::Error> {
+        let response = services
+            .http_client()
             .get(&self.url)
             .header("Accept", "text/calendar")
             .send()

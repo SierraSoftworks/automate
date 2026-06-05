@@ -41,15 +41,18 @@ impl IncrementalCollector for SpotifyLikedTracksCollector {
 
     #[instrument(
         "collectors.spotify_liked_tracks.fetch_since",
-        skip(self, _services),
+        skip(self, services),
         err(Display)
     )]
     async fn fetch_since(
         &self,
         watermark: Option<Self::Watermark>,
-        _services: &impl crate::services::Services,
+        services: &impl crate::services::Services,
     ) -> Result<(Vec<Self::Item>, Self::Watermark), human_errors::Error> {
-        let client = crate::publishers::spotify::SpotifyClient::new(self.access_token.clone());
+        let client = crate::publishers::spotify::SpotifyClient::new(
+            self.access_token.clone(),
+            services.http_client(),
+        );
 
         let since = watermark
             .unwrap_or_else(|| chrono::DateTime::<chrono::Utc>::from(std::time::UNIX_EPOCH));

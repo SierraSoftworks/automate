@@ -161,6 +161,7 @@ pub async fn discovery<S: Services>(
 ) -> Result<OidcDiscovery, human_errors::Error> {
     let endpoint = oidc.endpoint.trim_end_matches('/').to_string();
     let fetch_endpoint = endpoint.clone();
+    let http_client = services.http_client();
 
     services
         .cache()
@@ -170,7 +171,7 @@ pub async fn discovery<S: Services>(
             move || {
                 Box::pin(async move {
                     let url = format!("{fetch_endpoint}/.well-known/openid-configuration");
-                    let document: OidcDiscovery = reqwest::Client::new()
+                    let document: OidcDiscovery = http_client
                         .get(&url)
                         .send()
                         .await
@@ -206,6 +207,7 @@ async fn jwks<S: Services>(
 ) -> Result<jsonwebtoken::jwk::JwkSet, human_errors::Error> {
     let jwks_uri = discovery.jwks_uri.clone();
     let fetch_uri = jwks_uri.clone();
+    let http_client = services.http_client();
 
     services
         .cache()
@@ -214,7 +216,7 @@ async fn jwks<S: Services>(
             jwks_uri,
             move || {
                 Box::pin(async move {
-                    let keys: jsonwebtoken::jwk::JwkSet = reqwest::Client::new()
+                    let keys: jsonwebtoken::jwk::JwkSet = http_client
                         .get(&fetch_uri)
                         .send()
                         .await
@@ -491,6 +493,7 @@ pub async fn exchange_code(
     discovery: &OidcDiscovery,
     code: &str,
     redirect_uri: &str,
+    http_client: &reqwest::Client,
 ) -> Result<String, human_errors::Error> {
     let params = [
         ("grant_type", "authorization_code"),
@@ -500,7 +503,7 @@ pub async fn exchange_code(
         ("client_secret", oidc.client_secret.as_str()),
     ];
 
-    let response: TokenResponse = reqwest::Client::new()
+    let response: TokenResponse = http_client
         .post(&discovery.token_endpoint)
         .form(&params)
         .send()

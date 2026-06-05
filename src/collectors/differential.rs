@@ -18,7 +18,8 @@ pub trait DifferentialCollector: Collector {
 
     fn identifier(&self, item: &Self::Item) -> Self::Identifier;
 
-    async fn fetch(&self) -> Result<Vec<Self::Item>, human_errors::Error>;
+    async fn fetch(&self, services: &impl Services)
+    -> Result<Vec<Self::Item>, human_errors::Error>;
 
     #[allow(clippy::type_complexity)]
     #[instrument("collectors.diff", skip(self, services))]
@@ -29,7 +30,7 @@ pub trait DifferentialCollector: Collector {
         let partition = self.partition();
         let key = self.key();
 
-        let items = self.fetch().await?;
+        let items = self.fetch(services).await?;
 
         let old_identifiers: Vec<Self::Identifier> = services
             .kv()
