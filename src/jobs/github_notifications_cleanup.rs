@@ -24,11 +24,30 @@ impl Display for GitHubNotificationsCleanupConfig {
 #[derive(Clone)]
 pub struct GitHubNotificationsCleanupWorkflow;
 
+crate::register_job!(GitHubNotificationsCleanupWorkflow);
+
 impl Job for GitHubNotificationsCleanupWorkflow {
     type JobType = GitHubNotificationsCleanupConfig;
 
     fn partition() -> &'static str {
         "workflow/github-notifications-cleanup"
+    }
+
+    #[instrument(
+        "workflow.github_notifications_cleanup.setup",
+        skip(self, services),
+        err(Display)
+    )]
+    async fn setup(
+        &self,
+        services: impl Services + Send + Sync + 'static,
+    ) -> Result<(), human_errors::Error> {
+        let config = services.config();
+        CronJob::schedule(
+            std::slice::from_ref(&config.workflows.github_notifications_cleanup),
+            services,
+        )
+        .await
     }
 
     async fn handle(

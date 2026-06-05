@@ -3,6 +3,7 @@ mod config;
 mod db;
 mod filter;
 mod job;
+mod jobs;
 mod parsers;
 mod prelude;
 mod publishers;
@@ -10,7 +11,6 @@ mod services;
 mod ui;
 mod web;
 mod webhooks;
-mod workflows;
 
 #[cfg(test)]
 mod testing;
@@ -19,7 +19,7 @@ use clap::Parser;
 use futures_concurrency::future::Race;
 use tracing_batteries::prelude::*;
 
-use crate::{prelude::*, workflows::CronJob};
+use crate::prelude::*;
 
 #[derive(Parser)]
 #[command(version, about, long_about = None)]
@@ -75,77 +75,15 @@ async fn run(args: Args) -> Result<(), human_errors::Error> {
     let db = db::SqliteDatabase::open("database.sqlite").await.unwrap();
     let services = services::ServicesContainer::new(config, db);
 
-    schedule_cron_jobs(services.clone()).await?;
-
     (
         crate::web::run_web_server(services.clone()),
-        crate::workflows::CronJob.run(services.clone()),
-
-        (
-            crate::publishers::SpotifyAddToPlaylist.run(services.clone()),
-
-            crate::publishers::TodoistCreateTask.run(services.clone()),
-            crate::publishers::TodoistUpsertTask.run(services.clone()),
-            crate::publishers::TodoistCompleteTask.run(services.clone()),
-        ).race(),
-
-        (
-            crate::webhooks::AzureMonitorWebhook.run(services.clone()),
-            crate::webhooks::GrafanaWebhook.run(services.clone()),
-            crate::webhooks::HoneycombWebhook.run(services.clone()),
-            crate::webhooks::SentryAlertsWebhook.run(services.clone()),
-            crate::webhooks::TailscaleWebhook.run(services.clone()),
-            crate::webhooks::TerraformWebhook.run(services.clone()),
-        ).race(),
-
-        (
-            crate::workflows::CalendarWorkflow.run(services.clone()),
-            crate::workflows::GitHubNotificationsWorkflow.run(services.clone()),
-            crate::workflows::GitHubNotificationsCleanupWorkflow.run(services.clone()),
-            crate::workflows::GitHubReleasesWorkflow.run(services.clone()),
-            crate::workflows::RssWorkflow.run(services.clone()),
-            crate::workflows::SpotifyYearlyPlaylistWorkflow.run(services.clone()),
-            crate::workflows::XkcdWorkflow.run(services.clone()),
-            crate::workflows::YouTubeWorkflow.run(services.clone()),
-        ).race()
-    ).race().await
+        crate::job::JobHost::run(services.clone()),
+    )
+        .race()
+        .await
         .or_user_err(&[
             "Restart the application and try again after addressing any issues reported in the logs.",
         ])?;
-
-    Ok(())
-}
-
-async fn schedule_cron_jobs(
-    services: impl Services + Send + Sync + Clone + 'static,
-) -> Result<(), human_errors::Error> {
-    CronJob::setup(&services.config().workflows.calendars, services.clone()).await?;
-
-    CronJob::setup(
-        &services.config().workflows.github_notifications,
-        services.clone(),
-    )
-    .await?;
-
-    CronJob::setup(
-        &[services
-            .config()
-            .workflows
-            .github_notifications_cleanup
-            .clone()],
-        services.clone(),
-    )
-    .await?;
-
-    CronJob::setup(
-        &services.config().workflows.github_releases,
-        services.clone(),
-    )
-    .await?;
-
-    CronJob::setup(&services.config().workflows.rss, services.clone()).await?;
-    CronJob::setup(&services.config().workflows.xkcd, services.clone()).await?;
-    CronJob::setup(&services.config().workflows.youtube, services.clone()).await?;
 
     Ok(())
 }

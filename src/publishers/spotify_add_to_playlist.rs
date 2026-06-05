@@ -13,6 +13,8 @@ pub struct SpotifyAddToPlaylistPayload {
 
 pub struct SpotifyAddToPlaylist;
 
+crate::register_job!(SpotifyAddToPlaylist);
+
 impl Job for SpotifyAddToPlaylist {
     type JobType = SpotifyAddToPlaylistPayload;
 

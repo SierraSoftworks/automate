@@ -127,6 +127,8 @@ impl TailscaleWebhook {
     }
 }
 
+crate::register_job!(TailscaleWebhook);
+
 impl Job for TailscaleWebhook {
     type JobType = super::WebhookEvent;
 

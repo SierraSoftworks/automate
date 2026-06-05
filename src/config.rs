@@ -3,10 +3,10 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use crate::jobs::*;
 use crate::prelude::*;
 use crate::web::*;
 use crate::webhooks::*;
-use crate::workflows::*;
 
 #[derive(Clone, Deserialize, Default)]
 pub struct Config {

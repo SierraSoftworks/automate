@@ -12,4 +12,4 @@ pub use todoist::{TodoistClient, TodoistDueDate};
 
 pub use todoist_complete::{TodoistCompleteTask, TodoistCompleteTaskPayload};
 pub use todoist_create::{TodoistCreateTask, TodoistCreateTaskPayload};
-pub use todoist_upsert::{TodoistUpsertTask, TodoistUpsertTaskPayload};
+pub use todoist_upsert::{TodoistUpsertTask, TodoistUpsertTaskPayload, TodoistUpsertTaskState};

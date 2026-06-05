@@ -29,6 +29,8 @@ fn default_todoist_config() -> crate::config::TodoistConfig {
 
 pub struct AzureMonitorWebhook;
 
+crate::register_job!(AzureMonitorWebhook);
+
 impl Job for AzureMonitorWebhook {
     type JobType = super::WebhookEvent;
 

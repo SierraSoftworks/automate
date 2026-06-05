@@ -39,11 +39,22 @@ impl Display for RssConfig {
 #[derive(Clone)]
 pub struct RssWorkflow;
 
+crate::register_job!(RssWorkflow);
+
 impl Job for RssWorkflow {
     type JobType = RssConfig;
 
     fn partition() -> &'static str {
         "workflow/rss-todoist"
+    }
+
+    #[instrument("workflow.rss.setup", skip(self, services), err(Display))]
+    async fn setup(
+        &self,
+        services: impl Services + Send + Sync + 'static,
+    ) -> Result<(), human_errors::Error> {
+        let config = services.config();
+        CronJob::schedule(&config.workflows.rss, services).await
     }
 
     #[instrument("workflow.rss.handle", skip(self, job, services), fields(job = %job))]

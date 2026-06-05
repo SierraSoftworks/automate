@@ -26,6 +26,8 @@ fn default_todoist_config() -> crate::config::TodoistConfig {
 
 pub struct HoneycombWebhook;
 
+crate::register_job!(HoneycombWebhook);
+
 impl Job for HoneycombWebhook {
     type JobType = super::WebhookEvent;
 

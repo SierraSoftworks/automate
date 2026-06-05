@@ -26,11 +26,22 @@ impl Display for GitHubReleasesConfig {
 #[derive(Clone)]
 pub struct GitHubReleasesWorkflow;
 
+crate::register_job!(GitHubReleasesWorkflow);
+
 impl Job for GitHubReleasesWorkflow {
     type JobType = GitHubReleasesConfig;
 
     fn partition() -> &'static str {
         "workflow/github-releases-todoist"
+    }
+
+    #[instrument("workflow.github_releases.setup", skip(self, services), err(Display))]
+    async fn setup(
+        &self,
+        services: impl Services + Send + Sync + 'static,
+    ) -> Result<(), human_errors::Error> {
+        let config = services.config();
+        CronJob::schedule(&config.workflows.github_releases, services).await
     }
 
     #[instrument("workflow.github_releases.handle", skip(self, job, services), fields(job = %job))]

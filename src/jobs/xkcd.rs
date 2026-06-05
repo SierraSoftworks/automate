@@ -29,11 +29,22 @@ impl Display for XkcdConfig {
 #[derive(Clone)]
 pub struct XkcdWorkflow;
 
+crate::register_job!(XkcdWorkflow);
+
 impl Job for XkcdWorkflow {
     type JobType = XkcdConfig;
 
     fn partition() -> &'static str {
         "workflow/xkcd-todoist"
+    }
+
+    #[instrument("workflow.xkcd.setup", skip(self, services), err(Display))]
+    async fn setup(
+        &self,
+        services: impl Services + Send + Sync + 'static,
+    ) -> Result<(), human_errors::Error> {
+        let config = services.config();
+        CronJob::schedule(&config.workflows.xkcd, services).await
     }
 
     #[instrument("workflow.xkcd.handle", skip(self, job, services), fields(job = %job))]

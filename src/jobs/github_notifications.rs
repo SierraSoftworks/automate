@@ -128,11 +128,26 @@ impl GitHubNotificationsWorkflow {
     }
 }
 
+crate::register_job!(GitHubNotificationsWorkflow);
+
 impl Job for GitHubNotificationsWorkflow {
     type JobType = GitHubNotificationsConfig;
 
     fn partition() -> &'static str {
         "workflow/github-notifications-todoist"
+    }
+
+    #[instrument(
+        "workflow.github_notifications.setup",
+        skip(self, services),
+        err(Display)
+    )]
+    async fn setup(
+        &self,
+        services: impl Services + Send + Sync + 'static,
+    ) -> Result<(), human_errors::Error> {
+        let config = services.config();
+        CronJob::schedule(&config.workflows.github_notifications, services).await
     }
 
     #[instrument("workflow.github_notifications.handle", skip(self, job, services), fields(job = %job))]

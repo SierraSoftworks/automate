@@ -32,11 +32,22 @@ impl Display for CalendarWorkflowConfig {
 #[derive(Clone)]
 pub struct CalendarWorkflow;
 
+crate::register_job!(CalendarWorkflow);
+
 impl Job for CalendarWorkflow {
     type JobType = CalendarWorkflowConfig;
 
     fn partition() -> &'static str {
         "workflow/calendar-todoist"
+    }
+
+    #[instrument("workflow.calendar.setup", skip(self, services), err(Display))]
+    async fn setup(
+        &self,
+        services: impl Services + Send + Sync + 'static,
+    ) -> Result<(), human_errors::Error> {
+        let config = services.config();
+        CronJob::schedule(&config.workflows.calendars, services).await
     }
 
     #[instrument("workflow.calendar.handle", skip(self, job, services), fields(job = %job))]

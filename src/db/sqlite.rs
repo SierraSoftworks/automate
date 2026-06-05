@@ -312,6 +312,7 @@ impl Queue for SqliteDatabase {
 
                     Ok(super::QueueMessage {
                         key,
+                        partition: partition.to_string(),
                         reservation_id: reservation_id.clone(),
                         payload,
                         scheduled_at,
@@ -326,6 +327,71 @@ impl Queue for SqliteDatabase {
                         SET reservedBy = ?1, hiddenUntil = ?2
                         WHERE partition = ?3 AND key = ?4",
                         (&reservation_id, &reserved_until, &partition, &msg.key),
+                    ).or_system_err(ADVICE_DB_ERROR)?;
+                }
+
+                tx.commit().or_system_err(ADVICE_DB_ERROR)?;
+
+                Result::<_, human_errors::Error>::Ok(message)
+            }).await.or_system_err(ADVICE_DB_ERROR)?;
+
+            if let Some(msg) = message {
+                return Ok(msg);
+            } else {
+                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+            }
+        }
+    }
+
+    #[instrument("db.sqlite.dequeue_any", skip(self, reserve_for), fields(otel.kind=?OpenTelemetrySpanKind::Consumer), err(Display))]
+    async fn dequeue_any(
+        &self,
+        reserve_for: chrono::Duration,
+    ) -> std::result::Result<super::QueueMessage<serde_json::Value>, errors::Error> {
+        loop {
+            let reservation_id = uuid::Uuid::new_v4().to_string();
+            let reserved_until = chrono::Utc::now() + reserve_for;
+
+            let message = self.connection.call(move |c| {
+                let tx = c.transaction().or_system_err(ADVICE_DB_ERROR)?;
+
+                let message = tx.query_one(
+                    "SELECT partition, key, payload, scheduledAt, traceparent, tracestate FROM queues WHERE hiddenUntil < CURRENT_TIMESTAMP ORDER BY scheduledAt LIMIT 1",
+                    [],
+                    |row| {
+                        let partition: String = row.get(0)?;
+                        let key: String = row.get(1)?;
+                        let payload_str: String = row.get(2)?;
+                        let scheduled_at: chrono::DateTime<chrono::Utc> = row.get(3)?;
+                        let traceparent: Option<String> = row.get(4)?;
+                        let tracestate: Option<String> = row.get(5)?;
+
+                        let payload: serde_json::Value = serde_json::from_str(&payload_str).map_err(|e| {
+                            rusqlite::Error::FromSqlConversionFailure(
+                                2,
+                                rusqlite::types::Type::Text,
+                                Box::new(e),
+                            )
+                        })?;
+
+                        Ok(super::QueueMessage {
+                            key,
+                            partition,
+                            reservation_id: reservation_id.clone(),
+                            payload,
+                            scheduled_at,
+                            traceparent,
+                            tracestate,
+                        })
+                    },
+                ).optional().or_system_err(ADVICE_DB_ERROR)?;
+
+                if let Some(msg) = &message {
+                    tx.execute(
+                        "UPDATE queues
+                        SET reservedBy = ?1, hiddenUntil = ?2
+                        WHERE partition = ?3 AND key = ?4",
+                        (&reservation_id, &reserved_until, &msg.partition, &msg.key),
                     ).or_system_err(ADVICE_DB_ERROR)?;
                 }
 

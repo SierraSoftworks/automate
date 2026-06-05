@@ -26,6 +26,8 @@ fn default_todoist_config() -> TodoistConfig {
 
 pub struct TerraformWebhook;
 
+crate::register_job!(TerraformWebhook);
+
 impl Job for TerraformWebhook {
     type JobType = WebhookEvent;
 

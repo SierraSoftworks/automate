@@ -1,8 +1,11 @@
 use std::borrow::Cow;
+use std::collections::HashMap;
 
 use chrono::{TimeDelta, Utc};
 
+use crate::db::QueueMessage;
 use crate::prelude::*;
+use crate::services::AppServices;
 
 pub trait Job {
     type JobType: Serialize + DeserializeOwned + Send + 'static;
@@ -44,78 +47,28 @@ pub trait Job {
         TimeDelta::minutes(5)
     }
 
-    async fn handle(
+    /// Performs any one-time startup work required by this job, such as
+    /// scheduling recurring cron tasks. This is called once for every
+    /// registered job when the [`JobConsumer`] starts up, mirroring the
+    /// inventory-based registration used for job handlers.
+    ///
+    /// The default implementation does nothing, so jobs only need to override
+    /// it when they require startup wiring.
+    fn setup(
+        &self,
+        services: impl Services + Send + Sync + 'static,
+    ) -> impl std::future::Future<Output = Result<(), human_errors::Error>> + Send {
+        async move {
+            let _ = services;
+            Ok(())
+        }
+    }
+
+    fn handle(
         &self,
         job: &Self::JobType,
         services: impl Services + Send + Sync + 'static,
-    ) -> Result<(), human_errors::Error>;
-
-    #[instrument("job.run", skip(self, services), fields(otel.kind=?OpenTelemetrySpanKind::Consumer, job.kind = std::any::type_name::<Self::JobType>()), err(Display))]
-    async fn run(
-        &self,
-        services: impl Services + Clone + Send + Sync + 'static,
-    ) -> Result<(), human_errors::Error> {
-        let queue = services.queue().partition(Self::partition().to_string());
-
-        let root_span = tracing::Span::current();
-
-        loop {
-            match queue.dequeue(self.timeout()).await {
-                Ok(item) => {
-                    let delay = Utc::now() - item.scheduled_at;
-                    let span = info_span!(
-                        parent: None,
-                        "job.run",
-                        job.name = queue.name(),
-                        job.delay = delay.num_milliseconds(),
-                        otel.kind = ?OpenTelemetrySpanKind::Consumer
-                    );
-                    span.follows_from(&root_span);
-
-                    let traceparent = item.traceparent.as_deref().unwrap_or("none");
-
-                    if item.traceparent.is_some() {
-                        let context = get_text_map_propagator(|p| p.extract(&item));
-
-                        if Self::propagate_parent() {
-                            if let Err(err) = span.set_parent(context) {
-                                warn!(error = %err, "Failed to set trace context for job '{}' (traceparent: {traceparent}): {err}", queue.name());
-                            }
-                        } else {
-                            span.add_link(context.span().span_context().clone());
-                        }
-                    }
-
-                    debug!(
-                        "Processing job '{}' (traceparent: {traceparent}).",
-                        queue.name()
-                    );
-                    if let Err(err) = self
-                        .handle(&item.payload, services.clone())
-                        .instrument(span)
-                        .await
-                    {
-                        if err.is(human_errors::Kind::System) {
-                            sentry::capture_error(&err);
-                        }
-
-                        root_span.set_status(opentelemetry::trace::Status::error(err.to_string()));
-                        error!(error = %err, "An error occurred while processing job '{}' (traceparent: {traceparent}): {err}", queue.name());
-                    } else {
-                        info!(
-                            "Job '{}' completed successfully (traceparent: {traceparent}).",
-                            queue.name()
-                        );
-                        queue.complete(item).await.unwrap();
-                    }
-                }
-                Err(err) => {
-                    error!(error = %err, "An error occurred while fetching job from queue '{}': {}", queue.name(), err);
-                    tokio::time::sleep(std::time::Duration::from_secs(5)).await;
-                }
-            }
-        }
-    }
+    ) -> impl std::future::Future<Output = Result<(), human_errors::Error>> + Send;
 
     fn job_hash(&self, job: &Self::JobType) -> Result<String, human_errors::Error> {
         let serialized = serde_json::to_string(job).wrap_system_err(
@@ -124,5 +77,397 @@ pub trait Job {
         )?;
 
         Ok(sha256::digest(serialized))
+    }
+}
+
+/// An object-safe, type-erased view over a [`Job`] implementation.
+///
+/// This is what the [`JobConsumer`] dispatches to: it deserializes the raw
+/// queue payload into the job's concrete `JobType` before delegating to
+/// [`Job::handle`]. A blanket implementation is provided for every [`Job`], so
+/// jobs only need to implement [`Job`] (and register themselves via
+/// [`register_job!`]) to participate in dynamic dispatch.
+#[async_trait::async_trait]
+pub trait JobRunnable: Send + Sync {
+    /// The queue partition this job consumes from. Also used as the routing key
+    /// for dynamic dispatch.
+    fn partition(&self) -> &'static str;
+
+    /// Whether the parent trace context should be propagated into the job span.
+    fn propagate_parent(&self) -> bool;
+
+    /// How long a dequeued message should remain reserved while this job runs.
+    fn timeout(&self) -> TimeDelta;
+
+    /// Run any one-time startup work for the underlying [`Job::setup`].
+    async fn setup(&self, services: AppServices) -> Result<(), human_errors::Error>;
+
+    /// Deserialize the raw queue payload and run the underlying [`Job::handle`].
+    async fn handle(
+        &self,
+        payload: &serde_json::Value,
+        services: AppServices,
+    ) -> Result<(), human_errors::Error>;
+}
+
+#[async_trait::async_trait]
+impl<J> JobRunnable for J
+where
+    J: Job + Send + Sync + 'static,
+{
+    fn partition(&self) -> &'static str {
+        <J as Job>::partition()
+    }
+
+    fn propagate_parent(&self) -> bool {
+        <J as Job>::propagate_parent()
+    }
+
+    fn timeout(&self) -> TimeDelta {
+        Job::timeout(self)
+    }
+
+    async fn setup(&self, services: AppServices) -> Result<(), human_errors::Error> {
+        Job::setup(self, services).await
+    }
+
+    async fn handle(
+        &self,
+        payload: &serde_json::Value,
+        services: AppServices,
+    ) -> Result<(), human_errors::Error> {
+        let job = <J::JobType as serde::Deserialize>::deserialize(payload).wrap_user_err(
+            "Failed to deserialize the job payload into the type expected by its handler.",
+            &[
+                "This usually indicates a mismatch between the enqueued job and its registered handler.",
+                "Please report this issue to the dev team on GitHub.",
+            ],
+        )?;
+
+        Job::handle(self, &job, services).await
+    }
+}
+
+/// A registration entry for a [`JobRunnable`], collected automatically via the
+/// [`inventory`] crate. Use [`register_job!`] to submit one for a job.
+pub struct JobRegistration(&'static dyn JobRunnable);
+
+impl JobRegistration {
+    pub const fn new<T: JobRunnable>(job: &'static T) -> Self {
+        Self(job)
+    }
+
+    pub fn handler(&self) -> &'static dyn JobRunnable {
+        self.0
+    }
+}
+
+inventory::collect!(JobRegistration);
+
+/// Registers a [`Job`] implementation so that it is automatically picked up by
+/// the [`JobConsumer`]. The argument is a value of a unit job struct, e.g.
+/// `register_job!(AzureMonitorWebhook);`.
+#[macro_export]
+macro_rules! register_job {
+    ($job:expr) => {
+        inventory::submit! { $crate::job::JobRegistration::new(&$job) }
+    };
+}
+
+/// The single queue consumer responsible for processing every registered job.
+///
+/// It dequeues messages from any partition, looks up the matching handler in
+/// the registry built from [`inventory`], and dispatches the work onto a
+/// background task so that multiple jobs can run concurrently.
+pub struct JobHost;
+
+impl JobHost {
+    #[instrument("job.host.run", skip(services), fields(otel.kind=?OpenTelemetrySpanKind::Consumer), err(Display))]
+    pub async fn run(services: AppServices) -> Result<(), human_errors::Error> {
+        let mut registry: HashMap<&'static str, &'static dyn JobRunnable> = HashMap::new();
+        for registration in inventory::iter::<JobRegistration> {
+            let handler = registration.handler();
+            let partition = handler.partition();
+            if registry.insert(partition, handler).is_some() {
+                return Err(human_errors::user(
+                    format!(
+                        "Multiple job handlers are registered for the queue partition '{partition}'."
+                    ),
+                    &[
+                        "Each job must use a unique partition.",
+                        "Please report this issue to the dev team on GitHub.",
+                    ],
+                ));
+            }
+        }
+
+        info!(
+            "Job host started with {} registered handler(s).",
+            registry.len()
+        );
+
+        // Run one-time startup wiring for every registered job (for example,
+        // scheduling recurring cron tasks) before we begin processing work.
+        for handler in registry.values() {
+            handler.setup(services.clone()).await?;
+        }
+
+        // Reserve dequeued messages for at least as long as the slowest job may
+        // take, so that a message is never released back to the queue while it
+        // is still being processed.
+        let reserve_for = registry
+            .values()
+            .map(|handler| handler.timeout())
+            .max()
+            .unwrap_or_else(|| TimeDelta::minutes(5));
+
+        let queue = services.queue();
+        let root_span = tracing::Span::current();
+
+        loop {
+            match queue.dequeue_any(reserve_for).await {
+                Ok(item) => {
+                    let Some(&handler) = registry.get(item.partition.as_str()) else {
+                        warn!(
+                            job.payload = %item.payload,
+                            "No job handler is registered for partition '{}'; dropping the message. Payload: {}",
+                            item.partition,
+                            item.payload
+                        );
+                        if let Err(err) = queue.complete(item.partition.clone(), item).await {
+                            error!(error = %err, "Failed to drop unhandled job message: {err}");
+                        }
+                        continue;
+                    };
+
+                    tokio::spawn(Self::process(
+                        handler,
+                        item,
+                        services.clone(),
+                        root_span.clone(),
+                    ));
+                }
+                Err(err) => {
+                    error!(error = %err, "An error occurred while fetching a job from the queue: {err}");
+                    tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                }
+            }
+        }
+    }
+
+    async fn process(
+        handler: &'static dyn JobRunnable,
+        item: QueueMessage<serde_json::Value>,
+        services: AppServices,
+        root_span: tracing::Span,
+    ) {
+        let queue = services.queue();
+        let name = handler.partition();
+        let delay = Utc::now() - item.scheduled_at;
+
+        let span = info_span!(
+            parent: None,
+            "job.run",
+            job.name = name,
+            job.delay = delay.num_milliseconds(),
+            otel.kind = ?OpenTelemetrySpanKind::Consumer
+        );
+        span.follows_from(&root_span);
+
+        let traceparent = item
+            .traceparent
+            .clone()
+            .unwrap_or_else(|| "none".to_string());
+
+        if item.traceparent.is_some() {
+            let context = get_text_map_propagator(|p| p.extract(&item));
+
+            if handler.propagate_parent() {
+                if let Err(err) = span.set_parent(context) {
+                    warn!(error = %err, "Failed to set trace context for job '{name}' (traceparent: {traceparent}): {err}");
+                }
+            } else {
+                span.add_link(context.span().span_context().clone());
+            }
+        }
+
+        debug!("Processing job '{name}' (traceparent: {traceparent}).");
+
+        match handler
+            .handle(&item.payload, services)
+            .instrument(span)
+            .await
+        {
+            Ok(()) => {
+                info!("Job '{name}' completed successfully (traceparent: {traceparent}).");
+                if let Err(err) = queue.complete(name.to_string(), item).await {
+                    error!(error = %err, "Failed to mark job '{name}' as completed (traceparent: {traceparent}): {err}");
+                }
+            }
+            Err(err) => {
+                if err.is(human_errors::Kind::System) {
+                    sentry::capture_error(&err);
+                }
+
+                root_span.set_status(opentelemetry::trace::Status::error(err.to_string()));
+                error!(error = %err, "An error occurred while processing job '{name}' (traceparent: {traceparent}): {err}");
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashSet;
+
+    use crate::services::ServicesContainer;
+
+    use super::*;
+
+    #[derive(Serialize, Deserialize)]
+    struct TestPayload {
+        id: String,
+        value: String,
+    }
+
+    struct TestJob;
+
+    impl Job for TestJob {
+        type JobType = TestPayload;
+
+        fn partition() -> &'static str {
+            "test/dynamic-dispatch"
+        }
+
+        async fn setup(
+            &self,
+            services: impl Services + Send + Sync + 'static,
+        ) -> Result<(), human_errors::Error> {
+            services
+                .kv()
+                .set("test/dynamic-dispatch", "setup", "done".to_string())
+                .await?;
+            Ok(())
+        }
+
+        async fn handle(
+            &self,
+            job: &Self::JobType,
+            services: impl Services + Send + Sync + 'static,
+        ) -> Result<(), human_errors::Error> {
+            services
+                .kv()
+                .set("test/dynamic-dispatch", job.id.clone(), job.value.clone())
+                .await?;
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn test_registry_has_unique_partitions() {
+        let mut seen = HashSet::new();
+        let mut partitions = Vec::new();
+
+        for registration in inventory::iter::<JobRegistration> {
+            let partition = registration.handler().partition();
+            assert!(
+                seen.insert(partition),
+                "duplicate job partition registered: {partition}"
+            );
+            partitions.push(partition);
+        }
+
+        // Every job that ships with the application should be registered.
+        assert!(partitions.contains(&"cron"));
+        assert!(partitions.contains(&"webhooks/azure-monitor"));
+        assert!(
+            partitions.len() >= 19,
+            "expected at least 19 registered jobs, found {}",
+            partitions.len()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_job_runnable_deserializes_and_dispatches() {
+        let services = ServicesContainer::new_mock().await.unwrap();
+
+        let payload = serde_json::json!({ "id": "k1", "value": "v1" });
+        JobRunnable::handle(&TestJob, &payload, services.clone())
+            .await
+            .unwrap();
+
+        let stored: Option<String> = services
+            .kv()
+            .get("test/dynamic-dispatch", "k1")
+            .await
+            .unwrap();
+        assert_eq!(stored.as_deref(), Some("v1"));
+    }
+
+    #[tokio::test]
+    async fn test_job_runnable_runs_setup() {
+        let services = ServicesContainer::new_mock().await.unwrap();
+
+        // The type-erased setup should delegate to the job's `Job::setup`.
+        JobRunnable::setup(&TestJob, services.clone())
+            .await
+            .unwrap();
+
+        let stored: Option<String> = services
+            .kv()
+            .get("test/dynamic-dispatch", "setup")
+            .await
+            .unwrap();
+        assert_eq!(stored.as_deref(), Some("done"));
+    }
+
+    #[tokio::test]
+    async fn test_consumer_processes_and_completes_message() {
+        static TEST_JOB: TestJob = TestJob;
+
+        let services = ServicesContainer::new_mock().await.unwrap();
+
+        services
+            .queue()
+            .enqueue(
+                "test/dynamic-dispatch",
+                TestPayload {
+                    id: "k2".into(),
+                    value: "v2".into(),
+                },
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        let item = services
+            .queue()
+            .dequeue_any(chrono::Duration::seconds(60))
+            .await
+            .unwrap();
+        assert_eq!(item.partition, "test/dynamic-dispatch");
+
+        JobHost::process(&TEST_JOB, item, services.clone(), tracing::Span::none()).await;
+
+        // The job handler should have run.
+        let stored: Option<String> = services
+            .kv()
+            .get("test/dynamic-dispatch", "k2")
+            .await
+            .unwrap();
+        assert_eq!(stored.as_deref(), Some("v2"));
+
+        // The message should have been completed (removed) from the queue, so a
+        // subsequent dequeue finds nothing and blocks until the timeout elapses.
+        let next = tokio::time::timeout(
+            std::time::Duration::from_millis(250),
+            services.queue().dequeue_any(chrono::Duration::seconds(60)),
+        )
+        .await;
+        assert!(
+            next.is_err(),
+            "expected the queue to be empty after the job completed"
+        );
     }
 }
