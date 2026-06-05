@@ -3,9 +3,7 @@ use std::fmt::Display;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    collectors::{
-        GitHubNotificationsCollector, GitHubNotificationsSubjectState, IncrementalCollector,
-    },
+    collectors::{GitHubNotificationsCollector, IncrementalCollector},
     prelude::*,
 };
 
@@ -67,7 +65,7 @@ impl Job for GitHubNotificationsCleanupWorkflow {
             if let Some(subject) = collector
                 .get_subject(&notification.subject, &services)
                 .await?
-                && subject.state != GitHubNotificationsSubjectState::Open
+                && !subject.is_open()
             {
                 collector.mark_as_done(&notification.id, &services).await?;
             }

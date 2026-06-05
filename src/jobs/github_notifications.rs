@@ -3,9 +3,7 @@ use std::fmt::Display;
 use chrono::TimeDelta;
 use serde::{Deserialize, Serialize};
 
-use crate::collectors::{
-    GitHubNotificationsCollector, GitHubNotificationsSubjectState, GitHubSubjectInformation,
-};
+use crate::collectors::{GitHubNotificationsCollector, GitHubSubjectInformation};
 use crate::prelude::*;
 use crate::publishers::{
     TodoistCompleteTask, TodoistCompleteTaskPayload, TodoistDueDate, TodoistUpsertTask,
@@ -59,7 +57,7 @@ impl GitHubNotificationsWorkflow {
                     "Reason: {}\nAuthor: {}",
                     event.reason,
                     subject
-                        .map(|s| s.user.login)
+                        .and_then(|s| s.user.map(|u| u.login))
                         .unwrap_or("unknown".to_string()),
                 )
                 .trim()
@@ -90,8 +88,11 @@ impl GitHubNotificationsWorkflow {
             }
 
             if let Some(subject) = collector.get_subject(&item.subject, &services).await? {
-                if subject.state == GitHubNotificationsSubjectState::Open
-                    && subject.user.login == "dependabot[bot]"
+                if subject.is_open()
+                    && subject
+                        .user
+                        .as_ref()
+                        .is_some_and(|u| u.login == "dependabot[bot]")
                 {
                     // Schedule an auto-close task to resolve this notification later if the PR is auto-merged
 
@@ -107,7 +108,7 @@ impl GitHubNotificationsWorkflow {
                         &services,
                     )
                     .await?;
-                } else if subject.state == GitHubNotificationsSubjectState::Open {
+                } else if subject.is_open() {
                     TodoistUpsertTask::dispatch(
                         self.build_task(&item, job, Some(subject)),
                         Some(item.id.clone().into()),
@@ -171,7 +172,7 @@ impl Job for GitHubNotificationsWorkflow {
                     )
                     .await?
                 }
-                Some(subject) if subject.state == GitHubNotificationsSubjectState::Open => {
+                Some(subject) if subject.is_open() => {
                     TodoistUpsertTask::dispatch(
                         self.build_task(event, job, Some(subject)),
                         Some(event.id.clone().into()),

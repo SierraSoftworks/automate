@@ -75,14 +75,14 @@ impl GitHubNotificationsCollector {
                 }
             }
 
-            let issue: GitHubSubjectInformation = response.json().await.wrap_user_err(
+            let issue: GitHubSubjectInformation = response.json().await.wrap_system_err(
                 format!(
                     "Failed to read the content of the GitHub notification subject from URL '{}'.",
                     url
                 ),
                 &[
-                    "Check that the URL is correct and that the server is reachable.",
-                    "Check that your network connection is working properly.",
+                    "This usually means GitHub's response format differs from the model we expect for this subject type.",
+                    "Please report this issue to the dev team on GitHub so the model can be updated.",
                 ],
             )?;
 
@@ -251,14 +251,14 @@ impl IncrementalCollector for GitHubNotificationsCollector {
             .unwrap_or("Thu, 01 Jan 1970 00:00:00 GMT")
             .to_string();
 
-        let notifications: Vec<GitHubNotificationsItem> = response.json().await.wrap_user_err(
+        let notifications: Vec<GitHubNotificationsItem> = response.json().await.wrap_system_err(
             format!(
-                "Failed to read the content of the GitHub Releases from URL '{}'.",
+                "Failed to read the content of the GitHub notifications list from URL '{}'.",
                 &self.api_url
             ),
             &[
-                "Check that the URL is correct and that the server is reachable.",
-                "Check that your network connection is working properly.",
+                "This usually means GitHub's response format differs from the model we expect.",
+                "Please report this issue to the dev team on GitHub so the model can be updated.",
             ],
         )?;
 
@@ -404,7 +404,7 @@ pub struct GitHubNotificationsSubject {
     pub latest_comment_url: Option<String>,
 }
 
-#[derive(Serialize, Deserialize, Clone, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Debug)]
 #[serde(rename_all = "lowercase")]
 pub enum GitHubNotificationsSubjectState {
     Open,
@@ -414,9 +414,32 @@ pub enum GitHubNotificationsSubjectState {
 
 #[derive(Serialize, Deserialize, Clone)]
 pub struct GitHubSubjectInformation {
-    pub state: GitHubNotificationsSubjectState,
+    /// The open/closed/merged state of the subject.
+    ///
+    /// Only issues and pull requests expose a `state` field. Other subject
+    /// types (such as releases, discussions, and commits) have no equivalent
+    /// concept, so this is optional and will be `None` for those subjects.
+    #[serde(default)]
+    pub state: Option<GitHubNotificationsSubjectState>,
     pub body: Option<String>,
-    pub user: GitHubUser,
+    /// The user associated with the subject.
+    ///
+    /// Issues and pull requests provide this via the `user` field, while
+    /// releases use `author`; we accept either spelling. It may be absent for
+    /// subject types that do not reference a single user.
+    #[serde(default, alias = "author")]
+    pub user: Option<GitHubUser>,
+}
+
+impl GitHubSubjectInformation {
+    /// Returns `true` only when the subject is explicitly in the `Open` state.
+    ///
+    /// Subjects without a state (for example releases) are not considered open,
+    /// matching the previous behaviour where any non-`Open` state was treated
+    /// as resolved.
+    pub fn is_open(&self) -> bool {
+        self.state == Some(GitHubNotificationsSubjectState::Open)
+    }
 }
 
 #[cfg(test)]
@@ -634,5 +657,100 @@ mod tests {
             "Mon, 08 Apr 2024 12:00:00 GMT",
             "If-Modified-Since header should match the provided watermark"
         );
+    }
+
+    #[test]
+    fn test_subject_information_deserializes_issue() {
+        let body = r#"{
+            "state": "open",
+            "body": "An open issue",
+            "user": { "login": "octocat", "html_url": "https://github.com/octocat" }
+        }"#;
+
+        let subject: GitHubSubjectInformation =
+            serde_json::from_str(body).expect("issue subject should deserialize");
+
+        assert_eq!(subject.state, Some(GitHubNotificationsSubjectState::Open));
+        assert!(subject.is_open());
+        assert_eq!(subject.user.unwrap().login, "octocat");
+    }
+
+    #[test]
+    fn test_subject_information_deserializes_closed_pull_request() {
+        let body = r#"{
+            "state": "closed",
+            "body": "A merged pull request",
+            "user": { "login": "hubot", "html_url": "https://github.com/hubot" }
+        }"#;
+
+        let subject: GitHubSubjectInformation =
+            serde_json::from_str(body).expect("pull request subject should deserialize");
+
+        assert_eq!(subject.state, Some(GitHubNotificationsSubjectState::Closed));
+        assert!(!subject.is_open());
+    }
+
+    #[test]
+    fn test_subject_information_deserializes_release() {
+        // Releases (and other subject types) have no `state` field and use
+        // `author` rather than `user`. This previously failed to deserialize.
+        let body = r#"{
+            "tag_name": "v1.0.0",
+            "name": "v1.0.0",
+            "body": "Release notes",
+            "draft": false,
+            "prerelease": false,
+            "author": { "login": "octocat", "html_url": "https://github.com/octocat" }
+        }"#;
+
+        let subject: GitHubSubjectInformation =
+            serde_json::from_str(body).expect("release subject should deserialize");
+
+        assert_eq!(subject.state, None);
+        assert!(
+            !subject.is_open(),
+            "a stateless subject should not be considered open"
+        );
+        assert_eq!(
+            subject.user.expect("author should map to user").login,
+            "octocat"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_get_subject_release() {
+        let mock_server = MockServer::start().await;
+        let body = r#"{
+            "tag_name": "v1.0.0",
+            "name": "v1.0.0",
+            "body": "Release notes",
+            "draft": false,
+            "prerelease": false,
+            "author": { "login": "octocat", "html_url": "https://github.com/octocat" }
+        }"#;
+
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(body))
+            .mount(&mock_server)
+            .await;
+
+        let collector = GitHubNotificationsCollector::new_with_url(mock_server.uri());
+        let services = crate::testing::mock_services().await.unwrap();
+
+        let subject = GitHubNotificationsSubject {
+            title: "Release v1.0.0".into(),
+            type_: "Release".into(),
+            url: Some(mock_server.uri()),
+            latest_comment_url: None,
+        };
+
+        let info = collector
+            .get_subject(&subject, &services)
+            .await
+            .expect("fetching a release subject should not error")
+            .expect("a subject should be returned when a URL is present");
+
+        assert!(!info.is_open());
+        assert_eq!(info.user.unwrap().login, "octocat");
     }
 }

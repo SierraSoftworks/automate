@@ -295,7 +295,7 @@ impl JobHost {
 
         match handler
             .handle(&item.payload, services)
-            .instrument(span)
+            .instrument(span.clone())
             .await
         {
             Ok(()) => {
@@ -309,10 +309,35 @@ impl JobHost {
                     sentry::capture_error(&err);
                 }
 
-                root_span.set_status(opentelemetry::trace::Status::error(err.to_string()));
+                // Record the failure against the job's own span (rather than the
+                // long-lived consumer span) so that it is exported as part of the
+                // trace, including an OpenTelemetry `exception` event.
+                Self::record_job_failure(&span, &err);
+
                 error!(error = %err, "An error occurred while processing job '{name}' (traceparent: {traceparent}): {err}");
             }
         }
+    }
+
+    /// Records a job failure against the supplied span following OpenTelemetry
+    /// semantic conventions, attaching an `exception` event and marking the span
+    /// status as an error so the failure is visible in exported traces.
+    fn record_job_failure(span: &tracing::Span, err: &human_errors::Error) {
+        let exception_type = if err.is(human_errors::Kind::System) {
+            "SystemFailure"
+        } else {
+            "UserError"
+        };
+
+        span.add_event(
+            "exception",
+            vec![
+                opentelemetry::KeyValue::new("exception.type", exception_type),
+                opentelemetry::KeyValue::new("exception.message", err.to_string()),
+                opentelemetry::KeyValue::new("exception.escaped", true),
+            ],
+        );
+        span.set_status(opentelemetry::trace::Status::error(err.to_string()));
     }
 }
 
