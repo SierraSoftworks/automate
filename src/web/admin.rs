@@ -81,9 +81,8 @@ pub async fn admin_index<S: Services>(
 pub async fn admin_db_overview<S: Services>(
     services: web::Data<S>,
 ) -> actix_web::HttpResponse {
-    let all_entries = match services
-        .kv()
-        .scan::<serde_json::Value>()
+    let all_entries = match KeyValueStore::scan(&services
+        .kv())
         .await
     {
         Ok(entries) => entries,
@@ -209,4 +208,65 @@ pub async fn admin_queue_partition<S: Services>(
         }
     })
     .await
+}
+
+#[derive(serde::Deserialize)]
+pub struct DeleteFormData {
+    pub partition: String,
+    pub key: String,
+}
+
+pub async fn admin_db_delete<S: Services>(
+    services: web::Data<S>,
+    req: actix_web::HttpRequest,
+    form: web::Form<DeleteFormData>,
+) -> actix_web::HttpResponse {
+    let form = form.into_inner();
+    if let Err(err) = services.kv().remove(form.partition, form.key).await {
+        return actix_web::HttpResponse::InternalServerError().body(err.to_string());
+    }
+    redirect_back(&req)
+}
+
+#[derive(serde::Deserialize)]
+pub struct TriggerFormData {
+    pub partition: String,
+    pub key: String,
+    /// Serialised JSON payload
+    pub payload: String,
+}
+
+pub async fn admin_queue_trigger<S: Services>(
+    services: web::Data<S>,
+    req: actix_web::HttpRequest,
+    form: web::Form<TriggerFormData>,
+) -> actix_web::HttpResponse {
+    let form = form.into_inner();
+    let payload: serde_json::Value = match serde_json::from_str(&form.payload) {
+        Ok(v) => v,
+        Err(e) => {
+            return actix_web::HttpResponse::BadRequest()
+                .body(format!("Invalid payload JSON: {e}"));
+        }
+    };
+    if let Err(err) = services
+        .queue()
+        .enqueue(form.partition, payload, Some(form.key.into()), None)
+        .await
+    {
+        return actix_web::HttpResponse::InternalServerError().body(err.to_string());
+    }
+    redirect_back(&req)
+}
+
+fn redirect_back(req: &actix_web::HttpRequest) -> actix_web::HttpResponse {
+    let location = req
+        .headers()
+        .get(actix_web::http::header::REFERER)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("/admin")
+        .to_owned();
+    actix_web::HttpResponse::SeeOther()
+        .insert_header((actix_web::http::header::LOCATION, location))
+        .finish()
 }

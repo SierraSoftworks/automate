@@ -305,7 +305,7 @@ a>button:focus {
 
 .kv-entry {
   display: grid;
-  grid-template-columns: 280px 1fr;
+  grid-template-columns: 280px 1fr auto;
   background: #fff;
 }
 
@@ -343,5 +343,61 @@ a>button:focus {
 
 .kv-entry-value code {
   font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+}
+
+/* Admin action buttons */
+.admin-action-btn {
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  padding: 0.2rem 0.55rem;
+  border-radius: 3px;
+  border: none;
+  cursor: pointer;
+  transition: background 120ms ease, opacity 120ms ease;
+  white-space: nowrap;
+}
+
+.admin-action-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.kv-delete-btn {
+  color: #b91c1c;
+  background: #fef2f2;
+}
+
+.kv-delete-btn:hover:not(:disabled) {
+  background: #fee2e2;
+}
+
+.queue-trigger-btn {
+  color: #0F5A80;
+  background: #f0f6fa;
+}
+
+.queue-trigger-btn:hover:not(:disabled) {
+  background: #dbeeff;
+}
+
+.kv-entry-actions {
+  padding: 0.5rem 0.75rem;
+  display: flex;
+  align-items: flex-start;
+  border-left: 1px solid #f0f0f0;
+  background: #fafafa;
+}
+
+.queue-entry-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+/* Forms used purely as action wrappers should not affect layout */
+.kv-entry-actions form,
+.queue-entry-actions form {
+  display: contents;
 }
 

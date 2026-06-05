@@ -45,11 +45,24 @@ pub fn queue_view(props: &QueueViewProps) -> Html {
                                 let status_class = format!("queue-status status-{}", msg.status.to_lowercase());
                                 let pretty = serde_json::to_string_pretty(&msg.payload)
                                     .unwrap_or_else(|_| msg.payload.to_string());
+                                let payload_json = serde_json::to_string(&msg.payload)
+                                    .unwrap_or_default();
                                 html! {
                                     <div class="queue-entry">
                                         <div class="queue-entry-head">
                                             <div class="queue-entry-key">{ &msg.key }</div>
-                                            <div class={status_class}>{ &msg.status }</div>
+                                            <div class="queue-entry-actions">
+                                                <div class={status_class}>{ &msg.status }</div>
+                                                <form method="post" action="/admin/queue/trigger">
+                                                    <input type="hidden" name="partition" value={props.partition.clone()} />
+                                                    <input type="hidden" name="key" value={msg.key.clone()} />
+                                                    <input type="hidden" name="payload" value={payload_json} />
+                                                    <button
+                                                        class="admin-action-btn queue-trigger-btn"
+                                                        type="submit"
+                                                    >{ "trigger" }</button>
+                                                </form>
+                                            </div>
                                         </div>
                                         <div class="queue-entry-meta">
                                             <span class="queue-meta-item">
@@ -124,6 +137,16 @@ pub fn key_value_view(props: &KeyValueViewProps) -> Html {
                                     <div class="kv-entry">
                                         <div class="kv-entry-key">{ key }</div>
                                         <pre class="kv-entry-value"><code>{ pretty }</code></pre>
+                                        <div class="kv-entry-actions">
+                                            <form method="post" action="/admin/db/delete">
+                                                <input type="hidden" name="partition" value={props.partition.clone()} />
+                                                <input type="hidden" name="key" value={key.clone()} />
+                                                <button
+                                                    class="admin-action-btn kv-delete-btn"
+                                                    type="submit"
+                                                >{ "delete" }</button>
+                                            </form>
+                                        </div>
                                     </div>
                                 }
                             }) }
