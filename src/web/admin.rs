@@ -125,7 +125,7 @@ pub async fn admin_db_overview<S: Services>(services: web::Data<S>) -> actix_web
         groups.entry(partition).or_default().push((key, value));
     }
     let partitions: Vec<(String, Vec<(String, serde_json::Value)>)> = groups.into_iter().collect();
-    let csrf_token = super::csrf::generate_token(&services.config().web.admin);
+    let csrf_token = super::helpers::csrf::generate_token(&services.config().web.admin);
 
     render_page("DB | Admin | Automate", move || {
         html! {
@@ -229,7 +229,7 @@ pub async fn admin_queue<S: Services>(services: web::Data<S>) -> actix_web::Http
     }
 
     display.sort_by_key(|msg| msg.scheduled_at);
-    let csrf_token = super::csrf::generate_token(&services.config().web.admin);
+    let csrf_token = super::helpers::csrf::generate_token(&services.config().web.admin);
 
     render_page("Queue | Admin | Automate", move || {
         html! {
@@ -255,7 +255,7 @@ pub async fn admin_db_delete<S: Services>(
     form: web::Form<DeleteFormData>,
 ) -> actix_web::HttpResponse {
     let form = form.into_inner();
-    if !super::csrf::validate_token(&services.config().web.admin, &form.csrf_token) {
+    if !super::helpers::csrf::validate_token(&services.config().web.admin, &form.csrf_token) {
         return csrf_rejected();
     }
     if let Err(err) = services.kv().remove(form.partition, form.key).await {
@@ -279,7 +279,7 @@ pub async fn admin_queue_trigger<S: Services>(
     form: web::Form<TriggerFormData>,
 ) -> actix_web::HttpResponse {
     let form = form.into_inner();
-    if !super::csrf::validate_token(&services.config().web.admin, &form.csrf_token) {
+    if !super::helpers::csrf::validate_token(&services.config().web.admin, &form.csrf_token) {
         return csrf_rejected();
     }
     let payload: serde_json::Value = match serde_json::from_str(&form.payload) {
@@ -305,7 +305,7 @@ pub async fn admin_queue_delete<S: Services>(
     form: web::Form<DeleteFormData>,
 ) -> actix_web::HttpResponse {
     let form = form.into_inner();
-    if !super::csrf::validate_token(&services.config().web.admin, &form.csrf_token) {
+    if !super::helpers::csrf::validate_token(&services.config().web.admin, &form.csrf_token) {
         return csrf_rejected();
     }
     if let Err(err) = services.queue().purge(form.partition, form.key).await {

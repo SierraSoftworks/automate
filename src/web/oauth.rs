@@ -50,7 +50,7 @@ async fn oauth_authorize<S: Services + Send + Sync + 'static>(
     req: actix_web::HttpRequest,
 ) -> impl actix_web::Responder {
     if let Some(base_url) =
-        super::request::base_url(services.as_ref(), req.headers(), req.uri().scheme_str())
+        super::helpers::request::base_url(services.as_ref(), req.headers(), req.uri().scheme_str())
     {
         match services.config().oauth2.get(&*provider).cloned() {
             Some(cfg) => {
@@ -102,7 +102,7 @@ async fn oauth_callback<S: Services + Send + Sync + 'static>(
     query: web::Query<std::collections::HashMap<String, String>>,
 ) -> actix_web::HttpResponse {
     if let Some(base_url) =
-        super::request::base_url(services.as_ref(), req.headers(), req.uri().scheme_str())
+        super::helpers::request::base_url(services.as_ref(), req.headers(), req.uri().scheme_str())
     {
         if let Some(config) = services.config().oauth2.get(&*provider).cloned() {
             if let Some(code) = query.get("code") {
