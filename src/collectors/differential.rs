@@ -12,15 +12,7 @@ pub enum Diff<ID, V> {
 pub trait DifferentialCollector: Collector {
     type Identifier: Eq + std::hash::Hash + Serialize + DeserializeOwned + Clone + Send + 'static;
 
-    fn kind(&self) -> &'static str;
-
-    fn partition(&self, namespace: Option<&'static str>) -> String {
-        if let Some(ns) = namespace {
-            format!("collector::{ns}::{}", self.kind())
-        } else {
-            format!("collector::{}", self.kind())
-        }
-    }
+    fn partition(&self) -> &'static str;
 
     fn key(&self) -> Cow<'static, str>;
 
@@ -34,14 +26,14 @@ pub trait DifferentialCollector: Collector {
         &self,
         services: &impl Services,
     ) -> Result<Vec<Diff<Self::Identifier, Self::Item>>, human_errors::Error> {
-        let partition = self.partition(None);
+        let partition = self.partition();
         let key = self.key();
 
         let items = self.fetch().await?;
 
         let old_identifiers: Vec<Self::Identifier> = services
             .kv()
-            .get(partition.clone(), key.clone())
+            .get(partition, key.clone())
             .await?
             .unwrap_or_default();
 

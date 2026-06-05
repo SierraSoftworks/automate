@@ -180,8 +180,8 @@ impl Collector for GitHubNotificationsCollector {
 impl IncrementalCollector for GitHubNotificationsCollector {
     type Watermark = String;
 
-    fn kind(&self) -> &'static str {
-        "github_notifications"
+    fn partition(&self) -> &'static str {
+        "github/notifications"
     }
 
     fn key(&self) -> std::borrow::Cow<'static, str> {

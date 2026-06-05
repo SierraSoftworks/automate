@@ -32,7 +32,7 @@ impl Job for GitHubReleasesWorkflow {
     type JobType = GitHubReleasesConfig;
 
     fn partition() -> &'static str {
-        "workflow/github-releases-todoist"
+        "github/releases/todoist"
     }
 
     #[instrument("workflow.github_releases.setup", skip(self, services), err(Display))]

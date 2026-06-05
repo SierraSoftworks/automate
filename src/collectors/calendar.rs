@@ -46,8 +46,8 @@ impl Collector for CalendarCollector {
 impl DifferentialCollector for CalendarCollector {
     type Identifier = CalendarEventIdentifier;
 
-    fn kind(&self) -> &'static str {
-        "calendar"
+    fn partition(&self) -> &'static str {
+        "calendar/ics"
     }
 
     fn key(&self) -> std::borrow::Cow<'static, str> {

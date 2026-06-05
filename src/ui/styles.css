@@ -3,9 +3,11 @@ html {
 }
 
 body {
-    height: 100vh;
+    min-height: 100vh;
     width: 100vw;
     margin: 0;
+    display: flex;
+    flex-direction: column;
 }
 
 h1 {
@@ -29,10 +31,8 @@ h1>strong {
 }
 
 footer {
-    position: absolute;
-    bottom: 1rem;
-    left: 0;
-    right: 0;
+    margin-top: auto;
+    padding: 1rem 0;
     text-align: center;
     font-size: 0.8rem;
     opacity: 0.7;
@@ -54,3 +54,534 @@ a>button:hover,
 a>button:focus {
   background: #117bb0;
 }
+
+/* Admin layout */
+.admin-content {
+  max-width: 1280px;
+  margin: 5rem auto;
+  padding: 0 40px 5rem;
+}
+
+/* Element-Plus inspired admin page header */
+.page-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 2rem;
+  padding-bottom: 1.25rem;
+  border-bottom: 1px solid #ebeef5;
+}
+
+.page-header__main {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+
+.page-header__back {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  flex-shrink: 0;
+  color: #606266;
+  text-decoration: none;
+  font-size: 0.9rem;
+  font-weight: 500;
+  transition: color 120ms ease;
+}
+
+.page-header__back:hover {
+  color: #0F5A80;
+}
+
+.page-header__icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.page-header__divider {
+  width: 1px;
+  height: 18px;
+  background: #dcdfe6;
+  margin: 0 1rem;
+  flex-shrink: 0;
+}
+
+.page-header__content {
+  display: flex;
+  align-items: baseline;
+  gap: 0.75rem;
+  min-width: 0;
+}
+
+.page-header__heading {
+  font-size: 1.25rem;
+  font-weight: 500;
+  color: #303133;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.page-header__subtitle {
+  font-size: 0.85rem;
+  color: #909399;
+  white-space: nowrap;
+}
+
+.page-header__extra {
+  flex-shrink: 0;
+}
+
+/* Signed-in user chip */
+.admin-user {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.admin-user-avatar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: #0F5A80;
+  color: #fff;
+  font-size: 0.8rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.admin-user-meta {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.25;
+}
+
+.admin-user-name {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: #303133;
+}
+
+.admin-user-email {
+  font-size: 0.75rem;
+  color: #909399;
+}
+
+.admin-intro {
+  color: #555;
+  font-size: 0.95rem;
+  line-height: 1.6;
+  margin: 0 0 2rem;
+}
+
+/* Admin dashboard cards */
+.admin-cards {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1.5rem;
+}
+
+.admin-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 1rem;
+  flex: 1 1 260px;
+  min-width: 240px;
+  padding: 1.5rem;
+  background: #fff;
+  border: 1px solid #e8e8e8;
+  border-radius: 8px;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.06);
+  text-decoration: none;
+  color: inherit;
+  transition: border-color 120ms ease, box-shadow 120ms ease, transform 120ms ease;
+}
+
+.admin-card:hover {
+  border-color: #b9dcec;
+  box-shadow: 0 4px 14px rgba(15, 90, 128, 0.12);
+  transform: translateY(-2px);
+}
+
+.admin-card-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 48px;
+  height: 48px;
+  flex-shrink: 0;
+  border-radius: 8px;
+  color: #0F5A80;
+  background: #f0f6fa;
+  border: 1px solid #d6e6ef;
+}
+
+.admin-card-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.admin-card-title {
+  font-size: 1.05rem;
+  font-weight: 600;
+  color: #1a1a1a;
+}
+
+.admin-card-desc {
+  font-size: 0.85rem;
+  color: #666;
+  line-height: 1.5;
+}
+
+/* Admin endpoint listing */
+.admin-endpoints {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  border: 1px solid #e8e8e8;
+  border-radius: 4px;
+  overflow: hidden;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.06);
+  margin-bottom: 2rem;
+}
+
+.admin-endpoint {
+  display: grid;
+  grid-template-columns: 64px 1fr;
+  background: #fff;
+}
+
+.admin-endpoint + .admin-endpoint {
+  border-top: 1px solid #f0f0f0;
+}
+
+.admin-endpoint-method {
+  padding: 0.9rem 0.75rem;
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  color: #0F5A80;
+  background: #f5fafd;
+  border-right: 1px solid #e8e8e8;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+}
+
+.admin-endpoint-detail {
+  padding: 0.75rem 1rem;
+}
+
+.admin-endpoint-path {
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: #1a1a1a;
+  margin-bottom: 0.4rem;
+}
+
+.admin-endpoint-path em {
+  font-style: normal;
+  color: #0F5A80;
+}
+
+.admin-endpoint-desc {
+  font-size: 0.85rem;
+  color: #555;
+  line-height: 1.55;
+}
+
+/* Queue message view */
+.queue-entries {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  border: 1px solid #e8e8e8;
+  border-radius: 4px;
+  overflow: hidden;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.06);
+}
+
+.queue-entry {
+  background: #fff;
+  border-top: 1px solid #f0f0f0;
+}
+
+.queue-entry:first-child {
+  border-top: none;
+}
+
+.queue-entry-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.65rem 1rem;
+  border-bottom: 1px solid #f4f4f4;
+  background: #fafafa;
+}
+
+.queue-entry-key {
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: #333;
+  word-break: break-all;
+}
+
+.queue-status {
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 0.15rem 0.5rem;
+  border-radius: 4px;
+  border: 1px solid transparent;
+  white-space: nowrap;
+  margin-left: 1rem;
+}
+
+.status-pending  { color: #67c23a; background: #f0f9eb; border-color: #e1f3d8; }
+.status-delayed  { color: #0F5A80; background: #eef6fb; border-color: #d6e6ef; }
+.status-reserved { color: #e6a23c; background: #fdf6ec; border-color: #faecd8; }
+
+.queue-entry-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 1.5rem;
+  padding: 0.5rem 1rem;
+  font-size: 0.8rem;
+  color: #666;
+  border-bottom: 1px solid #f4f4f4;
+}
+
+.queue-meta-label {
+  font-weight: 600;
+  color: #444;
+}
+
+/* Partition discovery list */
+.partition-section {
+  margin-top: 2.5rem;
+}
+
+.partition-section > h2 {
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #888;
+  margin: 0 0 0.75rem;
+}
+
+.partition-list {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid #e8e8e8;
+  border-radius: 4px;
+  overflow: hidden;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.06);
+}
+
+.partition-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.65rem 1rem;
+  background: #fff;
+  border-top: 1px solid #f0f0f0;
+  text-decoration: none;
+  color: inherit;
+  transition: background 100ms ease;
+}
+
+.partition-item:first-child {
+  border-top: none;
+}
+
+.partition-item:hover {
+  background: #f5fafd;
+}
+
+.partition-name {
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+  font-size: 0.85rem;
+  color: #1a1a1a;
+}
+
+.partition-action {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: #0F5A80;
+  letter-spacing: 0.03em;
+}
+
+.partition-empty {
+  font-size: 0.85rem;
+  color: #999;
+  margin: 0;
+}
+
+/* Stacked key-value partition sections on /admin/db */
+.kv-overview {
+  display: flex;
+  flex-direction: column;
+  gap: 2.5rem;
+}
+
+/* Key-Value Partition View */
+.kv-view {
+  font-family: sans-serif;
+}
+
+.kv-header {
+  display: flex;
+  align-items: baseline;
+  gap: 1rem;
+  margin-bottom: 1.5rem;
+  padding-bottom: 0.75rem;
+  border-bottom: 1px solid #e0e0e0;
+}
+
+.kv-partition {
+  font-size: 1.5rem;
+  font-weight: 300;
+  color: #1a1a1a;
+}
+
+.kv-count {
+  font-size: 0.85rem;
+  color: #888;
+}
+
+.kv-empty {
+  padding: 2rem 0;
+  color: #888;
+  font-size: 0.95rem;
+}
+
+.kv-entries {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  border: 1px solid #e8e8e8;
+  border-radius: 4px;
+  overflow: hidden;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.06);
+}
+
+.kv-entry {
+  display: grid;
+  grid-template-columns: 280px 1fr auto;
+  background: #fff;
+}
+
+.kv-entry + .kv-entry {
+  border-top: 1px solid #f0f0f0;
+}
+
+.kv-entry:hover {
+  background: #fafafa;
+}
+
+.kv-entry-key {
+  padding: 0.75rem 1rem;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: #333;
+  word-break: break-all;
+  border-right: 1px solid #f0f0f0;
+  background: #fafafa;
+  display: flex;
+  align-items: flex-start;
+}
+
+.kv-entry-value {
+  margin: 0;
+  padding: 0.75rem 1rem;
+  font-size: 0.8rem;
+  line-height: 1.5;
+  color: #444;
+  background: transparent;
+  overflow-x: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.kv-entry-value code {
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+}
+
+/* Admin action buttons (Element-Plus plain button style) */
+.admin-action-btn {
+  font-size: 0.75rem;
+  font-weight: 500;
+  line-height: 1;
+  padding: 0.4rem 0.7rem;
+  border-radius: 4px;
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: background 120ms ease, color 120ms ease, border-color 120ms ease, opacity 120ms ease;
+  white-space: nowrap;
+}
+
+.admin-action-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Primary (brand) plain button */
+.queue-trigger-btn {
+  color: #0F5A80;
+  background: #eef6fb;
+  border-color: #b9dcec;
+}
+
+.queue-trigger-btn:hover:not(:disabled) {
+  color: #fff;
+  background: #0F5A80;
+  border-color: #0F5A80;
+}
+
+/* Danger plain button */
+.kv-delete-btn,
+.queue-delete-btn {
+  color: #f56c6c;
+  background: #fef0f0;
+  border-color: #fbc4c4;
+}
+
+.kv-delete-btn:hover:not(:disabled),
+.queue-delete-btn:hover:not(:disabled) {
+  color: #fff;
+  background: #f56c6c;
+  border-color: #f56c6c;
+}
+
+.kv-entry-actions {
+  padding: 0.5rem 0.75rem;
+  display: flex;
+  align-items: flex-start;
+  border-left: 1px solid #f0f0f0;
+  background: #fafafa;
+}
+
+.queue-entry-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+/* Forms used purely as action wrappers should not affect layout */
+.kv-entry-actions form,
+.queue-entry-actions form {
+  display: contents;
+}
+

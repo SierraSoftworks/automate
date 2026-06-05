@@ -38,7 +38,7 @@ impl Job for CalendarWorkflow {
     type JobType = CalendarWorkflowConfig;
 
     fn partition() -> &'static str {
-        "workflow/calendar-todoist"
+        "calendar/todoist"
     }
 
     #[instrument("workflow.calendar.setup", skip(self, services), err(Display))]

@@ -251,6 +251,36 @@ impl From<Vec<FilterValue>> for FilterValue {
     }
 }
 
+impl From<&serde_json::Value> for FilterValue {
+    /// Converts a JSON value into a [`FilterValue`].
+    ///
+    /// Scalars (strings, numbers, booleans) and arrays are mapped onto their
+    /// equivalent filter values, with arrays becoming [`FilterValue::Tuple`]s.
+    /// JSON `null` and nested objects are mapped onto [`FilterValue::Null`]
+    /// because the filter DSL has no representation for structured records.
+    fn from(value: &serde_json::Value) -> Self {
+        match value {
+            serde_json::Value::Null => FilterValue::Null,
+            serde_json::Value::Bool(b) => FilterValue::Bool(*b),
+            serde_json::Value::Number(n) => n
+                .as_f64()
+                .map(FilterValue::Number)
+                .unwrap_or(FilterValue::Null),
+            serde_json::Value::String(s) => FilterValue::String(s.clone()),
+            serde_json::Value::Array(items) => {
+                FilterValue::Tuple(items.iter().map(FilterValue::from).collect())
+            }
+            serde_json::Value::Object(_) => FilterValue::Null,
+        }
+    }
+}
+
+impl From<serde_json::Value> for FilterValue {
+    fn from(value: serde_json::Value) -> Self {
+        FilterValue::from(&value)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use rstest::rstest;

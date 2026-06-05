@@ -37,6 +37,20 @@ const MIGRATIONS: &[&str] = &[
     "CREATE INDEX IF NOT EXISTS idx_queues_partition_hidden ON queues (partition, hiddenUntil)",
     "ALTER TABLE queues ADD COLUMN traceparent TEXT",
     "ALTER TABLE queues ADD COLUMN tracestate TEXT",
+    // Migration 6: rename partitions to hierarchical /‑delimited scheme
+    "UPDATE kv SET partition = 'calendar/ics'        WHERE partition = 'collector::calendar';
+     UPDATE kv SET partition = 'github/notifications' WHERE partition = 'collector::github_notifications';
+     UPDATE kv SET partition = 'github/releases'      WHERE partition = 'collector::github_releases';
+     UPDATE kv SET partition = 'rss/feed'             WHERE partition = 'collector::rss';
+     UPDATE kv SET partition = 'spotify/liked-tracks' WHERE partition = 'collector::spotify/tracks';
+     UPDATE queues SET partition = 'calendar/todoist'               WHERE partition = 'workflow/calendar-todoist';
+     UPDATE queues SET partition = 'github/notifications/todoist'   WHERE partition = 'workflow/github-notifications-todoist';
+     UPDATE queues SET partition = 'github/notifications/cleanup'   WHERE partition = 'workflow/github-notifications-cleanup';
+     UPDATE queues SET partition = 'github/releases/todoist'        WHERE partition = 'workflow/github-releases-todoist';
+     UPDATE queues SET partition = 'rss/todoist'                    WHERE partition = 'workflow/rss-todoist';
+     UPDATE queues SET partition = 'spotify/yearly-playlist'        WHERE partition = 'workflow/spotify-yearly-playlist';
+     UPDATE queues SET partition = 'xkcd/todoist'                   WHERE partition = 'workflow/xkcd-todoist';
+     UPDATE queues SET partition = 'youtube/todoist'                WHERE partition = 'workflow/youtube-todoist';",
 ];
 
 impl SqliteDatabase {
@@ -101,7 +115,7 @@ impl SqliteDatabase {
             self.connection
                 .call(move |c| {
                     let transaction = c.transaction()?;
-                    transaction.execute(migration, [])?;
+                    transaction.execute_batch(migration)?;
                     transaction.execute("INSERT INTO migrations (id) VALUES (?1)", [i + 1])?;
 
                     transaction.commit()
@@ -235,11 +249,67 @@ impl KeyValueStore for SqliteDatabase {
             .or_system_err(ADVICE_DB_ERROR)?;
         Ok(())
     }
+
+    #[instrument("db.sqlite.kv_partitions", skip(self), fields(otel.kind=?OpenTelemetrySpanKind::Client), err(Display))]
+    async fn partitions(&self) -> std::result::Result<Vec<String>, errors::Error> {
+        self.connection
+            .call(|c| {
+                let mut stmt = c
+                    .prepare("SELECT DISTINCT partition FROM kv ORDER BY partition ASC")
+                    .or_system_err(ADVICE_DB_ERROR)?;
+
+                let iter = stmt
+                    .query_map([], |row| row.get(0))
+                    .or_system_err(ADVICE_DB_ERROR)?;
+
+                iter.collect::<Result<Vec<_>, _>>()
+                    .or_system_err(ADVICE_DB_ERROR)
+            })
+            .await
+            .or_system_err(ADVICE_DB_ERROR)
+    }
+
+    #[instrument("db.sqlite.kv_scan", skip(self), fields(otel.kind=?OpenTelemetrySpanKind::Client), err(Display))]
+    async fn scan<T: DeserializeOwned + Send + 'static>(
+        &self,
+    ) -> std::result::Result<Vec<(String, String, T)>, errors::Error> {
+        self.connection
+            .call(|c| {
+                let mut stmt = c
+                    .prepare(
+                        "SELECT partition, key, value FROM kv \
+                         ORDER BY partition ASC, key ASC",
+                    )
+                    .or_system_err(ADVICE_DB_ERROR)?;
+
+                let iter = stmt
+                    .query_map([], |row| {
+                        let partition: String = row.get(0)?;
+                        let key: String = row.get(1)?;
+                        let value_str: String = row.get(2)?;
+                        let value: T = serde_json::from_str(&value_str).map_err(|e| {
+                            rusqlite::Error::FromSqlConversionFailure(
+                                2,
+                                rusqlite::types::Type::Text,
+                                Box::new(e),
+                            )
+                        })?;
+                        Ok((partition, key, value))
+                    })
+                    .or_system_err(ADVICE_DB_ERROR)?;
+
+                iter.collect::<Result<Vec<_>, _>>()
+                    .or_system_err(ADVICE_DB_ERROR)
+            })
+            .await
+            .or_system_err(ADVICE_DB_ERROR)
+    }
 }
 
 #[async_trait::async_trait]
 impl Queue for SqliteDatabase {
-    #[instrument("db.sqlite.enqueue", skip(self, partition, job, idempotency_key, delay), fields(otel.kind=?OpenTelemetrySpanKind::Producer, job.kind=std::any::type_name::<T>()), err(Display))]
+    #[instrument("db.sqlite.enqueue", skip(self, partition, job, idempotency_key, delay), fields(otel.kind=?OpenTelemetrySpanKind::Producer, job.kind=std::any::type_name::<T>()
+    ), err(Display))]
     async fn enqueue<P: Into<Cow<'static, str>> + Send, T: serde::Serialize + Send + 'static>(
         &self,
         partition: P,
@@ -279,7 +349,8 @@ impl Queue for SqliteDatabase {
         Ok(())
     }
 
-    #[instrument("db.sqlite.dequeue", skip(self, partition, reserve_for), fields(otel.kind=?OpenTelemetrySpanKind::Consumer, job.kind=std::any::type_name::<T>()), err(Display))]
+    #[instrument("db.sqlite.dequeue", skip(self, partition, reserve_for), fields(otel.kind=?OpenTelemetrySpanKind::Consumer, job.kind=std::any::type_name::<T>()
+    ), err(Display))]
     async fn dequeue<P: Into<Cow<'static, str>> + Send, T: DeserializeOwned + Send + 'static>(
         &self,
         partition: P,
@@ -426,6 +497,101 @@ impl Queue for SqliteDatabase {
             .or_system_err(ADVICE_DB_ERROR)?;
         Ok(())
     }
+
+    #[instrument("db.sqlite.peek", skip(self, partition, max_items), fields(otel.kind=?OpenTelemetrySpanKind::Client
+    ), err(Display))]
+    async fn peek<P: Into<Cow<'static, str>> + Send, T: DeserializeOwned + Send + 'static>(
+        &self,
+        partition: P,
+        max_items: usize,
+    ) -> std::result::Result<Vec<super::PeekedMessage<T>>, errors::Error> {
+        let partition = partition.into();
+        self.connection
+            .call(move |c| {
+                let mut stmt = c
+                    .prepare(
+                        "SELECT key, payload, scheduledAt, hiddenUntil, reservedBy, \
+                         traceparent, tracestate \
+                         FROM queues WHERE partition = ?1 \
+                         ORDER BY scheduledAt ASC LIMIT ?2",
+                    )
+                    .or_system_err(ADVICE_DB_ERROR)?;
+
+                let iter = stmt
+                    .query_map((&*partition, max_items as i64), |row| {
+                        let key: String = row.get(0)?;
+                        let payload_str: String = row.get(1)?;
+                        let scheduled_at: chrono::DateTime<chrono::Utc> = row.get(2)?;
+                        let hidden_until: chrono::DateTime<chrono::Utc> = row.get(3)?;
+                        let reserved_by: Option<String> = row.get(4)?;
+                        let traceparent: Option<String> = row.get(5)?;
+                        let tracestate: Option<String> = row.get(6)?;
+
+                        let payload: T = serde_json::from_str(&payload_str).map_err(|e| {
+                            rusqlite::Error::FromSqlConversionFailure(
+                                1,
+                                rusqlite::types::Type::Text,
+                                Box::new(e),
+                            )
+                        })?;
+
+                        Ok(super::PeekedMessage {
+                            key,
+                            payload,
+                            scheduled_at,
+                            hidden_until,
+                            reserved_by,
+                            traceparent,
+                            tracestate,
+                        })
+                    })
+                    .or_system_err(ADVICE_DB_ERROR)?;
+
+                iter.collect::<Result<Vec<_>, _>>()
+                    .or_system_err(ADVICE_DB_ERROR)
+            })
+            .await
+            .or_system_err(ADVICE_DB_ERROR)
+    }
+
+    #[instrument("db.sqlite.purge", skip(self, partition, key), fields(otel.kind=?OpenTelemetrySpanKind::Client), err(Display))]
+    async fn purge<P: Into<Cow<'static, str>> + Send, K: Into<Cow<'static, str>> + Send>(
+        &self,
+        partition: P,
+        key: K,
+    ) -> std::result::Result<(), errors::Error> {
+        let partition = partition.into();
+        let key = key.into();
+        self.connection
+            .call(move |c| {
+                c.execute(
+                    "DELETE FROM queues WHERE partition = ?1 AND key = ?2",
+                    (partition, key),
+                )
+            })
+            .await
+            .or_system_err(ADVICE_DB_ERROR)?;
+        Ok(())
+    }
+
+    #[instrument("db.sqlite.queue_partitions", skip(self), fields(otel.kind=?OpenTelemetrySpanKind::Client), err(Display))]
+    async fn partitions(&self) -> std::result::Result<Vec<String>, errors::Error> {
+        self.connection
+            .call(|c| {
+                let mut stmt = c
+                    .prepare("SELECT DISTINCT partition FROM queues ORDER BY partition ASC")
+                    .or_system_err(ADVICE_DB_ERROR)?;
+
+                let iter = stmt
+                    .query_map([], |row| row.get(0))
+                    .or_system_err(ADVICE_DB_ERROR)?;
+
+                iter.collect::<Result<Vec<_>, _>>()
+                    .or_system_err(ADVICE_DB_ERROR)
+            })
+            .await
+            .or_system_err(ADVICE_DB_ERROR)
+    }
 }
 
 #[cfg(test)]
@@ -529,5 +695,27 @@ mod tests {
             .unwrap();
 
         session.shutdown();
+    }
+
+    #[tokio::test]
+    async fn test_queue_purge() {
+        let db = SqliteDatabase::open_in_memory().await.unwrap();
+
+        db.enqueue("test_queue", "job1", Some("key1".into()), None)
+            .await
+            .unwrap();
+        db.enqueue("test_queue", "job2", Some("key2".into()), None)
+            .await
+            .unwrap();
+
+        db.purge("test_queue", "key1").await.unwrap();
+
+        let remaining: Vec<crate::db::PeekedMessage<String>> =
+            db.peek("test_queue", 10).await.unwrap();
+        assert_eq!(remaining.len(), 1);
+        assert_eq!(remaining[0].key, "key2");
+
+        // Purging a missing key is a no-op rather than an error.
+        db.purge("test_queue", "missing").await.unwrap();
     }
 }

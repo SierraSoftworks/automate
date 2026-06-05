@@ -170,7 +170,7 @@ mod tests {
         services
             .kv()
             .set(
-                collector.0.partition(None),
+                collector.0.partition(),
                 collector.0.key(),
                 DateTime::parse_from_rfc2822("Mon, 01 Apr 2024 04:00:00 -0000")
                     .unwrap()

@@ -19,7 +19,32 @@ scopes = [
 
 [web]
 address = "127.0.0.1:8080"
-admin_acl = 'client_ip in ["127.0.0.1"]'
+# base_url is used to construct absolute URLs (e.g. the OIDC redirect URI). When
+# omitted it is inferred from the incoming request's Host header.
+# base_url = 'https://automate.example.com'
+# trust_proxy controls whether the X-Forwarded-Proto/X-Forwarded-Host headers are
+# trusted when determining the request scheme and host. Only enable this when the
+# service runs behind a trusted reverse proxy that sets these headers.
+# trust_proxy = true
+
+[web.admin]
+# The admin area is denied by default; you must provide an `acl` that evaluates to
+# true to grant access. The filter can reference `client_ip`, `method`, `path`,
+# `headers.*`, and (when OIDC is configured) validated token claims via `claims.*`.
+acl = 'client_ip in ["127.0.0.1"]'
+# csrf_secret signs the CSRF tokens embedded in the admin forms. When set, tokens
+# remain valid across restarts; when omitted, a random secret is generated on
+# startup (sufficient for a single instance).
+# csrf_secret = 'change-me-to-a-long-random-string'
+
+[web.admin.oidc]
+endpoint = 'https://auth.example.com'
+client_id = '0000000000000000000000000'
+client_secret = '11111111111111111111111111111111111111111111111111'
+scopes = ['openid', 'profile', 'email']
+# base_url overrides the base URL used to build the OIDC redirect URI. Takes
+# precedence over web.base_url and the request host.
+# base_url = 'https://automate.example.com'
 
 [webhooks.azure_monitor]
 # filter = 'true'

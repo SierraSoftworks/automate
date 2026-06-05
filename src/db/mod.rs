@@ -37,6 +37,12 @@ pub trait KeyValueStore {
         key: impl Into<Cow<'static, str>> + Send,
     ) -> Result<(), errors::Error>;
 
+    async fn partitions(&self) -> Result<Vec<String>, errors::Error>;
+
+    async fn scan<T: DeserializeOwned + Send + 'static>(
+        &self,
+    ) -> Result<Vec<(String, String, T)>, errors::Error>;
+
     fn partition<T: Serialize + DeserializeOwned + Send + 'static>(
         &self,
         name: impl ToString,
@@ -81,6 +87,23 @@ pub trait Queue {
         msg: QueueMessage<T>,
     ) -> Result<(), errors::Error>;
 
+    async fn peek<P: Into<Cow<'static, str>> + Send, T: DeserializeOwned + Send + 'static>(
+        &self,
+        partition: P,
+        max_items: usize,
+    ) -> Result<Vec<PeekedMessage<T>>, errors::Error>;
+
+    /// Remove a message from the queue by its key, regardless of whether it is
+    /// currently reserved. This is intended for administrative interventions
+    /// such as cancelling a queued job.
+    async fn purge<P: Into<Cow<'static, str>> + Send, K: Into<Cow<'static, str>> + Send>(
+        &self,
+        partition: P,
+        key: K,
+    ) -> Result<(), errors::Error>;
+
+    async fn partitions(&self) -> Result<Vec<String>, errors::Error>;
+
     fn partition<T: Serialize + DeserializeOwned + Send + 'static>(
         &self,
         name: impl ToString,
@@ -90,6 +113,17 @@ pub trait Queue {
     {
         Partition::new(self.clone(), name.to_string())
     }
+}
+
+#[allow(dead_code)]
+pub struct PeekedMessage<T> {
+    pub key: String,
+    pub payload: T,
+    pub scheduled_at: chrono::DateTime<chrono::Utc>,
+    pub hidden_until: chrono::DateTime<chrono::Utc>,
+    pub reserved_by: Option<String>,
+    pub traceparent: Option<String>,
+    pub tracestate: Option<String>,
 }
 
 #[allow(dead_code)]

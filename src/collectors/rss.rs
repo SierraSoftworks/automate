@@ -33,8 +33,8 @@ impl Collector for RssCollector {
 impl IncrementalCollector for RssCollector {
     type Watermark = DateTime<Utc>;
 
-    fn kind(&self) -> &'static str {
-        "rss"
+    fn partition(&self) -> &'static str {
+        "rss/feed"
     }
 
     fn key(&self) -> Cow<'static, str> {

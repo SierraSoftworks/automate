@@ -139,7 +139,7 @@ mod tests {
         services
             .kv()
             .set(
-                collector.0.partition(None),
+                collector.0.partition(),
                 collector.0.key(),
                 DateTime::parse_from_rfc3339("2024-04-04T12:00:45+00:00")
                     .unwrap()

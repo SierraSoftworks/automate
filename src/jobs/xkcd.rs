@@ -35,7 +35,7 @@ impl Job for XkcdWorkflow {
     type JobType = XkcdConfig;
 
     fn partition() -> &'static str {
-        "workflow/xkcd-todoist"
+        "xkcd/todoist"
     }
 
     #[instrument("workflow.xkcd.setup", skip(self, services), err(Display))]

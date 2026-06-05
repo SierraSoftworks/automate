@@ -31,8 +31,8 @@ impl Collector for SpotifyLikedTracksCollector {
 impl IncrementalCollector for SpotifyLikedTracksCollector {
     type Watermark = chrono::DateTime<chrono::Utc>;
 
-    fn kind(&self) -> &'static str {
-        "spotify/tracks"
+    fn partition(&self) -> &'static str {
+        "spotify/liked-tracks"
     }
 
     fn key(&self) -> Cow<'static, str> {

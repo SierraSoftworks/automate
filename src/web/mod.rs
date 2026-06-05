@@ -1,10 +1,12 @@
-use actix_web::{App, HttpServer, web};
+use actix_web::{App, HttpServer, middleware::from_fn, web};
 use human_errors::ResultExt;
 
-use crate::{filter::Filterable, prelude::Services};
+use crate::prelude::Services;
 
 mod admin;
+mod helpers;
 mod oauth;
+mod oidc;
 mod telemetry;
 mod ui;
 mod webhooks;
@@ -32,18 +34,22 @@ pub async fn run_web_server<S: Services + Clone + Send + Sync + 'static>(
                 .service(oauth::configure::<S>())
                 .route("/webhooks/{kind:.*}", web::post().to(webhooks::handle::<S>))
                 .service(
-                    web::resource("/admin")
-                        .guard(actix_web::guard::fn_guard(|ctx| {
-                            ctx.app_data().is_some_and(|services: &web::Data<S>| {
-                                services
-                                    .config()
-                                    .web
-                                    .admin_acl
-                                    .matches(&RequestContextFilter { req: ctx })
-                                    .unwrap_or(false)
-                            })
-                        }))
-                        .to(admin::admin_index::<S>),
+                    web::scope("/admin")
+                        .wrap(from_fn(oidc::admin_auth::<S>))
+                        .route("/.oidc/callback", web::get().to(oidc::oidc_callback::<S>))
+                        .route("", web::get().to(admin::admin_index::<S>))
+                        .route("/", web::get().to(admin::admin_index::<S>))
+                        .route("/db", web::get().to(admin::admin_db_overview::<S>))
+                        .route("/db/delete", web::post().to(admin::admin_db_delete::<S>))
+                        .route("/queue", web::get().to(admin::admin_queue::<S>))
+                        .route(
+                            "/queue/trigger",
+                            web::post().to(admin::admin_queue_trigger::<S>),
+                        )
+                        .route(
+                            "/queue/delete",
+                            web::post().to(admin::admin_queue_delete::<S>),
+                        ),
                 )
                 .default_service(web::to(ui::not_found))
         })
@@ -66,36 +72,5 @@ pub async fn run_web_server<S: Services + Clone + Send + Sync + 'static>(
                 "Ensure that the web.address field in your configuration is set to a valid address and port (e.g. `127.0.0.1:8080`).",
             ],
         ))
-    }
-}
-
-struct RequestContextFilter<'a> {
-    req: &'a actix_web::guard::GuardContext<'a>,
-}
-
-impl<'a> Filterable for RequestContextFilter<'a> {
-    fn get(&self, key: &str) -> crate::filter::FilterValue {
-        match key {
-            "method" => self.req.head().method.as_str().into(),
-            "path" => self.req.head().uri.path().into(),
-            "client_ip" => self
-                .req
-                .head()
-                .peer_addr
-                .map(|addr| addr.ip().to_string())
-                .into(),
-            key if key.starts_with("headers.") => {
-                let header_name = &key["headers.".len()..];
-                let header_value = self.req.head().headers().get(header_name);
-                match header_value {
-                    Some(value) => match value.to_str() {
-                        Ok(s) => s.into(),
-                        Err(_) => crate::filter::FilterValue::Null,
-                    },
-                    None => crate::filter::FilterValue::Null,
-                }
-            }
-            _ => crate::filter::FilterValue::Null,
-        }
     }
 }
