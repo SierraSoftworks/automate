@@ -45,7 +45,7 @@ impl Job for YouTubeWorkflow {
         services: impl Services + Send + Sync + 'static,
     ) -> Result<(), human_errors::Error> {
         let config = services.config();
-        super::CronJob::schedule(&config.workflows.youtube, services).await
+        CronJob::schedule(&config.workflows.youtube, services).await
     }
 
     #[instrument("workflow.youtube.handle", skip(self, job, services), fields(job = %job))]

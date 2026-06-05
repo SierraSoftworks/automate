@@ -43,7 +43,7 @@ impl Job for GitHubNotificationsCleanupWorkflow {
         services: impl Services + Send + Sync + 'static,
     ) -> Result<(), human_errors::Error> {
         let config = services.config();
-        super::CronJob::schedule(
+        CronJob::schedule(
             std::slice::from_ref(&config.workflows.github_notifications_cleanup),
             services,
         )

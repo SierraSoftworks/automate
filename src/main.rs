@@ -3,6 +3,7 @@ mod config;
 mod db;
 mod filter;
 mod job;
+mod jobs;
 mod parsers;
 mod prelude;
 mod publishers;
@@ -10,7 +11,6 @@ mod services;
 mod ui;
 mod web;
 mod webhooks;
-mod workflows;
 
 #[cfg(test)]
 mod testing;

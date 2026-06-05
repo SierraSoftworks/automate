@@ -41,7 +41,7 @@ impl Job for GitHubReleasesWorkflow {
         services: impl Services + Send + Sync + 'static,
     ) -> Result<(), human_errors::Error> {
         let config = services.config();
-        super::CronJob::schedule(&config.workflows.github_releases, services).await
+        CronJob::schedule(&config.workflows.github_releases, services).await
     }
 
     #[instrument("workflow.github_releases.handle", skip(self, job, services), fields(job = %job))]

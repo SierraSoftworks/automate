@@ -44,7 +44,7 @@ impl Job for XkcdWorkflow {
         services: impl Services + Send + Sync + 'static,
     ) -> Result<(), human_errors::Error> {
         let config = services.config();
-        super::CronJob::schedule(&config.workflows.xkcd, services).await
+        CronJob::schedule(&config.workflows.xkcd, services).await
     }
 
     #[instrument("workflow.xkcd.handle", skip(self, job, services), fields(job = %job))]

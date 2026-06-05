@@ -147,7 +147,7 @@ impl Job for GitHubNotificationsWorkflow {
         services: impl Services + Send + Sync + 'static,
     ) -> Result<(), human_errors::Error> {
         let config = services.config();
-        super::CronJob::schedule(&config.workflows.github_notifications, services).await
+        CronJob::schedule(&config.workflows.github_notifications, services).await
     }
 
     #[instrument("workflow.github_notifications.handle", skip(self, job, services), fields(job = %job))]

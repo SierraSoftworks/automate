@@ -47,7 +47,7 @@ impl Job for CalendarWorkflow {
         services: impl Services + Send + Sync + 'static,
     ) -> Result<(), human_errors::Error> {
         let config = services.config();
-        super::CronJob::schedule(&config.workflows.calendars, services).await
+        CronJob::schedule(&config.workflows.calendars, services).await
     }
 
     #[instrument("workflow.calendar.handle", skip(self, job, services), fields(job = %job))]
