@@ -110,6 +110,7 @@ async fn oauth_callback<S: Services + Send + Sync + 'static>(
                     .handle_callback(
                         format!("{base_url}/oauth/{provider}/callback"),
                         code.clone(),
+                        &services.http_client(),
                     )
                     .await
                 {
@@ -215,6 +216,7 @@ impl OAuth2Config {
         &self,
         redirect_url: impl ToString,
         code: impl ToString,
+        http_client: &reqwest::Client,
     ) -> Result<OAuth2RefreshToken, human_errors::Error> {
         let client = oauth2::basic::BasicClient::new(oauth2::ClientId::new(self.client_id.clone()))
             .set_client_secret(oauth2::ClientSecret::new(self.client_secret.clone()))
@@ -228,7 +230,7 @@ impl OAuth2Config {
 
         let token_result = client
             .exchange_code(oauth2::AuthorizationCode::new(code.to_string()))
-            .request_async(&reqwest::Client::new())
+            .request_async(http_client)
             .await
             .wrap_user_err(
                 format!("Failed to obtain OAuth access token for {}.", &self.name),
@@ -257,6 +259,7 @@ impl OAuth2Config {
     pub async fn get_access_token(
         &self,
         token_entry: &OAuth2RefreshToken,
+        http_client: &reqwest::Client,
     ) -> Result<OAuth2RefreshToken, human_errors::Error> {
         let client = oauth2::basic::BasicClient::new(oauth2::ClientId::new(self.client_id.clone()))
             .set_client_secret(oauth2::ClientSecret::new(self.client_secret.clone()))
@@ -267,13 +270,11 @@ impl OAuth2Config {
             return Ok(token_entry.clone());
         }
 
-        let http_client = reqwest::Client::new();
-
         let token_result = client
             .exchange_refresh_token(&oauth2::RefreshToken::new(
                 token_entry.refresh_token.clone(),
             ))
-            .request_async(&http_client)
+            .request_async(http_client)
             .await
             .wrap_user_err(
                 format!("Failed to refresh OAuth access token for {}.", &self.name),

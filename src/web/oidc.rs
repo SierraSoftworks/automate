@@ -137,7 +137,7 @@ pub async fn oidc_callback<S: Services + Send + Sync + 'static>(
     };
 
     let redirect_uri = format!("{base}/admin{CALLBACK_PATH_SUFFIX}");
-    let token = match exchange_code(&oidc, &discovery, code, &redirect_uri).await {
+    let token = match exchange_code(&oidc, &discovery, code, &redirect_uri, &services.http_client()).await {
         Ok(token) => token,
         Err(e) => {
             error!("OIDC token exchange failed: {e}");

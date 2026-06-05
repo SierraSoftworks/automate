@@ -95,24 +95,16 @@ impl IncrementalCollector for GitHubReleasesCollector {
         watermark: Option<Self::Watermark>,
         services: &impl crate::services::Services,
     ) -> Result<(Vec<Self::Item>, Self::Watermark), human_errors::Error> {
-        let mut headers = reqwest::header::HeaderMap::new();
-        headers.insert("X-GitHub-Api-Version", "2022-11-28".parse().unwrap());
+        let mut request = services
+            .http_client()
+            .get(format!("{}/repos/{}/releases", self.api_url, self.repo))
+            .header("X-GitHub-Api-Version", "2022-11-28");
 
         if let Some(api_key) = services.config().connections.github.api_key.as_ref() {
-            headers.insert(
-                reqwest::header::AUTHORIZATION,
-                reqwest::header::HeaderValue::from_str(&format!("Bearer {}", api_key))
-                    .or_system_err(&["Report the issue to the development team on GitHub."])?,
-            );
+            request = request.bearer_auth(api_key);
         }
 
-        let client = reqwest::Client::builder()
-            .user_agent("SierraSoftworks/automate-rs")
-            .default_headers(headers)
-            .build()
-            .or_system_err(&["Report the issue to the development team on GitHub."])?;
-
-        let response = client.get(format!("{}/repos/{}/releases", self.api_url, self.repo))
+        let response = request
             .send().await.wrap_user_err("We were unable to fetch GitHub releases from GitHub.", &[
                 "Make sure that your network connection is working properly.",
                 "Check https://www.githubstatus.com/ for any ongoing issues with GitHub's services.",

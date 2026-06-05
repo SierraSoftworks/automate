@@ -41,13 +41,16 @@ impl IncrementalCollector for RssCollector {
         Cow::Owned(self.feed_url.clone())
     }
 
-    #[instrument("collectors.rss.fetch_since", skip(self, _services), err(Display))]
+    #[instrument("collectors.rss.fetch_since", skip(self, services), err(Display))]
     async fn fetch_since(
         &self,
         watermark: Option<Self::Watermark>,
-        _services: &impl crate::services::Services,
+        services: &impl crate::services::Services,
     ) -> Result<(Vec<Self::Item>, Self::Watermark), human_errors::Error> {
-        let content = reqwest::get(&self.feed_url)
+        let content = services
+            .http_client()
+            .get(&self.feed_url)
+            .send()
             .await
             .wrap_user_err(
                 format!("Failed to fetch RSS feed from URL '{}'.", &self.feed_url),

@@ -26,7 +26,7 @@ impl Job for SpotifyYearlyPlaylistWorkflow {
         let services = ctx.services();
         let token = SpotifyClient::renew_access_token(job, services).await?;
 
-        let client = SpotifyClient::new(token.clone());
+        let client = SpotifyClient::new(token.clone(), services.http_client());
         let user = client.get_current_user().await?;
 
         let collector =

@@ -9,12 +9,12 @@ pub struct SpotifyClient {
 }
 
 impl SpotifyClient {
-    pub fn new(refresh_token: OAuth2RefreshToken) -> Self {
+    pub fn new(refresh_token: OAuth2RefreshToken, http_client: reqwest::Client) -> Self {
         SpotifyClient {
             api_endpoint: "https://api.spotify.com/v1".to_string(),
             refresh_token,
 
-            client: reqwest::Client::new(),
+            client: http_client,
         }
     }
 
@@ -204,7 +204,7 @@ impl SpotifyClient {
         services: &(impl Services + Send + Sync + 'static),
     ) -> Result<OAuth2RefreshToken, human_errors::Error> {
         let config = services.config().get_oauth2("spotify")?;
-        config.get_access_token(token).await
+        config.get_access_token(token, &services.http_client()).await
     }
 }
 

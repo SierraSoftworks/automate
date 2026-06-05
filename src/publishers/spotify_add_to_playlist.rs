@@ -32,7 +32,7 @@ impl Job for SpotifyAddToPlaylist {
         ctx: JobContext<impl Services + Send + Sync + 'static>,
         job: &Self::JobType,
     ) -> Result<(), human_errors::Error> {
-        let client = SpotifyClient::new(job.access_token.clone());
+        let client = SpotifyClient::new(job.access_token.clone(), ctx.services().http_client());
 
         let playlist_id = self.get_playlist_id(job, ctx.services()).await?;
 
@@ -62,7 +62,7 @@ impl SpotifyAddToPlaylist {
         {
             Ok(playlist_id)
         } else {
-            let client = SpotifyClient::new(job.access_token.clone());
+            let client = SpotifyClient::new(job.access_token.clone(), services.http_client());
 
             if let Some(playlist) = client
                 .get_playlists()
