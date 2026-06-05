@@ -35,12 +35,14 @@ impl Job for TerraformWebhook {
         "webhooks/terraform"
     }
 
-    #[instrument("webhooks.terraform.handle", skip(self, job, services), fields(job = %job))]
+    #[instrument("webhooks.terraform.handle", skip(self, ctx, job), fields(job = %job))]
     async fn handle(
         &self,
+        ctx: JobContext<impl Services + Send + Sync + 'static>,
         job: &Self::JobType,
-        services: impl Services + Send + Sync + 'static,
     ) -> Result<(), human_errors::Error> {
+        let services = ctx.services();
+
         if let Some(secret) = services.config().webhooks.terraform.secret.as_ref() {
             let expected_hash = job.headers.get("X-TFE-Notification-Signature")
                 .ok_or_else(|| human_errors::user("Missing X-TFE-Notification-Signature header in Terraform webhook", &[
@@ -107,7 +109,7 @@ impl Job for TerraformWebhook {
                         ..Default::default()
                     },
                     None,
-                    &services,
+                    services,
                 )
                 .await?;
             }
@@ -133,7 +135,7 @@ impl Job for TerraformWebhook {
                         ..Default::default()
                     },
                     None,
-                    &services,
+                    services,
                 )
                 .await?;
             }

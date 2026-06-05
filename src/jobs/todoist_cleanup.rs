@@ -51,15 +51,16 @@ impl Job for TodoistCleanupWorkflow {
 
     #[instrument(
         "workflow.todoist_cleanup.handle",
-        skip(self, job, services),
+        skip(self, ctx, job),
         fields(job = %job),
         err(Display)
     )]
     async fn handle(
         &self,
+        ctx: JobContext<impl Services + Send + Sync + 'static>,
         job: &Self::JobType,
-        services: impl Services + Send + Sync + 'static,
     ) -> Result<(), human_errors::Error> {
+        let services = ctx.services();
         let config = services.config().connections.todoist.merge(&job.todoist);
         let client = TodoistClient::new(&config)?;
 

@@ -1,11 +1,86 @@
 use std::borrow::Cow;
 use std::collections::HashMap;
 
-use chrono::{TimeDelta, Utc};
+use chrono::{DateTime, TimeDelta, Utc};
 
 use crate::db::QueueMessage;
 use crate::prelude::*;
 use crate::services::AppServices;
+
+/// Contextual information about the job being processed, derived from the
+/// original [`QueueMessage`] that triggered it.
+///
+/// In addition to providing access to the application [`Services`], this
+/// carries metadata about the originally enqueued message - most importantly
+/// the [`JobContext::scheduled_at`] timestamp. For webhook-backed jobs this is
+/// the time at which the request was received, which allows time-sensitive
+/// validation (such as webhook signature timestamp checks) to be performed
+/// against the original receipt time rather than the current time, so that
+/// retries continue to succeed.
+pub struct JobContext<S>
+where
+    S: Services + Send + Sync + 'static,
+{
+    services: S,
+    scheduled_at: DateTime<Utc>,
+    #[allow(dead_code)]
+    traceparent: Option<String>,
+    #[allow(dead_code)]
+    tracestate: Option<String>,
+}
+
+impl<S> JobContext<S>
+where
+    S: Services + Send + Sync + 'static,
+{
+    pub fn new(
+        services: S,
+        scheduled_at: DateTime<Utc>,
+        traceparent: Option<String>,
+        tracestate: Option<String>,
+    ) -> Self {
+        Self {
+            services,
+            scheduled_at,
+            traceparent,
+            tracestate,
+        }
+    }
+
+    /// The application services available to the job.
+    pub fn services(&self) -> &S {
+        &self.services
+    }
+
+    /// Consumes the context, returning ownership of the services. Useful when a
+    /// handler needs to pass owned services to a helper.
+    pub fn into_services(self) -> S {
+        self.services
+    }
+
+    /// The time at which the underlying message was originally enqueued.
+    ///
+    /// For webhook-backed jobs this is the time the request was received, which
+    /// makes it the correct reference point for validating time-sensitive
+    /// signatures even when a job is retried some time later.
+    pub fn scheduled_at(&self) -> DateTime<Utc> {
+        self.scheduled_at
+    }
+
+    /// The W3C `traceparent` associated with the originally enqueued message, if
+    /// any.
+    #[allow(dead_code)]
+    pub fn traceparent(&self) -> Option<&str> {
+        self.traceparent.as_deref()
+    }
+
+    /// The W3C `tracestate` associated with the originally enqueued message, if
+    /// any.
+    #[allow(dead_code)]
+    pub fn tracestate(&self) -> Option<&str> {
+        self.tracestate.as_deref()
+    }
+}
 
 pub trait Job {
     type JobType: Serialize + DeserializeOwned + Send + 'static;
@@ -66,8 +141,8 @@ pub trait Job {
 
     fn handle(
         &self,
+        ctx: JobContext<impl Services + Send + Sync + 'static>,
         job: &Self::JobType,
-        services: impl Services + Send + Sync + 'static,
     ) -> impl std::future::Future<Output = Result<(), human_errors::Error>> + Send;
 
     fn job_hash(&self, job: &Self::JobType) -> Result<String, human_errors::Error> {
@@ -105,8 +180,8 @@ pub trait JobRunnable: Send + Sync {
     /// Deserialize the raw queue payload and run the underlying [`Job::handle`].
     async fn handle(
         &self,
+        ctx: JobContext<AppServices>,
         payload: &serde_json::Value,
-        services: AppServices,
     ) -> Result<(), human_errors::Error>;
 }
 
@@ -133,8 +208,8 @@ where
 
     async fn handle(
         &self,
+        ctx: JobContext<AppServices>,
         payload: &serde_json::Value,
-        services: AppServices,
     ) -> Result<(), human_errors::Error> {
         let job = <J::JobType as serde::Deserialize>::deserialize(payload).wrap_user_err(
             "Failed to deserialize the job payload into the type expected by its handler.",
@@ -144,7 +219,7 @@ where
             ],
         )?;
 
-        Job::handle(self, &job, services).await
+        Job::handle(self, ctx, &job).await
     }
 }
 
@@ -293,8 +368,15 @@ impl JobHost {
 
         debug!("Processing job '{name}' (traceparent: {traceparent}).");
 
+        let ctx = JobContext::new(
+            services,
+            item.scheduled_at,
+            item.traceparent.clone(),
+            item.tracestate.clone(),
+        );
+
         match handler
-            .handle(&item.payload, services)
+            .handle(ctx, &item.payload)
             .instrument(span.clone())
             .await
         {
@@ -377,10 +459,10 @@ mod tests {
 
         async fn handle(
             &self,
+            ctx: JobContext<impl Services + Send + Sync + 'static>,
             job: &Self::JobType,
-            services: impl Services + Send + Sync + 'static,
         ) -> Result<(), human_errors::Error> {
-            services
+            ctx.services()
                 .kv()
                 .set("test/dynamic-dispatch", job.id.clone(), job.value.clone())
                 .await?;
@@ -417,9 +499,13 @@ mod tests {
         let services = ServicesContainer::new_mock().await.unwrap();
 
         let payload = serde_json::json!({ "id": "k1", "value": "v1" });
-        JobRunnable::handle(&TestJob, &payload, services.clone())
-            .await
-            .unwrap();
+        JobRunnable::handle(
+            &TestJob,
+            JobContext::new(services.clone(), Utc::now(), None, None),
+            &payload,
+        )
+        .await
+        .unwrap();
 
         let stored: Option<String> = services
             .kv()

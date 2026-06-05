@@ -20,10 +20,11 @@ impl Job for SpotifyYearlyPlaylistWorkflow {
 
     async fn handle(
         &self,
+        ctx: JobContext<impl Services + Send + Sync + 'static>,
         job: &Self::JobType,
-        services: impl Services + Send + Sync + 'static,
     ) -> Result<(), human_errors::Error> {
-        let token = SpotifyClient::renew_access_token(job, &services).await?;
+        let services = ctx.services();
+        let token = SpotifyClient::renew_access_token(job, services).await?;
 
         let client = SpotifyClient::new(token.clone());
         let user = client.get_current_user().await?;
@@ -31,7 +32,7 @@ impl Job for SpotifyYearlyPlaylistWorkflow {
         let collector =
             crate::collectors::SpotifyLikedTracksCollector::new(user.id.clone(), token.clone());
 
-        let new_tracks = collector.list(&services).await?;
+        let new_tracks = collector.list(services).await?;
 
         if !new_tracks.is_empty() {
             let year_groups =
@@ -60,13 +61,13 @@ impl Job for SpotifyYearlyPlaylistWorkflow {
                         track_uris: tracks.iter().map(|t| t.track.uri.clone()).collect(),
                     },
                     None,
-                    &services,
+                    services,
                 )
                 .await?;
             }
         }
 
-        Self::dispatch_delayed(token, Some(user.id.into()), TimeDelta::hours(1), &services).await?;
+        Self::dispatch_delayed(token, Some(user.id.into()), TimeDelta::hours(1), services).await?;
 
         Ok(())
     }

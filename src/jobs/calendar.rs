@@ -50,15 +50,16 @@ impl Job for CalendarWorkflow {
         CronJob::schedule(&config.workflows.calendars, services).await
     }
 
-    #[instrument("workflow.calendar.handle", skip(self, job, services), fields(job = %job))]
+    #[instrument("workflow.calendar.handle", skip(self, ctx, job), fields(job = %job))]
     async fn handle(
         &self,
+        ctx: JobContext<impl Services + Send + Sync + 'static>,
         job: &Self::JobType,
-        services: impl Services + Send + Sync + 'static,
     ) -> Result<(), human_errors::Error> {
+        let services = ctx.services();
         let collector = CalendarCollector::new(&job.url);
 
-        let items = collector.diff(&services).await?;
+        let items = collector.diff(services).await?;
 
         for item in items.into_iter() {
             match item {
@@ -67,9 +68,8 @@ impl Job for CalendarWorkflow {
                         "Calendar item '{}' matched filter, creating Todoist task",
                         item.summary
                     );
-                    let identifier_string = serde_json::to_string(&id).or_system_err(&[
-                        "Report this issue to the development team on GitHub.",
-                    ])?;
+                    let identifier_string = serde_json::to_string(&id)
+                        .or_system_err(&["Report this issue to the development team on GitHub."])?;
                     crate::publishers::TodoistUpsertTask::dispatch(
                         crate::publishers::TodoistUpsertTaskPayload {
                             unique_key: identifier_string,
@@ -85,7 +85,7 @@ impl Job for CalendarWorkflow {
                             config: job.todoist.clone(),
                         },
                         None,
-                        &services,
+                        services,
                     )
                     .await?;
                 }
@@ -94,30 +94,28 @@ impl Job for CalendarWorkflow {
                         "Calendar item '{}' did not match filter, skipping Todoist creation",
                         item.summary
                     );
-                    let identifier_string = serde_json::to_string(&id).or_system_err(&[
-                        "Report this issue to the development team on GitHub.",
-                    ])?;
+                    let identifier_string = serde_json::to_string(&id)
+                        .or_system_err(&["Report this issue to the development team on GitHub."])?;
                     crate::publishers::TodoistCompleteTask::dispatch(
                         crate::publishers::TodoistCompleteTaskPayload {
                             unique_key: identifier_string,
                             config: job.todoist.clone(),
                         },
                         None,
-                        &services,
+                        services,
                     )
                     .await?;
                 }
                 Diff::Removed(id) => {
-                    let identifier_string = serde_json::to_string(&id).or_system_err(&[
-                        "Report this issue to the development team on GitHub.",
-                    ])?;
+                    let identifier_string = serde_json::to_string(&id)
+                        .or_system_err(&["Report this issue to the development team on GitHub."])?;
                     crate::publishers::TodoistCompleteTask::dispatch(
                         crate::publishers::TodoistCompleteTaskPayload {
                             unique_key: identifier_string,
                             config: job.todoist.clone(),
                         },
                         None,
-                        &services,
+                        services,
                     )
                     .await?;
                 }

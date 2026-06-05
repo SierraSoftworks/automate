@@ -44,15 +44,16 @@ impl Job for GitHubReleasesWorkflow {
         CronJob::schedule(&config.workflows.github_releases, services).await
     }
 
-    #[instrument("workflow.github_releases.handle", skip(self, job, services), fields(job = %job))]
+    #[instrument("workflow.github_releases.handle", skip(self, ctx, job), fields(job = %job))]
     async fn handle(
         &self,
+        ctx: JobContext<impl Services + Send + Sync + 'static>,
         job: &Self::JobType,
-        services: impl Services + Send + Sync + 'static,
     ) -> Result<(), human_errors::Error> {
+        let services = ctx.services();
         let collector = GitHubReleasesCollector::new(&job.repository);
 
-        let items = collector.list(&services).await?;
+        let items = collector.list(services).await?;
 
         for item in items.into_iter() {
             match job.filter.matches(&item) {
@@ -80,7 +81,7 @@ impl Job for GitHubReleasesWorkflow {
                     ..Default::default()
                 },
                 None,
-                &services,
+                services,
             )
             .await?;
         }

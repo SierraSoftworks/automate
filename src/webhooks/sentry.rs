@@ -85,12 +85,14 @@ impl Job for SentryAlertsWebhook {
         "webhooks/sentry"
     }
 
-    #[instrument("webhooks.sentry.handle", skip(self, job, services), fields(job = %job))]
+    #[instrument("webhooks.sentry.handle", skip(self, ctx, job), fields(job = %job))]
     async fn handle(
         &self,
+        ctx: JobContext<impl Services + Send + Sync + 'static>,
         job: &Self::JobType,
-        services: impl Services + Send + Sync + 'static,
     ) -> Result<(), human_errors::Error> {
+        let services = ctx.services();
+
         // Validate the Sentry webhook signature header
         // https://docs.sentry.io/organization/integrations/integration-platform/webhooks/
         let secret = &services.config().webhooks.sentry.secret;
@@ -151,13 +153,13 @@ impl Job for SentryAlertsWebhook {
                             issue.short_id, issue.web_url, issue.title
                         ),
                         description: Some(issue.culprit.clone()),
-                        due: TodoistDueDate::DateTime(chrono::Utc::now()),
+                        due: TodoistDueDate::DateTime(ctx.scheduled_at()),
                         priority: Some(issue.level.to_priority()),
                         config: services.config().webhooks.sentry.todoist.clone(),
                         ..Default::default()
                     },
                     None,
-                    &services,
+                    services,
                 )
                 .await?;
             }
@@ -183,13 +185,13 @@ impl Job for SentryAlertsWebhook {
                             alert.project_slug, alert.url, alert.title()
                         ),
                         description: Some(alert.culprit.clone()),
-                        due: TodoistDueDate::DateTime(chrono::Utc::now()),
+                        due: TodoistDueDate::DateTime(ctx.scheduled_at()),
                         priority: Some(alert.level.to_priority()),
                         config: services.config().webhooks.sentry.todoist.clone(),
                         ..Default::default()
                     },
                     None,
-                    &services,
+                    services,
                 )
                 .await?;
             }
