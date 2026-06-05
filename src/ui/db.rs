@@ -27,12 +27,16 @@ pub struct QueueViewProps {
 
 #[function_component(QueueView)]
 pub fn queue_view(props: &QueueViewProps) -> Html {
+    // Group messages by partition (sorted alphabetically), preserving the
+    // incoming order within each partition (already sorted by schedule time).
+    let mut groups: std::collections::BTreeMap<&str, Vec<&QueueMessageDisplay>> =
+        std::collections::BTreeMap::new();
+    for msg in &props.messages {
+        groups.entry(msg.partition.as_str()).or_default().push(msg);
+    }
+
     html! {
         <div class="queue-view">
-            <div class="kv-header">
-                <span class="kv-partition">{ "Queue" }</span>
-                <span class="kv-count">{ format!("{} messages", props.messages.len()) }</span>
-            </div>
             {
                 if props.messages.is_empty() {
                     html! {
@@ -42,74 +46,85 @@ pub fn queue_view(props: &QueueViewProps) -> Html {
                     }
                 } else {
                     html! {
-                        <div class="queue-entries">
-                            { for props.messages.iter().map(|msg| {
-                                let status_class = format!("queue-status status-{}", msg.status.to_lowercase());
-                                let pretty = serde_json::to_string_pretty(&msg.payload)
-                                    .unwrap_or_else(|_| msg.payload.to_string());
-                                let payload_json = serde_json::to_string(&msg.payload)
-                                    .unwrap_or_default();
+                        <div class="kv-overview">
+                            { for groups.into_iter().map(|(partition, messages)| {
                                 html! {
-                                    <div class="queue-entry">
-                                        <div class="queue-entry-head">
-                                            <div class="queue-entry-key">
-                                                <span class="queue-partition-tag">{ &msg.partition }</span>
-                                                { &msg.key }
-                                            </div>
-                                            <div class="queue-entry-actions">
-                                                <div class={status_class}>{ &msg.status }</div>
-                                                <form method="post" action="/admin/queue/trigger">
-                                                    <input type="hidden" name="partition" value={msg.partition.clone()} />
-                                                    <input type="hidden" name="key" value={msg.key.clone()} />
-                                                    <input type="hidden" name="payload" value={payload_json} />
-                                                    <input type="hidden" name="csrf_token" value={props.csrf_token.clone()} />
-                                                    <button
-                                                        class="admin-action-btn queue-trigger-btn"
-                                                        type="submit"
-                                                    >{ "trigger" }</button>
-                                                </form>
-                                                <form method="post" action="/admin/queue/delete">
-                                                    <input type="hidden" name="partition" value={msg.partition.clone()} />
-                                                    <input type="hidden" name="key" value={msg.key.clone()} />
-                                                    <input type="hidden" name="csrf_token" value={props.csrf_token.clone()} />
-                                                    <button
-                                                        class="admin-action-btn queue-delete-btn"
-                                                        type="submit"
-                                                    >{ "delete" }</button>
-                                                </form>
-                                            </div>
+                                    <div class="queue-partition">
+                                        <div class="kv-header">
+                                            <span class="kv-partition">{ partition }</span>
+                                            <span class="kv-count">{ format!("{} messages", messages.len()) }</span>
                                         </div>
-                                        <div class="queue-entry-meta">
-                                            <span class="queue-meta-item">
-                                                <span class="queue-meta-label">{ "Scheduled" }</span>
-                                                { format!(" {} ({})", msg.scheduled_at_rel, msg.scheduled_at_abs) }
-                                            </span>
-                                            {
-                                                if let (Some(abs), Some(rel)) = (&msg.hidden_until_abs, &msg.hidden_until_rel) {
-                                                    html! {
-                                                        <span class="queue-meta-item">
-                                                            <span class="queue-meta-label">{ "Available" }</span>
-                                                            { format!(" {} ({})", rel, abs) }
-                                                        </span>
-                                                    }
-                                                } else {
-                                                    html! {}
+                                        <div class="queue-entries">
+                                            { for messages.into_iter().map(|msg| {
+                                                let status_class = format!("queue-status status-{}", msg.status.to_lowercase());
+                                                let pretty = serde_json::to_string_pretty(&msg.payload)
+                                                    .unwrap_or_else(|_| msg.payload.to_string());
+                                                let payload_json = serde_json::to_string(&msg.payload)
+                                                    .unwrap_or_default();
+                                                html! {
+                                                    <div class="queue-entry">
+                                                        <div class="queue-entry-head">
+                                                            <div class="queue-entry-key">
+                                                                { &msg.key }
+                                                            </div>
+                                                            <div class="queue-entry-actions">
+                                                                <div class={status_class}>{ &msg.status }</div>
+                                                                <form method="post" action="/admin/queue/trigger">
+                                                                    <input type="hidden" name="partition" value={msg.partition.clone()} />
+                                                                    <input type="hidden" name="key" value={msg.key.clone()} />
+                                                                    <input type="hidden" name="payload" value={payload_json} />
+                                                                    <input type="hidden" name="csrf_token" value={props.csrf_token.clone()} />
+                                                                    <button
+                                                                        class="admin-action-btn queue-trigger-btn"
+                                                                        type="submit"
+                                                                    >{ "trigger" }</button>
+                                                                </form>
+                                                                <form method="post" action="/admin/queue/delete">
+                                                                    <input type="hidden" name="partition" value={msg.partition.clone()} />
+                                                                    <input type="hidden" name="key" value={msg.key.clone()} />
+                                                                    <input type="hidden" name="csrf_token" value={props.csrf_token.clone()} />
+                                                                    <button
+                                                                        class="admin-action-btn queue-delete-btn"
+                                                                        type="submit"
+                                                                    >{ "delete" }</button>
+                                                                </form>
+                                                            </div>
+                                                        </div>
+                                                        <div class="queue-entry-meta">
+                                                            <span class="queue-meta-item">
+                                                                <span class="queue-meta-label">{ "Scheduled" }</span>
+                                                                { format!(" {} ({})", msg.scheduled_at_rel, msg.scheduled_at_abs) }
+                                                            </span>
+                                                            {
+                                                                if let (Some(abs), Some(rel)) = (&msg.hidden_until_abs, &msg.hidden_until_rel) {
+                                                                    html! {
+                                                                        <span class="queue-meta-item">
+                                                                            <span class="queue-meta-label">{ "Available" }</span>
+                                                                            { format!(" {} ({})", rel, abs) }
+                                                                        </span>
+                                                                    }
+                                                                } else {
+                                                                    html! {}
+                                                                }
+                                                            }
+                                                            {
+                                                                if let Some(tp) = &msg.traceparent {
+                                                                    html! {
+                                                                        <span class="queue-meta-item">
+                                                                            <span class="queue-meta-label">{ "Trace" }</span>
+                                                                            { format!(" {tp}") }
+                                                                        </span>
+                                                                    }
+                                                                } else {
+                                                                    html! {}
+                                                                }
+                                                            }
+                                                        </div>
+                                                        <pre class="kv-entry-value"><code>{ pretty }</code></pre>
+                                                    </div>
                                                 }
-                                            }
-                                            {
-                                                if let Some(tp) = &msg.traceparent {
-                                                    html! {
-                                                        <span class="queue-meta-item">
-                                                            <span class="queue-meta-label">{ "Trace" }</span>
-                                                            { format!(" {tp}") }
-                                                        </span>
-                                                    }
-                                                } else {
-                                                    html! {}
-                                                }
-                                            }
+                                            }) }
                                         </div>
-                                        <pre class="kv-entry-value"><code>{ pretty }</code></pre>
                                     </div>
                                 }
                             }) }

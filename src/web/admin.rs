@@ -1,3 +1,4 @@
+use actix_web::HttpMessage;
 use actix_web::web;
 use yew::prelude::*;
 
@@ -6,6 +7,17 @@ use crate::{
     prelude::*,
     ui::render_page,
 };
+
+use super::helpers::oidc::AdminUser;
+
+/// Extracts the signed-in user's display name and email (if any) from the
+/// request extensions populated by the admin authentication middleware.
+fn admin_user(req: &actix_web::HttpRequest) -> (Option<String>, Option<String>) {
+    match req.extensions().get::<AdminUser>() {
+        Some(user) => (Some(user.name.clone()), user.email.clone()),
+        None => (None, None),
+    }
+}
 
 fn relative_time(dt: chrono::DateTime<chrono::Utc>) -> String {
     let secs = dt.signed_duration_since(chrono::Utc::now()).num_seconds();
@@ -29,11 +41,20 @@ fn relative_time(dt: chrono::DateTime<chrono::Utc>) -> String {
     }
 }
 
-pub async fn admin_index<S: Services>(_services: web::Data<S>) -> actix_web::HttpResponse {
+pub async fn admin_index<S: Services>(
+    req: actix_web::HttpRequest,
+    _services: web::Data<S>,
+) -> actix_web::HttpResponse {
+    let (user_name, user_email) = admin_user(&req);
     render_page("Admin | Automate", move || {
         html! {
             <div class="admin-content">
-                <h1>{ "Admin " }<strong>{ "Dashboard" }</strong></h1>
+                <crate::ui::AdminHeader
+                    title="Dashboard"
+                    show_back={false}
+                    user_name={user_name.clone().map(AttrValue::from)}
+                    user_email={user_email.clone().map(AttrValue::from)}
+                />
                 <p class="admin-intro">
                     { "All endpoints require a request to originate from an address permitted by the " }
                     <code>{ "web.admin.acl" }</code>
@@ -102,7 +123,10 @@ pub async fn admin_index<S: Services>(_services: web::Data<S>) -> actix_web::Htt
     .await
 }
 
-pub async fn admin_db_overview<S: Services>(services: web::Data<S>) -> actix_web::HttpResponse {
+pub async fn admin_db_overview<S: Services>(
+    req: actix_web::HttpRequest,
+    services: web::Data<S>,
+) -> actix_web::HttpResponse {
     let all_entries = match KeyValueStore::scan(&services.kv()).await {
         Ok(entries) => entries,
         Err(err) => {
@@ -126,11 +150,17 @@ pub async fn admin_db_overview<S: Services>(services: web::Data<S>) -> actix_web
     }
     let partitions: Vec<(String, Vec<(String, serde_json::Value)>)> = groups.into_iter().collect();
     let csrf_token = super::helpers::csrf::generate_token(&services.config().web.admin);
+    let (user_name, user_email) = admin_user(&req);
 
     render_page("DB | Admin | Automate", move || {
         html! {
             <div class="admin-content">
-                <crate::ui::AdminHeader title="Key-Value Store" />
+                <crate::ui::AdminHeader
+                    title="Key-Value Store"
+                    subtitle="Persisted key-value partitions"
+                    user_name={user_name.clone().map(AttrValue::from)}
+                    user_email={user_email.clone().map(AttrValue::from)}
+                />
                 {
                     if partitions.is_empty() {
                         html! {
@@ -160,7 +190,10 @@ pub async fn admin_db_overview<S: Services>(services: web::Data<S>) -> actix_web
     .await
 }
 
-pub async fn admin_queue<S: Services>(services: web::Data<S>) -> actix_web::HttpResponse {
+pub async fn admin_queue<S: Services>(
+    req: actix_web::HttpRequest,
+    services: web::Data<S>,
+) -> actix_web::HttpResponse {
     let partitions = match services.queue().partitions().await {
         Ok(partitions) => partitions,
         Err(err) => {
@@ -230,11 +263,17 @@ pub async fn admin_queue<S: Services>(services: web::Data<S>) -> actix_web::Http
 
     display.sort_by_key(|msg| msg.scheduled_at);
     let csrf_token = super::helpers::csrf::generate_token(&services.config().web.admin);
+    let (user_name, user_email) = admin_user(&req);
 
     render_page("Queue | Admin | Automate", move || {
         html! {
             <div class="admin-content">
-                <crate::ui::AdminHeader title="Queue" />
+                <crate::ui::AdminHeader
+                    title="Queue"
+                    subtitle="Queued job messages"
+                    user_name={user_name.clone().map(AttrValue::from)}
+                    user_email={user_email.clone().map(AttrValue::from)}
+                />
                 <crate::ui::QueueView messages={display.clone()} csrf_token={csrf_token.clone()} />
             </div>
         }

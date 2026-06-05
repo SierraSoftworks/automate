@@ -323,6 +323,40 @@ fn verify_token(
     Ok(data.claims)
 }
 
+/// A minimal view of the signed-in administrator, derived from their ID token
+/// claims, for display in the admin UI.
+#[derive(Clone)]
+pub struct AdminUser {
+    /// A human-friendly display name (falls back through the common name
+    /// claims).
+    pub name: String,
+    /// The user's email address, when the provider supplies one.
+    pub email: Option<String>,
+}
+
+impl AdminUser {
+    /// Derives a display identity from a validated claim set, falling back
+    /// through the common OIDC name claims.
+    pub fn from_claims(claims: &serde_json::Map<String, serde_json::Value>) -> Self {
+        let str_claim = |key: &str| {
+            claims
+                .get(key)
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string())
+                .filter(|s| !s.is_empty())
+        };
+
+        let email = str_claim("email");
+        let name = str_claim("name")
+            .or_else(|| str_claim("preferred_username"))
+            .or_else(|| email.clone())
+            .or_else(|| str_claim("sub"))
+            .unwrap_or_else(|| "Signed in".to_string());
+
+        Self { name, email }
+    }
+}
+
 /// Removes registered/temporal claims so the ACL filter only sees
 /// user-meaningful attributes.
 pub fn filterable_claims(

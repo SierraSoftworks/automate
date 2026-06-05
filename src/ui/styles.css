@@ -57,45 +57,121 @@ a>button:focus {
 
 /* Admin layout */
 .admin-content {
-  margin: 5rem 0;
+  max-width: 1280px;
+  margin: 5rem auto;
   padding: 0 40px 5rem;
 }
 
-/* Admin page header with back navigation */
-.admin-page-header {
+/* Element-Plus inspired admin page header */
+.page-header {
   display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: 1rem;
   margin-bottom: 2rem;
-  padding-bottom: 1rem;
-  border-bottom: 1px solid #e0e0e0;
+  padding-bottom: 1.25rem;
+  border-bottom: 1px solid #ebeef5;
 }
 
-.admin-back {
+.page-header__main {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+
+.page-header__back {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  flex-shrink: 0;
+  color: #606266;
+  text-decoration: none;
+  font-size: 0.9rem;
+  font-weight: 500;
+  transition: color 120ms ease;
+}
+
+.page-header__back:hover {
+  color: #0F5A80;
+}
+
+.page-header__icon {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 36px;
-  height: 36px;
+}
+
+.page-header__divider {
+  width: 1px;
+  height: 18px;
+  background: #dcdfe6;
+  margin: 0 1rem;
+  flex-shrink: 0;
+}
+
+.page-header__content {
+  display: flex;
+  align-items: baseline;
+  gap: 0.75rem;
+  min-width: 0;
+}
+
+.page-header__heading {
+  font-size: 1.25rem;
+  font-weight: 500;
+  color: #303133;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.page-header__subtitle {
+  font-size: 0.85rem;
+  color: #909399;
+  white-space: nowrap;
+}
+
+.page-header__extra {
+  flex-shrink: 0;
+}
+
+/* Signed-in user chip */
+.admin-user {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.admin-user-avatar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
   flex-shrink: 0;
   border-radius: 50%;
-  color: #0F5A80;
-  background: #f0f6fa;
-  border: 1px solid #d6e6ef;
-  text-decoration: none;
-  transition: background 120ms ease, color 120ms ease;
+  background: #0F5A80;
+  color: #fff;
+  font-size: 0.8rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
 }
 
-.admin-back:hover {
-  background: #dbeeff;
-  color: #0a4663;
+.admin-user-meta {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.25;
 }
 
-.admin-page-title {
-  margin: 0;
-  font-size: 1.6rem;
-  font-weight: 300;
-  color: #1a1a1a;
+.admin-user-name {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: #303133;
+}
+
+.admin-user-email {
+  font-size: 0.75rem;
+  color: #909399;
 }
 
 .admin-intro {
@@ -260,35 +336,21 @@ a>button:focus {
   word-break: break-all;
 }
 
-.queue-partition-tag {
-  display: inline-block;
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  font-size: 0.7rem;
-  font-weight: 700;
-  letter-spacing: 0.04em;
-  color: #0f5a80;
-  background: #f0f6fa;
-  border: 1px solid #d6e6ef;
-  border-radius: 3px;
-  padding: 0.1rem 0.45rem;
-  margin-right: 0.55rem;
-  vertical-align: middle;
-}
-
 .queue-status {
   font-size: 0.7rem;
-  font-weight: 700;
-  letter-spacing: 0.06em;
+  font-weight: 600;
+  letter-spacing: 0.04em;
   text-transform: uppercase;
-  padding: 0.2rem 0.55rem;
-  border-radius: 3px;
+  padding: 0.15rem 0.5rem;
+  border-radius: 4px;
+  border: 1px solid transparent;
   white-space: nowrap;
   margin-left: 1rem;
 }
 
-.status-pending  { color: #2e7d32; background: #f1f8f1; }
-.status-delayed  { color: #0F5A80; background: #f0f6fa; }
-.status-reserved { color: #b45309; background: #fdf6ec; }
+.status-pending  { color: #67c23a; background: #f0f9eb; border-color: #e1f3d8; }
+.status-delayed  { color: #0F5A80; background: #eef6fb; border-color: #d6e6ef; }
+.status-reserved { color: #e6a23c; background: #fdf6ec; border-color: #faecd8; }
 
 .queue-entry-meta {
   display: flex;
@@ -457,49 +519,50 @@ a>button:focus {
   font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
 }
 
-/* Admin action buttons */
+/* Admin action buttons (Element-Plus plain button style) */
 .admin-action-btn {
-  font-size: 0.7rem;
-  font-weight: 600;
-  letter-spacing: 0.05em;
-  padding: 0.2rem 0.55rem;
-  border-radius: 3px;
-  border: none;
+  font-size: 0.75rem;
+  font-weight: 500;
+  line-height: 1;
+  padding: 0.4rem 0.7rem;
+  border-radius: 4px;
+  border: 1px solid transparent;
   cursor: pointer;
-  transition: background 120ms ease, opacity 120ms ease;
+  transition: background 120ms ease, color 120ms ease, border-color 120ms ease, opacity 120ms ease;
   white-space: nowrap;
 }
 
 .admin-action-btn:disabled {
-  opacity: 0.4;
+  opacity: 0.5;
   cursor: not-allowed;
 }
 
-.kv-delete-btn {
-  color: #b91c1c;
-  background: #fef2f2;
-}
-
-.kv-delete-btn:hover:not(:disabled) {
-  background: #fee2e2;
-}
-
+/* Primary (brand) plain button */
 .queue-trigger-btn {
   color: #0F5A80;
-  background: #f0f6fa;
+  background: #eef6fb;
+  border-color: #b9dcec;
 }
 
 .queue-trigger-btn:hover:not(:disabled) {
-  background: #dbeeff;
+  color: #fff;
+  background: #0F5A80;
+  border-color: #0F5A80;
 }
 
+/* Danger plain button */
+.kv-delete-btn,
 .queue-delete-btn {
-  color: #b91c1c;
-  background: #fef2f2;
+  color: #f56c6c;
+  background: #fef0f0;
+  border-color: #fbc4c4;
 }
 
+.kv-delete-btn:hover:not(:disabled),
 .queue-delete-btn:hover:not(:disabled) {
-  background: #fee2e2;
+  color: #fff;
+  background: #f56c6c;
+  border-color: #f56c6c;
 }
 
 .kv-entry-actions {

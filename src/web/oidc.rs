@@ -12,7 +12,7 @@
 //! [`crate::web::helpers::oidc`].
 
 use actix_web::{
-    HttpRequest, HttpResponse,
+    HttpMessage, HttpRequest, HttpResponse,
     body::BoxBody,
     dev::{ServiceRequest, ServiceResponse},
     http::header,
@@ -22,9 +22,9 @@ use actix_web::{
 
 use crate::prelude::*;
 use crate::web::helpers::oidc::{
-    AdminRequestFilter, CALLBACK_PATH_SUFFIX, LOGIN_COOKIE, LoginTransaction, SESSION_COOKIE,
-    begin_login, build_cookie, clear_cookie, discovery, exchange_code, filterable_claims,
-    redirect_base_url, safe_return_to, session_max_age, validate_token,
+    AdminRequestFilter, AdminUser, CALLBACK_PATH_SUFFIX, LOGIN_COOKIE, LoginTransaction,
+    SESSION_COOKIE, begin_login, build_cookie, clear_cookie, discovery, exchange_code,
+    filterable_claims, redirect_base_url, safe_return_to, session_max_age, validate_token,
 };
 use crate::web::helpers::request::is_https;
 use crate::web::ui::error_page;
@@ -283,6 +283,11 @@ pub async fn admin_auth<S: Services + Send + Sync + 'static>(
     };
 
     let allowed = admin.acl.matches(&filter).unwrap_or(false);
+
+    // Expose the signed-in user's identity to the admin UI for display.
+    if let Some(claims) = &claims {
+        req.extensions_mut().insert(AdminUser::from_claims(claims));
+    }
 
     if allowed {
         return next.call(req).await;
