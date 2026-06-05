@@ -2,6 +2,7 @@ use std::fmt::Display;
 
 use hmac::{Hmac, KeyInit, Mac};
 use serde::Deserialize;
+use serde_json::Value;
 use sha2::Sha256;
 
 use crate::{
@@ -114,46 +115,98 @@ impl Job for SentryAlertsWebhook {
             debug!("No Sentry webhook secret configured; skipping signature verification.");
         }
 
-        let notification: SentryIssueNotification = job.json()?;
+        let notification: SentryNotification = job.json()?;
 
-        // Only process created issues (new errors)
-        if !notification.action.eq_ignore_ascii_case("created") {
-            info!("Ignoring non-created Sentry issue: {}", notification.action);
-            return Ok(());
+        match notification {
+            SentryNotification::Integration(integration) => {
+                // Only process created issues (new errors)
+                if !integration.action.eq_ignore_ascii_case("created") {
+                    info!(
+                        "Ignoring non-created Sentry issue: {}",
+                        integration.action
+                    );
+                    return Ok(());
+                }
+
+                if !services
+                    .config()
+                    .webhooks
+                    .sentry
+                    .filter
+                    .matches(&integration)?
+                {
+                    info!(
+                        "Sentry issue '{}' did not match filter; ignoring.",
+                        integration.data.issue.title
+                    );
+                    return Ok(());
+                }
+
+                let issue = &integration.data.issue;
+
+                TodoistCreateTask::dispatch(
+                    TodoistCreateTaskPayload {
+                        title: format!(
+                            "[{}]({}): {}",
+                            issue.short_id, issue.web_url, issue.title
+                        ),
+                        description: Some(issue.culprit.clone()),
+                        due: TodoistDueDate::DateTime(chrono::Utc::now()),
+                        priority: Some(issue.level.to_priority()),
+                        config: services.config().webhooks.sentry.todoist.clone(),
+                        ..Default::default()
+                    },
+                    None,
+                    &services,
+                )
+                .await?;
+            }
+            SentryNotification::Alert(alert) => {
+                if !services
+                    .config()
+                    .webhooks
+                    .sentry
+                    .filter
+                    .matches(&alert)?
+                {
+                    info!(
+                        "Sentry alert '{}' did not match filter; ignoring.",
+                        alert.title()
+                    );
+                    return Ok(());
+                }
+
+                TodoistCreateTask::dispatch(
+                    TodoistCreateTaskPayload {
+                        title: format!(
+                            "[{}]({}): {}",
+                            alert.project_slug, alert.url, alert.title()
+                        ),
+                        description: Some(alert.culprit.clone()),
+                        due: TodoistDueDate::DateTime(chrono::Utc::now()),
+                        priority: Some(alert.level.to_priority()),
+                        config: services.config().webhooks.sentry.todoist.clone(),
+                        ..Default::default()
+                    },
+                    None,
+                    &services,
+                )
+                .await?;
+            }
         }
-
-        if !services
-            .config()
-            .webhooks
-            .sentry
-            .filter
-            .matches(&notification)?
-        {
-            info!(
-                "Sentry issue '{}' did not match filter; ignoring.",
-                notification.data.issue.title
-            );
-            return Ok(());
-        }
-
-        let issue = &notification.data.issue;
-
-        TodoistCreateTask::dispatch(
-            TodoistCreateTaskPayload {
-                title: format!("[{}]({}): {}", issue.short_id, issue.web_url, issue.title),
-                description: Some(issue.culprit.clone()),
-                due: TodoistDueDate::DateTime(chrono::Utc::now()),
-                priority: Some(issue.level.to_priority()),
-                config: services.config().webhooks.sentry.todoist.clone(),
-                ..Default::default()
-            },
-            None,
-            &services,
-        )
-        .await?;
 
         Ok(())
     }
+}
+
+/// Represents the two different Sentry webhook payload formats:
+/// - Integration Platform webhooks (with `action`, `actor`, `data`)
+/// - Issue Alert webhooks (with `id`, `project`, `level`, `url`, `event`)
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum SentryNotification {
+    Integration(SentryIssueNotification),
+    Alert(SentryAlertNotification),
 }
 
 #[allow(dead_code)]
@@ -174,6 +227,67 @@ impl Filterable for SentryIssueNotification {
             "issue_level" => format!("{}", self.data.issue.level).into(),
             "project_name" => self.data.issue.project.name.clone().into(),
             "project_platform" => self.data.issue.project.platform.clone().into(),
+            _ => crate::filter::FilterValue::Null,
+        }
+    }
+}
+
+#[allow(dead_code)]
+#[derive(Deserialize)]
+struct SentryAlertNotification {
+    id: String,
+    project_slug: String,
+    level: SentryIssueLevel,
+    culprit: String,
+    url: String,
+    #[serde(default)]
+    message: String,
+    #[serde(default)]
+    triggering_rules: Vec<String>,
+    #[serde(default)]
+    event: Value,
+}
+
+impl SentryAlertNotification {
+    fn title(&self) -> String {
+        // Try to get a meaningful title from the event metadata
+        if let Some(metadata) = self.event.get("metadata") {
+            let error_type = metadata.get("type").and_then(|v| v.as_str());
+            let error_value = metadata.get("value").and_then(|v| v.as_str());
+
+            match (error_type, error_value) {
+                (Some(t), Some(v)) if !t.is_empty() && !v.is_empty() => {
+                    return format!("{}: {}", t, v);
+                }
+                (Some(t), _) if !t.is_empty() => return t.to_string(),
+                (_, Some(v)) if !v.is_empty() => return v.to_string(),
+                _ => {}
+            }
+        }
+
+        // Fall back to the event title if available
+        if let Some(title) = self.event.get("title").and_then(|v| v.as_str())
+            && !title.is_empty()
+        {
+            return title.to_string();
+        }
+
+        // Final fallback to the message field
+        if !self.message.is_empty() {
+            return self.message.clone();
+        }
+
+        format!("Sentry Alert #{}", self.id)
+    }
+}
+
+impl Filterable for SentryAlertNotification {
+    fn get(&self, key: &str) -> crate::filter::FilterValue {
+        match key {
+            "issue_id" => self.id.clone().into(),
+            "issue_title" => self.title().into(),
+            "issue_level" => format!("{}", self.level).into(),
+            "project_name" => self.project_slug.clone().into(),
             _ => crate::filter::FilterValue::Null,
         }
     }
@@ -373,5 +487,85 @@ mod tests {
             .find(|(key, _)| key.eq_ignore_ascii_case("sentry-hook-signature"))
             .map(|(_, value)| value.as_str());
         assert!(found.is_some(), "Should find mixed case header");
+    }
+
+    #[test]
+    fn test_parse_integration_webhook() {
+        let body = r#"{"action":"created","actor":{"type":"application","id":"sentry","name":"Sentry"},"data":{"issue":{"id":"123","url":"https://sentry.io/api/0/issues/123/","web_url":"https://sentry.io/issues/123/","project_url":"https://sentry.io/projects/my-project/","title":"Test Error","type":"error","level":"error","shortId":"TEST-1","culprit":"test.js","project":{"id":"1","name":"Test Project","platform":"javascript","slug":"test-project"}}}}"#;
+        let notification: SentryNotification = serde_json::from_str(body).unwrap();
+        assert!(
+            matches!(notification, SentryNotification::Integration(_)),
+            "Should parse as Integration webhook"
+        );
+    }
+
+    #[test]
+    fn test_parse_alert_webhook() {
+        let body = r#"{"id":"7470688687","project":"git-tool","project_name":"git-tool","project_slug":"git-tool","logger":"root","level":"error","culprit":"main in main","message":"","url":"https://sierra-softworks.sentry.io/issues/7470688687/","triggering_rules":["Send a notification"],"event":{"title":"Test Error: something went wrong","metadata":{"type":"Test Error","value":"something went wrong"}}}"#;
+        let notification: SentryNotification = serde_json::from_str(body).unwrap();
+        assert!(
+            matches!(notification, SentryNotification::Alert(_)),
+            "Should parse as Alert webhook"
+        );
+
+        if let SentryNotification::Alert(alert) = notification {
+            assert_eq!(alert.id, "7470688687");
+            assert_eq!(alert.project_slug, "git-tool");
+            assert_eq!(alert.level, SentryIssueLevel::Error);
+            assert_eq!(alert.culprit, "main in main");
+            assert_eq!(alert.title(), "Test Error: something went wrong");
+        }
+    }
+
+    #[test]
+    fn test_alert_title_from_metadata() {
+        let body = r#"{"id":"1","project":"test","project_name":"test","project_slug":"test","logger":"root","level":"error","culprit":"test","message":"","url":"https://sentry.io/issues/1/","event":{"metadata":{"type":"ValueError","value":"invalid literal"}}}"#;
+        let notification: SentryNotification = serde_json::from_str(body).unwrap();
+        if let SentryNotification::Alert(alert) = notification {
+            assert_eq!(alert.title(), "ValueError: invalid literal");
+        } else {
+            panic!("Expected Alert variant");
+        }
+    }
+
+    #[test]
+    fn test_alert_title_fallback_to_event_title() {
+        let body = r#"{"id":"1","project":"test","project_name":"test","project_slug":"test","logger":"root","level":"warning","culprit":"test","message":"","url":"https://sentry.io/issues/1/","event":{"title":"Something broke"}}"#;
+        let notification: SentryNotification = serde_json::from_str(body).unwrap();
+        if let SentryNotification::Alert(alert) = notification {
+            assert_eq!(alert.title(), "Something broke");
+        } else {
+            panic!("Expected Alert variant");
+        }
+    }
+
+    #[test]
+    fn test_alert_title_fallback_to_id() {
+        let body = r#"{"id":"42","project":"test","project_name":"test","project_slug":"test","logger":"root","level":"info","culprit":"test","message":"","url":"https://sentry.io/issues/42/","event":{}}"#;
+        let notification: SentryNotification = serde_json::from_str(body).unwrap();
+        if let SentryNotification::Alert(alert) = notification {
+            assert_eq!(alert.title(), "Sentry Alert #42");
+        } else {
+            panic!("Expected Alert variant");
+        }
+    }
+
+    #[test]
+    fn test_parse_real_alert_payload() {
+        // Minimal reproduction of the real production payload structure
+        let body = r#"{"id":"7470688687","project":"git-tool","project_name":"git-tool","project_slug":"git-tool","logger":"root","level":"error","culprit":"main in main","message":"","url":"https://sierra-softworks.sentry.io/issues/7470688687/?referrer=webhooks_plugin","triggering_rules":["Send a notification for high priority issues"],"event":{"event_id":"738801da5c4741dc8f201c2ac4197b6e","level":"error","type":"error","title":"The following languages are not supported: The following languages are not supported: nodejs","metadata":{"type":"The following languages are not supported","value":"The following languages are not supported: nodejs"},"platform":"go","timestamp":1778377466.0}}"#;
+        let notification: SentryNotification = serde_json::from_str(body).unwrap();
+        if let SentryNotification::Alert(alert) = notification {
+            assert_eq!(alert.id, "7470688687");
+            assert_eq!(alert.project_slug, "git-tool");
+            assert_eq!(alert.level, SentryIssueLevel::Error);
+            assert_eq!(
+                alert.title(),
+                "The following languages are not supported: The following languages are not supported: nodejs"
+            );
+            assert_eq!(alert.level.to_priority(), 3);
+        } else {
+            panic!("Expected Alert variant");
+        }
     }
 }
