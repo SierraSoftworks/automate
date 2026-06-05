@@ -39,6 +39,15 @@ impl Job for YouTubeWorkflow {
         "workflow/youtube-todoist"
     }
 
+    #[instrument("workflow.youtube.setup", skip(self, services), err(Display))]
+    async fn setup(
+        &self,
+        services: impl Services + Send + Sync + 'static,
+    ) -> Result<(), human_errors::Error> {
+        let config = services.config();
+        super::CronJob::schedule(&config.workflows.youtube, services).await
+    }
+
     #[instrument("workflow.youtube.handle", skip(self, job, services), fields(job = %job))]
     async fn handle(
         &self,

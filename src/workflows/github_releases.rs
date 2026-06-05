@@ -35,6 +35,15 @@ impl Job for GitHubReleasesWorkflow {
         "workflow/github-releases-todoist"
     }
 
+    #[instrument("workflow.github_releases.setup", skip(self, services), err(Display))]
+    async fn setup(
+        &self,
+        services: impl Services + Send + Sync + 'static,
+    ) -> Result<(), human_errors::Error> {
+        let config = services.config();
+        super::CronJob::schedule(&config.workflows.github_releases, services).await
+    }
+
     #[instrument("workflow.github_releases.handle", skip(self, job, services), fields(job = %job))]
     async fn handle(
         &self,

@@ -47,6 +47,23 @@ pub trait Job {
         TimeDelta::minutes(5)
     }
 
+    /// Performs any one-time startup work required by this job, such as
+    /// scheduling recurring cron tasks. This is called once for every
+    /// registered job when the [`JobConsumer`] starts up, mirroring the
+    /// inventory-based registration used for job handlers.
+    ///
+    /// The default implementation does nothing, so jobs only need to override
+    /// it when they require startup wiring.
+    fn setup(
+        &self,
+        services: impl Services + Send + Sync + 'static,
+    ) -> impl std::future::Future<Output = Result<(), human_errors::Error>> + Send {
+        async move {
+            let _ = services;
+            Ok(())
+        }
+    }
+
     fn handle(
         &self,
         job: &Self::JobType,
@@ -82,6 +99,9 @@ pub trait JobRunnable: Send + Sync {
     /// How long a dequeued message should remain reserved while this job runs.
     fn timeout(&self) -> TimeDelta;
 
+    /// Run any one-time startup work for the underlying [`Job::setup`].
+    async fn setup(&self, services: AppServices) -> Result<(), human_errors::Error>;
+
     /// Deserialize the raw queue payload and run the underlying [`Job::handle`].
     async fn handle(
         &self,
@@ -105,6 +125,10 @@ where
 
     fn timeout(&self) -> TimeDelta {
         Job::timeout(self)
+    }
+
+    async fn setup(&self, services: AppServices) -> Result<(), human_errors::Error> {
+        Job::setup(self, services).await
     }
 
     async fn handle(
@@ -155,10 +179,10 @@ macro_rules! register_job {
 /// It dequeues messages from any partition, looks up the matching handler in
 /// the registry built from [`inventory`], and dispatches the work onto a
 /// background task so that multiple jobs can run concurrently.
-pub struct JobConsumer;
+pub struct JobHost;
 
-impl JobConsumer {
-    #[instrument("job.consumer.run", skip(services), fields(otel.kind=?OpenTelemetrySpanKind::Consumer), err(Display))]
+impl JobHost {
+    #[instrument("job.host.run", skip(services), fields(otel.kind=?OpenTelemetrySpanKind::Consumer), err(Display))]
     pub async fn run(services: AppServices) -> Result<(), human_errors::Error> {
         let mut registry: HashMap<&'static str, &'static dyn JobRunnable> = HashMap::new();
         for registration in inventory::iter::<JobRegistration> {
@@ -178,9 +202,15 @@ impl JobConsumer {
         }
 
         info!(
-            "Job consumer started with {} registered handler(s).",
+            "Job host started with {} registered handler(s).",
             registry.len()
         );
+
+        // Run one-time startup wiring for every registered job (for example,
+        // scheduling recurring cron tasks) before we begin processing work.
+        for handler in registry.values() {
+            handler.setup(services.clone()).await?;
+        }
 
         // Reserve dequeued messages for at least as long as the slowest job may
         // take, so that a message is never released back to the queue while it
@@ -309,6 +339,17 @@ mod tests {
             "test/dynamic-dispatch"
         }
 
+        async fn setup(
+            &self,
+            services: impl Services + Send + Sync + 'static,
+        ) -> Result<(), human_errors::Error> {
+            services
+                .kv()
+                .set("test/dynamic-dispatch", "setup", "done".to_string())
+                .await?;
+            Ok(())
+        }
+
         async fn handle(
             &self,
             job: &Self::JobType,
@@ -364,6 +405,23 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_job_runnable_runs_setup() {
+        let services = ServicesContainer::new_mock().await.unwrap();
+
+        // The type-erased setup should delegate to the job's `Job::setup`.
+        JobRunnable::setup(&TestJob, services.clone())
+            .await
+            .unwrap();
+
+        let stored: Option<String> = services
+            .kv()
+            .get("test/dynamic-dispatch", "setup")
+            .await
+            .unwrap();
+        assert_eq!(stored.as_deref(), Some("done"));
+    }
+
+    #[tokio::test]
     async fn test_consumer_processes_and_completes_message() {
         static TEST_JOB: TestJob = TestJob;
 
@@ -390,7 +448,7 @@ mod tests {
             .unwrap();
         assert_eq!(item.partition, "test/dynamic-dispatch");
 
-        JobConsumer::process(&TEST_JOB, item, services.clone(), tracing::Span::none()).await;
+        JobHost::process(&TEST_JOB, item, services.clone(), tracing::Span::none()).await;
 
         // The job handler should have run.
         let stored: Option<String> = services

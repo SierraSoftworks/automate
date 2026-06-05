@@ -56,8 +56,8 @@ where
 pub struct CronJob;
 
 impl CronJob {
-    #[instrument("cron_job.setup", skip(jobs, services), fields(otel.kind=?OpenTelemetrySpanKind::Producer, job.kind = std::any::type_name::<J::JobType>()))]
-    pub async fn setup<J: Job>(
+    #[instrument("cron_job.schedule", skip(jobs, services), fields(otel.kind=?OpenTelemetrySpanKind::Producer, job.kind = std::any::type_name::<J::JobType>()))]
+    pub async fn schedule<J: Job>(
         jobs: &[CronJobConfig<J>],
         services: impl Services + Send + Sync + 'static,
     ) -> Result<(), human_errors::Error>

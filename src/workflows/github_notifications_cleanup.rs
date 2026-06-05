@@ -33,6 +33,23 @@ impl Job for GitHubNotificationsCleanupWorkflow {
         "workflow/github-notifications-cleanup"
     }
 
+    #[instrument(
+        "workflow.github_notifications_cleanup.setup",
+        skip(self, services),
+        err(Display)
+    )]
+    async fn setup(
+        &self,
+        services: impl Services + Send + Sync + 'static,
+    ) -> Result<(), human_errors::Error> {
+        let config = services.config();
+        super::CronJob::schedule(
+            std::slice::from_ref(&config.workflows.github_notifications_cleanup),
+            services,
+        )
+        .await
+    }
+
     async fn handle(
         &self,
         job: &Self::JobType,

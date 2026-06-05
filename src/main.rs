@@ -19,7 +19,7 @@ use clap::Parser;
 use futures_concurrency::future::Race;
 use tracing_batteries::prelude::*;
 
-use crate::{prelude::*, workflows::CronJob};
+use crate::prelude::*;
 
 #[derive(Parser)]
 #[command(version, about, long_about = None)]
@@ -75,51 +75,15 @@ async fn run(args: Args) -> Result<(), human_errors::Error> {
     let db = db::SqliteDatabase::open("database.sqlite").await.unwrap();
     let services = services::ServicesContainer::new(config, db);
 
-    schedule_cron_jobs(services.clone()).await?;
-
     (
         crate::web::run_web_server(services.clone()),
-        crate::job::JobConsumer::run(services.clone()),
+        crate::job::JobHost::run(services.clone()),
     )
         .race()
         .await
         .or_user_err(&[
             "Restart the application and try again after addressing any issues reported in the logs.",
         ])?;
-
-    Ok(())
-}
-
-async fn schedule_cron_jobs(
-    services: impl Services + Send + Sync + Clone + 'static,
-) -> Result<(), human_errors::Error> {
-    CronJob::setup(&services.config().workflows.calendars, services.clone()).await?;
-
-    CronJob::setup(
-        &services.config().workflows.github_notifications,
-        services.clone(),
-    )
-    .await?;
-
-    CronJob::setup(
-        &[services
-            .config()
-            .workflows
-            .github_notifications_cleanup
-            .clone()],
-        services.clone(),
-    )
-    .await?;
-
-    CronJob::setup(
-        &services.config().workflows.github_releases,
-        services.clone(),
-    )
-    .await?;
-
-    CronJob::setup(&services.config().workflows.rss, services.clone()).await?;
-    CronJob::setup(&services.config().workflows.xkcd, services.clone()).await?;
-    CronJob::setup(&services.config().workflows.youtube, services.clone()).await?;
 
     Ok(())
 }

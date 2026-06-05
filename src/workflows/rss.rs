@@ -48,6 +48,15 @@ impl Job for RssWorkflow {
         "workflow/rss-todoist"
     }
 
+    #[instrument("workflow.rss.setup", skip(self, services), err(Display))]
+    async fn setup(
+        &self,
+        services: impl Services + Send + Sync + 'static,
+    ) -> Result<(), human_errors::Error> {
+        let config = services.config();
+        super::CronJob::schedule(&config.workflows.rss, services).await
+    }
+
     #[instrument("workflow.rss.handle", skip(self, job, services), fields(job = %job))]
     async fn handle(
         &self,

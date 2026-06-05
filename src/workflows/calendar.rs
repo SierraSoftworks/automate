@@ -41,6 +41,15 @@ impl Job for CalendarWorkflow {
         "workflow/calendar-todoist"
     }
 
+    #[instrument("workflow.calendar.setup", skip(self, services), err(Display))]
+    async fn setup(
+        &self,
+        services: impl Services + Send + Sync + 'static,
+    ) -> Result<(), human_errors::Error> {
+        let config = services.config();
+        super::CronJob::schedule(&config.workflows.calendars, services).await
+    }
+
     #[instrument("workflow.calendar.handle", skip(self, job, services), fields(job = %job))]
     async fn handle(
         &self,
