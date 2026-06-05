@@ -49,7 +49,7 @@ pub async fn admin_index<S: Services>(
     render_page("Admin | Automate", move || {
         html! {
             <div class="admin-content">
-                <crate::ui::AdminHeader
+                <crate::ui::PageHeader
                     title="Dashboard"
                     show_back={false}
                     user_name={user_name.clone().map(AttrValue::from)}
@@ -62,8 +62,11 @@ pub async fn admin_index<S: Services>(
                 </p>
 
                 <div class="admin-cards">
-                    <a class="admin-card" href="/admin/db">
-                        <span class="admin-card-icon">
+                    <crate::ui::Card
+                        href="/admin/db"
+                        title="Key-Value Store"
+                        description="Inspect and manage persisted key-value partitions."
+                        icon={html! {
                             <svg
                                 viewBox="0 0 24 24"
                                 width="32"
@@ -79,17 +82,14 @@ pub async fn admin_index<S: Services>(
                                 <path d="M3 5v14c0 1.66 4.03 3 9 3s9-1.34 9-3V5" />
                                 <path d="M3 12c0 1.66 4.03 3 9 3s9-1.34 9-3" />
                             </svg>
-                        </span>
-                        <span class="admin-card-body">
-                            <span class="admin-card-title">{ "Key-Value Store" }</span>
-                            <span class="admin-card-desc">
-                                { "Inspect and manage persisted key-value partitions." }
-                            </span>
-                        </span>
-                    </a>
+                        }}
+                    />
 
-                    <a class="admin-card" href="/admin/queue">
-                        <span class="admin-card-icon">
+                    <crate::ui::Card
+                        href="/admin/queue"
+                        title="Queue"
+                        description="Review, trigger, and delete queued job messages."
+                        icon={html! {
                             <svg
                                 viewBox="0 0 24 24"
                                 width="32"
@@ -108,14 +108,8 @@ pub async fn admin_index<S: Services>(
                                 <circle cx="6" cy="12" r="1.4" fill="currentColor" stroke="none" />
                                 <circle cx="6" cy="18" r="1.4" fill="currentColor" stroke="none" />
                             </svg>
-                        </span>
-                        <span class="admin-card-body">
-                            <span class="admin-card-title">{ "Queue" }</span>
-                            <span class="admin-card-desc">
-                                { "Review, trigger, and delete queued job messages." }
-                            </span>
-                        </span>
-                    </a>
+                        }}
+                    />
                 </div>
             </div>
         }
@@ -155,7 +149,7 @@ pub async fn admin_db_overview<S: Services>(
     render_page("DB | Admin | Automate", move || {
         html! {
             <div class="admin-content">
-                <crate::ui::AdminHeader
+                <crate::ui::PageHeader
                     title="Key-Value Store"
                     subtitle="Persisted key-value partitions"
                     user_name={user_name.clone().map(AttrValue::from)}
@@ -268,7 +262,7 @@ pub async fn admin_queue<S: Services>(
     render_page("Queue | Admin | Automate", move || {
         html! {
             <div class="admin-content">
-                <crate::ui::AdminHeader
+                <crate::ui::PageHeader
                     title="Queue"
                     subtitle="Queued job messages"
                     user_name={user_name.clone().map(AttrValue::from)}

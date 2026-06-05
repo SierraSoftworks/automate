@@ -299,36 +299,137 @@ a>button:focus {
   line-height: 1.55;
 }
 
-/* Queue message view */
-.queue-entries {
+/* Stacked partition sections on /admin/db and /admin/queue */
+.kv-overview {
   display: flex;
   flex-direction: column;
-  gap: 1px;
+  gap: 1.25rem;
+}
+
+.kv-empty {
+  padding: 2rem 0;
+  color: #888;
+  font-size: 0.95rem;
+}
+
+/* Collapsible partition container */
+.partition {
   border: 1px solid #e8e8e8;
-  border-radius: 4px;
+  border-radius: 6px;
   overflow: hidden;
+  background: #fff;
   box-shadow: 0 1px 4px rgba(0, 0, 0, 0.06);
 }
 
-.queue-entry {
+.partition__summary {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.85rem 1rem;
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+  background: #fafafa;
+  transition: background 100ms ease;
+}
+
+.partition__summary::-webkit-details-marker {
+  display: none;
+}
+
+.partition__summary:hover {
+  background: #f5fafd;
+}
+
+.partition__chevron {
+  width: 0;
+  height: 0;
+  flex-shrink: 0;
+  border-left: 5px solid #909399;
+  border-top: 4px solid transparent;
+  border-bottom: 4px solid transparent;
+  transition: transform 120ms ease;
+}
+
+.partition[open] > .partition__summary .partition__chevron {
+  transform: rotate(90deg);
+}
+
+.partition__name {
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: #1a1a1a;
+}
+
+.partition__count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.5rem;
+  height: 1.5rem;
+  padding: 0 0.5rem;
+  margin-left: auto;
+  border-radius: 999px;
+  background: #eef6fb;
+  border: 1px solid #d6e6ef;
+  color: #0F5A80;
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+.partition__entries {
+  display: flex;
+  flex-direction: column;
+  border-top: 1px solid #e8e8e8;
+}
+
+/* Collapsible entity card */
+.db-entity {
   background: #fff;
   border-top: 1px solid #f0f0f0;
 }
 
-.queue-entry:first-child {
+.db-entity:first-child {
   border-top: none;
 }
 
-.queue-entry-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
+.db-entity__summary {
   padding: 0.65rem 1rem;
-  border-bottom: 1px solid #f4f4f4;
+  cursor: pointer;
+  list-style: none;
+  transition: background 100ms ease;
+}
+
+.db-entity__summary::-webkit-details-marker {
+  display: none;
+}
+
+.db-entity__summary:hover {
   background: #fafafa;
 }
 
-.queue-entry-key {
+.db-entity__head {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.db-entity__chevron {
+  width: 0;
+  height: 0;
+  flex-shrink: 0;
+  border-left: 5px solid #c0c4cc;
+  border-top: 4px solid transparent;
+  border-bottom: 4px solid transparent;
+  transition: transform 120ms ease;
+}
+
+.db-entity[open] > .db-entity__summary .db-entity__chevron {
+  transform: rotate(90deg);
+}
+
+.db-entity__key {
   font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
   font-size: 0.85rem;
   font-weight: 600;
@@ -336,6 +437,48 @@ a>button:focus {
   word-break: break-all;
 }
 
+.db-entity__controls {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+.db-entity__meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 1.5rem;
+  margin-top: 0.5rem;
+  padding-left: 1.1rem;
+  font-size: 0.8rem;
+  color: #666;
+}
+
+.db-entity__meta-label {
+  font-weight: 600;
+  color: #444;
+  margin-right: 0.35rem;
+}
+
+.db-entity__payload {
+  margin: 0;
+  padding: 0.75rem 1rem 0.85rem 2.1rem;
+  font-size: 0.8rem;
+  line-height: 1.5;
+  color: #444;
+  background: #fbfbfb;
+  border-top: 1px solid #f0f0f0;
+  overflow-x: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.db-entity__payload code {
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+}
+
+/* Queue status badges */
 .queue-status {
   font-size: 0.7rem;
   font-weight: 600;
@@ -345,179 +488,11 @@ a>button:focus {
   border-radius: 4px;
   border: 1px solid transparent;
   white-space: nowrap;
-  margin-left: 1rem;
 }
 
 .status-pending  { color: #67c23a; background: #f0f9eb; border-color: #e1f3d8; }
 .status-delayed  { color: #0F5A80; background: #eef6fb; border-color: #d6e6ef; }
 .status-reserved { color: #e6a23c; background: #fdf6ec; border-color: #faecd8; }
-
-.queue-entry-meta {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0 1.5rem;
-  padding: 0.5rem 1rem;
-  font-size: 0.8rem;
-  color: #666;
-  border-bottom: 1px solid #f4f4f4;
-}
-
-.queue-meta-label {
-  font-weight: 600;
-  color: #444;
-}
-
-/* Partition discovery list */
-.partition-section {
-  margin-top: 2.5rem;
-}
-
-.partition-section > h2 {
-  font-size: 0.75rem;
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: #888;
-  margin: 0 0 0.75rem;
-}
-
-.partition-list {
-  display: flex;
-  flex-direction: column;
-  border: 1px solid #e8e8e8;
-  border-radius: 4px;
-  overflow: hidden;
-  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.06);
-}
-
-.partition-item {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 0.65rem 1rem;
-  background: #fff;
-  border-top: 1px solid #f0f0f0;
-  text-decoration: none;
-  color: inherit;
-  transition: background 100ms ease;
-}
-
-.partition-item:first-child {
-  border-top: none;
-}
-
-.partition-item:hover {
-  background: #f5fafd;
-}
-
-.partition-name {
-  font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
-  font-size: 0.85rem;
-  color: #1a1a1a;
-}
-
-.partition-action {
-  font-size: 0.75rem;
-  font-weight: 600;
-  color: #0F5A80;
-  letter-spacing: 0.03em;
-}
-
-.partition-empty {
-  font-size: 0.85rem;
-  color: #999;
-  margin: 0;
-}
-
-/* Stacked key-value partition sections on /admin/db */
-.kv-overview {
-  display: flex;
-  flex-direction: column;
-  gap: 2.5rem;
-}
-
-/* Key-Value Partition View */
-.kv-view {
-  font-family: sans-serif;
-}
-
-.kv-header {
-  display: flex;
-  align-items: baseline;
-  gap: 1rem;
-  margin-bottom: 1.5rem;
-  padding-bottom: 0.75rem;
-  border-bottom: 1px solid #e0e0e0;
-}
-
-.kv-partition {
-  font-size: 1.5rem;
-  font-weight: 300;
-  color: #1a1a1a;
-}
-
-.kv-count {
-  font-size: 0.85rem;
-  color: #888;
-}
-
-.kv-empty {
-  padding: 2rem 0;
-  color: #888;
-  font-size: 0.95rem;
-}
-
-.kv-entries {
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-  border: 1px solid #e8e8e8;
-  border-radius: 4px;
-  overflow: hidden;
-  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.06);
-}
-
-.kv-entry {
-  display: grid;
-  grid-template-columns: 280px 1fr auto;
-  background: #fff;
-}
-
-.kv-entry + .kv-entry {
-  border-top: 1px solid #f0f0f0;
-}
-
-.kv-entry:hover {
-  background: #fafafa;
-}
-
-.kv-entry-key {
-  padding: 0.75rem 1rem;
-  font-size: 0.85rem;
-  font-weight: 600;
-  color: #333;
-  word-break: break-all;
-  border-right: 1px solid #f0f0f0;
-  background: #fafafa;
-  display: flex;
-  align-items: flex-start;
-}
-
-.kv-entry-value {
-  margin: 0;
-  padding: 0.75rem 1rem;
-  font-size: 0.8rem;
-  line-height: 1.5;
-  color: #444;
-  background: transparent;
-  overflow-x: auto;
-  white-space: pre-wrap;
-  word-break: break-word;
-}
-
-.kv-entry-value code {
-  font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
-}
 
 /* Admin action buttons (Element-Plus plain button style) */
 .admin-action-btn {
@@ -565,23 +540,8 @@ a>button:focus {
   border-color: #f56c6c;
 }
 
-.kv-entry-actions {
-  padding: 0.5rem 0.75rem;
-  display: flex;
-  align-items: flex-start;
-  border-left: 1px solid #f0f0f0;
-  background: #fafafa;
-}
-
-.queue-entry-actions {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-}
-
 /* Forms used purely as action wrappers should not affect layout */
-.kv-entry-actions form,
-.queue-entry-actions form {
+.db-entity__controls form {
   display: contents;
 }
 
