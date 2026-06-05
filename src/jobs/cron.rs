@@ -115,7 +115,7 @@ impl Job for CronJob {
         // Enqueue the actual task to be run immediately
         services
             .queue()
-            .enqueue(job.kind.clone(), job.task.clone(), None, None)
+            .enqueue(job.kind.clone(), job.task.clone(), job.idempotency_key.clone().map(|k| k.into()), None)
             .await?;
 
         Ok(())
