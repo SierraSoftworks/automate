@@ -554,6 +554,26 @@ impl Queue for SqliteDatabase {
             .or_system_err(ADVICE_DB_ERROR)
     }
 
+    #[instrument("db.sqlite.purge", skip(self, partition, key), fields(otel.kind=?OpenTelemetrySpanKind::Client), err(Display))]
+    async fn purge<P: Into<Cow<'static, str>> + Send, K: Into<Cow<'static, str>> + Send>(
+        &self,
+        partition: P,
+        key: K,
+    ) -> std::result::Result<(), errors::Error> {
+        let partition = partition.into();
+        let key = key.into();
+        self.connection
+            .call(move |c| {
+                c.execute(
+                    "DELETE FROM queues WHERE partition = ?1 AND key = ?2",
+                    (partition, key),
+                )
+            })
+            .await
+            .or_system_err(ADVICE_DB_ERROR)?;
+        Ok(())
+    }
+
     #[instrument("db.sqlite.queue_partitions", skip(self), fields(otel.kind=?OpenTelemetrySpanKind::Client), err(Display))]
     async fn partitions(&self) -> std::result::Result<Vec<String>, errors::Error> {
         self.connection
@@ -675,5 +695,27 @@ mod tests {
             .unwrap();
 
         session.shutdown();
+    }
+
+    #[tokio::test]
+    async fn test_queue_purge() {
+        let db = SqliteDatabase::open_in_memory().await.unwrap();
+
+        db.enqueue("test_queue", "job1", Some("key1".into()), None)
+            .await
+            .unwrap();
+        db.enqueue("test_queue", "job2", Some("key2".into()), None)
+            .await
+            .unwrap();
+
+        db.purge("test_queue", "key1").await.unwrap();
+
+        let remaining: Vec<crate::db::PeekedMessage<String>> =
+            db.peek("test_queue", 10).await.unwrap();
+        assert_eq!(remaining.len(), 1);
+        assert_eq!(remaining[0].key, "key2");
+
+        // Purging a missing key is a no-op rather than an error.
+        db.purge("test_queue", "missing").await.unwrap();
     }
 }

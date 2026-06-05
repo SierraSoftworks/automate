@@ -61,11 +61,108 @@ a>button:focus {
   padding: 0 40px 5rem;
 }
 
+/* Admin page header with back navigation */
+.admin-page-header {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  margin-bottom: 2rem;
+  padding-bottom: 1rem;
+  border-bottom: 1px solid #e0e0e0;
+}
+
+.admin-back {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  color: #0F5A80;
+  background: #f0f6fa;
+  border: 1px solid #d6e6ef;
+  text-decoration: none;
+  transition: background 120ms ease, color 120ms ease;
+}
+
+.admin-back:hover {
+  background: #dbeeff;
+  color: #0a4663;
+}
+
+.admin-page-title {
+  margin: 0;
+  font-size: 1.6rem;
+  font-weight: 300;
+  color: #1a1a1a;
+}
+
 .admin-intro {
   color: #555;
   font-size: 0.95rem;
   line-height: 1.6;
   margin: 0 0 2rem;
+}
+
+/* Admin dashboard cards */
+.admin-cards {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1.5rem;
+}
+
+.admin-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 1rem;
+  flex: 1 1 260px;
+  min-width: 240px;
+  padding: 1.5rem;
+  background: #fff;
+  border: 1px solid #e8e8e8;
+  border-radius: 8px;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.06);
+  text-decoration: none;
+  color: inherit;
+  transition: border-color 120ms ease, box-shadow 120ms ease, transform 120ms ease;
+}
+
+.admin-card:hover {
+  border-color: #b9dcec;
+  box-shadow: 0 4px 14px rgba(15, 90, 128, 0.12);
+  transform: translateY(-2px);
+}
+
+.admin-card-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 48px;
+  height: 48px;
+  flex-shrink: 0;
+  border-radius: 8px;
+  color: #0F5A80;
+  background: #f0f6fa;
+  border: 1px solid #d6e6ef;
+}
+
+.admin-card-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.admin-card-title {
+  font-size: 1.05rem;
+  font-weight: 600;
+  color: #1a1a1a;
+}
+
+.admin-card-desc {
+  font-size: 0.85rem;
+  color: #666;
+  line-height: 1.5;
 }
 
 /* Admin endpoint listing */
@@ -161,6 +258,21 @@ a>button:focus {
   font-weight: 600;
   color: #333;
   word-break: break-all;
+}
+
+.queue-partition-tag {
+  display: inline-block;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: #0f5a80;
+  background: #f0f6fa;
+  border: 1px solid #d6e6ef;
+  border-radius: 3px;
+  padding: 0.1rem 0.45rem;
+  margin-right: 0.55rem;
+  vertical-align: middle;
 }
 
 .queue-status {
@@ -379,6 +491,15 @@ a>button:focus {
 
 .queue-trigger-btn:hover:not(:disabled) {
   background: #dbeeff;
+}
+
+.queue-delete-btn {
+  color: #b91c1c;
+  background: #fef2f2;
+}
+
+.queue-delete-btn:hover:not(:disabled) {
+  background: #fee2e2;
 }
 
 .kv-entry-actions {

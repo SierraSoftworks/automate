@@ -93,6 +93,15 @@ pub trait Queue {
         max_items: usize,
     ) -> Result<Vec<PeekedMessage<T>>, errors::Error>;
 
+    /// Remove a message from the queue by its key, regardless of whether it is
+    /// currently reserved. This is intended for administrative interventions
+    /// such as cancelling a queued job.
+    async fn purge<P: Into<Cow<'static, str>> + Send, K: Into<Cow<'static, str>> + Send>(
+        &self,
+        partition: P,
+        key: K,
+    ) -> Result<(), errors::Error>;
+
     async fn partitions(&self) -> Result<Vec<String>, errors::Error>;
 
     fn partition<T: Serialize + DeserializeOwned + Send + 'static>(

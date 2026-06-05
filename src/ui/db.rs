@@ -4,10 +4,12 @@ use yew::prelude::*;
 
 #[derive(Clone, PartialEq)]
 pub struct QueueMessageDisplay {
+    pub partition: String,
     pub key: String,
     pub payload: serde_json::Value,
     /// "Pending", "Reserved", or "Delayed"
     pub status: String,
+    pub scheduled_at: chrono::DateTime<chrono::Utc>,
     pub scheduled_at_abs: String,
     pub scheduled_at_rel: String,
     /// Present when status is Reserved or Delayed
@@ -19,7 +21,6 @@ pub struct QueueMessageDisplay {
 
 #[derive(Properties, PartialEq)]
 pub struct QueueViewProps {
-    pub partition: String,
     pub messages: Vec<QueueMessageDisplay>,
 }
 
@@ -28,14 +29,14 @@ pub fn queue_view(props: &QueueViewProps) -> Html {
     html! {
         <div class="queue-view">
             <div class="kv-header">
-                <span class="kv-partition">{ &props.partition }</span>
+                <span class="kv-partition">{ "Queue" }</span>
                 <span class="kv-count">{ format!("{} messages", props.messages.len()) }</span>
             </div>
             {
                 if props.messages.is_empty() {
                     html! {
                         <div class="kv-empty">
-                            <p>{ "No messages found in this queue." }</p>
+                            <p>{ "No messages found in any queue." }</p>
                         </div>
                     }
                 } else {
@@ -50,17 +51,28 @@ pub fn queue_view(props: &QueueViewProps) -> Html {
                                 html! {
                                     <div class="queue-entry">
                                         <div class="queue-entry-head">
-                                            <div class="queue-entry-key">{ &msg.key }</div>
+                                            <div class="queue-entry-key">
+                                                <span class="queue-partition-tag">{ &msg.partition }</span>
+                                                { &msg.key }
+                                            </div>
                                             <div class="queue-entry-actions">
                                                 <div class={status_class}>{ &msg.status }</div>
                                                 <form method="post" action="/admin/queue/trigger">
-                                                    <input type="hidden" name="partition" value={props.partition.clone()} />
+                                                    <input type="hidden" name="partition" value={msg.partition.clone()} />
                                                     <input type="hidden" name="key" value={msg.key.clone()} />
                                                     <input type="hidden" name="payload" value={payload_json} />
                                                     <button
                                                         class="admin-action-btn queue-trigger-btn"
                                                         type="submit"
                                                     >{ "trigger" }</button>
+                                                </form>
+                                                <form method="post" action="/admin/queue/delete">
+                                                    <input type="hidden" name="partition" value={msg.partition.clone()} />
+                                                    <input type="hidden" name="key" value={msg.key.clone()} />
+                                                    <button
+                                                        class="admin-action-btn queue-delete-btn"
+                                                        type="submit"
+                                                    >{ "delete" }</button>
                                                 </form>
                                             </div>
                                         </div>
