@@ -75,6 +75,8 @@ impl CronJob {
     }
 }
 
+crate::register_job!(CronJob);
+
 impl Job for CronJob {
     type JobType = CronJobTask;
 

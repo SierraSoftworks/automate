@@ -2,6 +2,14 @@ use std::sync::Arc;
 
 use crate::config::Config;
 
+/// The concrete [`Services`] implementation used by the running application and
+/// the job consumer.
+///
+/// Individual job handlers remain generic over the [`Services`] trait so they
+/// can be unit-tested with mocks, but the dynamic job dispatch registry needs a
+/// single concrete type to remain object-safe.
+pub type AppServices = ServicesContainer<crate::db::SqliteDatabase>;
+
 pub trait Services
 where
     Self: Sized,

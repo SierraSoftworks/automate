@@ -14,10 +14,6 @@ impl<D, T> Partition<D, T> {
             _marker: std::marker::PhantomData,
         }
     }
-
-    pub fn name(&self) -> &str {
-        &self.name
-    }
 }
 
 impl<D: Clone, T> Clone for Partition<D, T> {

@@ -37,6 +37,8 @@ fn default_todoist_config() -> crate::config::TodoistConfig {
 
 pub struct GrafanaWebhook;
 
+crate::register_job!(GrafanaWebhook);
+
 impl Job for GrafanaWebhook {
     type JobType = super::WebhookEvent;
 

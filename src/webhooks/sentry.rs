@@ -75,6 +75,8 @@ impl SentryAlertsWebhook {
     }
 }
 
+crate::register_job!(SentryAlertsWebhook);
+
 impl Job for SentryAlertsWebhook {
     type JobType = super::WebhookEvent;
 

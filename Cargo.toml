@@ -19,6 +19,7 @@ htmd = "0.5.4"
 hmac = "0.13.0"
 html-escape = "0.2.13"
 human-errors = { version = "0.2.3", features = ["pretty"] }
+inventory = "0.3.22"
 openssl-sys = { version = "0.9.116", features = ["vendored"], optional = true }
 regex = "1.12.3"
 reqwest = { version = "0.12.27", features = ["rustls-tls"] }

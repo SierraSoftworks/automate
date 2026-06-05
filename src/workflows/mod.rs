@@ -14,6 +14,5 @@ pub use github_notifications::GitHubNotificationsWorkflow;
 pub use github_notifications_cleanup::GitHubNotificationsCleanupWorkflow;
 pub use github_releases::GitHubReleasesWorkflow;
 pub use rss::RssWorkflow;
-pub use spotify_yearly_playlist::SpotifyYearlyPlaylistWorkflow;
 pub use xkcd::XkcdWorkflow;
 pub use youtube::YouTubeWorkflow;

@@ -24,6 +24,8 @@ pub struct TodoistUpsertTaskState {
     pub title: Option<String>,
 }
 
+crate::register_job!(TodoistUpsertTask);
+
 impl Job for TodoistUpsertTask {
     type JobType = TodoistUpsertTaskPayload;
 

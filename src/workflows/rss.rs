@@ -39,6 +39,8 @@ impl Display for RssConfig {
 #[derive(Clone)]
 pub struct RssWorkflow;
 
+crate::register_job!(RssWorkflow);
+
 impl Job for RssWorkflow {
     type JobType = RssConfig;
 

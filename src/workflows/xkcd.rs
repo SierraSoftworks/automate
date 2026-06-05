@@ -29,6 +29,8 @@ impl Display for XkcdConfig {
 #[derive(Clone)]
 pub struct XkcdWorkflow;
 
+crate::register_job!(XkcdWorkflow);
+
 impl Job for XkcdWorkflow {
     type JobType = XkcdConfig;
 

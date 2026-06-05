@@ -79,36 +79,10 @@ async fn run(args: Args) -> Result<(), human_errors::Error> {
 
     (
         crate::web::run_web_server(services.clone()),
-        crate::workflows::CronJob.run(services.clone()),
-
-        (
-            crate::publishers::SpotifyAddToPlaylist.run(services.clone()),
-
-            crate::publishers::TodoistCreateTask.run(services.clone()),
-            crate::publishers::TodoistUpsertTask.run(services.clone()),
-            crate::publishers::TodoistCompleteTask.run(services.clone()),
-        ).race(),
-
-        (
-            crate::webhooks::AzureMonitorWebhook.run(services.clone()),
-            crate::webhooks::GrafanaWebhook.run(services.clone()),
-            crate::webhooks::HoneycombWebhook.run(services.clone()),
-            crate::webhooks::SentryAlertsWebhook.run(services.clone()),
-            crate::webhooks::TailscaleWebhook.run(services.clone()),
-            crate::webhooks::TerraformWebhook.run(services.clone()),
-        ).race(),
-
-        (
-            crate::workflows::CalendarWorkflow.run(services.clone()),
-            crate::workflows::GitHubNotificationsWorkflow.run(services.clone()),
-            crate::workflows::GitHubNotificationsCleanupWorkflow.run(services.clone()),
-            crate::workflows::GitHubReleasesWorkflow.run(services.clone()),
-            crate::workflows::RssWorkflow.run(services.clone()),
-            crate::workflows::SpotifyYearlyPlaylistWorkflow.run(services.clone()),
-            crate::workflows::XkcdWorkflow.run(services.clone()),
-            crate::workflows::YouTubeWorkflow.run(services.clone()),
-        ).race()
-    ).race().await
+        crate::job::JobConsumer::run(services.clone()),
+    )
+        .race()
+        .await
         .or_user_err(&[
             "Restart the application and try again after addressing any issues reported in the logs.",
         ])?;

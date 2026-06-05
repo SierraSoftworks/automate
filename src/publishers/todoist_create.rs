@@ -15,6 +15,8 @@ pub struct TodoistCreateTaskPayload {
 
 pub struct TodoistCreateTask;
 
+crate::register_job!(TodoistCreateTask);
+
 impl Job for TodoistCreateTask {
     type JobType = TodoistCreateTaskPayload;
 

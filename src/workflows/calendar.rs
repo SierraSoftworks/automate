@@ -32,6 +32,8 @@ impl Display for CalendarWorkflowConfig {
 #[derive(Clone)]
 pub struct CalendarWorkflow;
 
+crate::register_job!(CalendarWorkflow);
+
 impl Job for CalendarWorkflow {
     type JobType = CalendarWorkflowConfig;
 

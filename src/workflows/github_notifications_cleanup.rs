@@ -24,6 +24,8 @@ impl Display for GitHubNotificationsCleanupConfig {
 #[derive(Clone)]
 pub struct GitHubNotificationsCleanupWorkflow;
 
+crate::register_job!(GitHubNotificationsCleanupWorkflow);
+
 impl Job for GitHubNotificationsCleanupWorkflow {
     type JobType = GitHubNotificationsCleanupConfig;
 

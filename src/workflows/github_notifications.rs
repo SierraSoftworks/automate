@@ -128,6 +128,8 @@ impl GitHubNotificationsWorkflow {
     }
 }
 
+crate::register_job!(GitHubNotificationsWorkflow);
+
 impl Job for GitHubNotificationsWorkflow {
     type JobType = GitHubNotificationsConfig;
 

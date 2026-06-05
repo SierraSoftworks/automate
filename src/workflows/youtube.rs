@@ -30,6 +30,8 @@ impl Display for YouTubeConfig {
 #[derive(Clone)]
 pub struct YouTubeWorkflow;
 
+crate::register_job!(YouTubeWorkflow);
+
 impl Job for YouTubeWorkflow {
     type JobType = YouTubeConfig;
 

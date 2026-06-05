@@ -5,6 +5,8 @@ use crate::{prelude::*, publishers::SpotifyClient};
 #[derive(Clone)]
 pub struct SpotifyYearlyPlaylistWorkflow;
 
+crate::register_job!(SpotifyYearlyPlaylistWorkflow);
+
 impl Job for SpotifyYearlyPlaylistWorkflow {
     type JobType = OAuth2RefreshToken;
 

@@ -26,6 +26,8 @@ impl Display for GitHubReleasesConfig {
 #[derive(Clone)]
 pub struct GitHubReleasesWorkflow;
 
+crate::register_job!(GitHubReleasesWorkflow);
+
 impl Job for GitHubReleasesWorkflow {
     type JobType = GitHubReleasesConfig;
 

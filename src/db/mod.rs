@@ -65,6 +65,16 @@ pub trait Queue {
         reserve_for: chrono::Duration,
     ) -> Result<QueueMessage<T>, errors::Error>;
 
+    /// Dequeue the next available message from any partition.
+    ///
+    /// This is used by the single job consumer to process messages across all
+    /// registered job partitions. The returned [`QueueMessage::partition`] field
+    /// identifies which job handler should process the message.
+    async fn dequeue_any(
+        &self,
+        reserve_for: chrono::Duration,
+    ) -> Result<QueueMessage<serde_json::Value>, errors::Error>;
+
     async fn complete<P: Into<Cow<'static, str>> + Send, T: Send + 'static>(
         &self,
         partition: P,
@@ -111,6 +121,7 @@ pub trait Cache {
 
 pub struct QueueMessage<T> {
     pub key: String,
+    pub partition: String,
     pub reservation_id: String,
     pub payload: T,
     pub scheduled_at: chrono::DateTime<chrono::Utc>,
