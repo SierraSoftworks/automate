@@ -115,14 +115,86 @@ pub struct WebConfig {
     pub address: String,
 
     #[serde(default)]
-    pub admin_acl: Filter,
+    pub admin: AdminConfig,
 
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_url: Option<String>,
+
+    /// Whether to trust reverse-proxy forwarding headers (`X-Forwarded-Proto`,
+    /// `X-Forwarded-Host`) when determining the request's scheme and host. Only
+    /// enable this when the service sits behind a trusted proxy that sets these
+    /// headers, otherwise a client could spoof them.
+    #[serde(default)]
+    pub trust_proxy: bool,
+}
+
+#[derive(Clone, Deserialize)]
+pub struct AdminConfig {
+    /// Filter expression that must evaluate to true for a request to be granted
+    /// access to the admin endpoints. When OIDC is configured, validated token
+    /// claims are exposed to the filter under the `claims.` prefix. Defaults to
+    /// denying every request so that the admin area is closed unless explicitly
+    /// opened up.
+    #[serde(default = "default_admin_acl")]
+    pub acl: Filter,
+
+    /// Optional OIDC configuration. When present, requests to the admin
+    /// endpoints must include a session cookie holding a valid ID token issued
+    /// by the configured provider, otherwise the user is redirected to the
+    /// provider's authorization endpoint to sign in.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub oidc: Option<OidcConfig>,
+
+    /// Optional secret used to sign CSRF tokens for the admin forms. When set,
+    /// tokens remain valid across restarts; when omitted, a random secret is
+    /// generated on startup (sufficient for a single instance).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub csrf_secret: Option<String>,
+}
+
+impl Default for AdminConfig {
+    fn default() -> Self {
+        // Deny by default: when the `[web.admin]` section is omitted entirely we
+        // must close the admin area rather than fall back to the permissive
+        // `Filter::default()` (which evaluates to `true`).
+        Self {
+            acl: default_admin_acl(),
+            oidc: None,
+            csrf_secret: None,
+        }
+    }
+}
+
+#[derive(Clone, Deserialize)]
+pub struct OidcConfig {
+    /// The base URL of the OIDC provider (its issuer), used to discover the
+    /// provider's endpoints via `{endpoint}/.well-known/openid-configuration`.
+    pub endpoint: String,
+
+    /// The OAuth2 client ID registered with the provider. This is also used as
+    /// the expected audience (`aud`) when validating ID tokens.
+    pub client_id: String,
+
+    /// The OAuth2 client secret registered with the provider.
+    pub client_secret: String,
+
+    /// The scopes to request when authenticating. `openid` is always included.
+    #[serde(default)]
+    pub scopes: Vec<String>,
+
+    /// Optional base URL used to construct the OIDC redirect URI (for example
+    /// `https://automate.example.com`). Takes precedence over `web.base_url`
+    /// and the request's (forwarded) host when building the callback URL.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub base_url: Option<String>,
 }
 
 fn default_listen_address() -> String {
     "localhost:8080".to_string()
+}
+
+fn default_admin_acl() -> Filter {
+    Filter::new("false").expect("the literal `false` filter is always valid")
 }
 
 #[derive(Clone, Deserialize, Default)]

@@ -22,6 +22,7 @@ pub struct QueueMessageDisplay {
 #[derive(Properties, PartialEq)]
 pub struct QueueViewProps {
     pub messages: Vec<QueueMessageDisplay>,
+    pub csrf_token: String,
 }
 
 #[function_component(QueueView)]
@@ -61,6 +62,7 @@ pub fn queue_view(props: &QueueViewProps) -> Html {
                                                     <input type="hidden" name="partition" value={msg.partition.clone()} />
                                                     <input type="hidden" name="key" value={msg.key.clone()} />
                                                     <input type="hidden" name="payload" value={payload_json} />
+                                                    <input type="hidden" name="csrf_token" value={props.csrf_token.clone()} />
                                                     <button
                                                         class="admin-action-btn queue-trigger-btn"
                                                         type="submit"
@@ -69,6 +71,7 @@ pub fn queue_view(props: &QueueViewProps) -> Html {
                                                 <form method="post" action="/admin/queue/delete">
                                                     <input type="hidden" name="partition" value={msg.partition.clone()} />
                                                     <input type="hidden" name="key" value={msg.key.clone()} />
+                                                    <input type="hidden" name="csrf_token" value={props.csrf_token.clone()} />
                                                     <button
                                                         class="admin-action-btn queue-delete-btn"
                                                         type="submit"
@@ -122,6 +125,7 @@ pub fn queue_view(props: &QueueViewProps) -> Html {
 pub struct KeyValueViewProps {
     pub partition: String,
     pub entries: Vec<(String, serde_json::Value)>,
+    pub csrf_token: String,
 }
 
 #[function_component(KeyValueView)]
@@ -153,6 +157,7 @@ pub fn key_value_view(props: &KeyValueViewProps) -> Html {
                                             <form method="post" action="/admin/db/delete">
                                                 <input type="hidden" name="partition" value={props.partition.clone()} />
                                                 <input type="hidden" name="key" value={key.clone()} />
+                                                <input type="hidden" name="csrf_token" value={props.csrf_token.clone()} />
                                                 <button
                                                     class="admin-action-btn kv-delete-btn"
                                                     type="submit"

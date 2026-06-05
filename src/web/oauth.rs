@@ -41,15 +41,17 @@ async fn oauth_home<S: Services + Send + Sync + 'static>(
 
 #[instrument(
     "web.oauth.authorize",
-    skip(provider, services, host),
+    skip(provider, services, req),
     fields(oauth.provider = %provider, otel.kind=?OpenTelemetrySpanKind::Server),
 )]
 async fn oauth_authorize<S: Services + Send + Sync + 'static>(
     provider: web::Path<String>,
     services: web::Data<S>,
-    host: Host,
+    req: actix_web::HttpRequest,
 ) -> impl actix_web::Responder {
-    if let Some(base_url) = host.base_url(services.as_ref()) {
+    if let Some(base_url) =
+        super::request::base_url(services.as_ref(), req.headers(), req.uri().scheme_str())
+    {
         match services.config().oauth2.get(&*provider).cloned() {
             Some(cfg) => {
                 info!("Initiating OAuth2 login flow for provider '{}'", &*provider);
@@ -90,16 +92,18 @@ async fn oauth_authorize<S: Services + Send + Sync + 'static>(
 
 #[instrument(
     "web.oauth.callback",
-    skip(provider, query, services, host),
-    fields(oauth.provider = %provider, otel.kind=?OpenTelemetrySpanKind::Server, host = ?host.hostname()),
+    skip(provider, query, services, req),
+    fields(oauth.provider = %provider, otel.kind=?OpenTelemetrySpanKind::Server),
 )]
 async fn oauth_callback<S: Services + Send + Sync + 'static>(
     services: web::Data<S>,
     provider: web::Path<String>,
-    host: Host,
+    req: actix_web::HttpRequest,
     query: web::Query<std::collections::HashMap<String, String>>,
 ) -> actix_web::HttpResponse {
-    if let Some(base_url) = host.base_url(services.as_ref()) {
+    if let Some(base_url) =
+        super::request::base_url(services.as_ref(), req.headers(), req.uri().scheme_str())
+    {
         if let Some(config) = services.config().oauth2.get(&*provider).cloned() {
             if let Some(code) = query.get("code") {
                 match config
@@ -311,57 +315,5 @@ impl OAuth2RefreshToken {
 
     pub fn access_token(&self) -> &str {
         &self.access_token
-    }
-}
-
-struct Host(Option<String>);
-
-impl Host {
-    pub fn hostname(&self) -> Option<&str> {
-        self.0.as_deref()
-    }
-
-    pub fn base_url(&self, services: &impl Services) -> Option<String> {
-        if let Some(base_url) = &services.config().web.base_url {
-            Some(base_url.clone())
-        } else {
-            self.hostname().map(|h| h.to_string())
-        }
-    }
-}
-
-impl actix_web::FromRequest for Host {
-    type Error = actix_web::Error;
-    type Future = futures::future::Ready<Result<Self, Self::Error>>;
-
-    fn from_request(
-        req: &actix_web::HttpRequest,
-        _payload: &mut actix_web::dev::Payload,
-    ) -> Self::Future {
-        let x_forwarded_host = req
-            .headers()
-            .get("x-forwarded-host")
-            .and_then(|h| h.to_str().ok());
-
-        let host = req
-            .headers()
-            .get(actix_web::http::header::HOST)
-            .and_then(|h| h.to_str().ok());
-
-        let x_forwarded_proto = req
-            .headers()
-            .get("x-forwarded-proto")
-            .and_then(|h| h.to_str().ok());
-
-        match (x_forwarded_host, host, x_forwarded_proto) {
-            (Some(host), _, None) => futures::future::ok(Host(Some(format!("https://{}", host)))),
-            (Some(host), _, Some(proto)) | (None, Some(host), Some(proto)) => {
-                futures::future::ok(Host(Some(format!("{}://{}", proto, host))))
-            }
-            (None, Some(host), None) => {
-                futures::future::ok(Host(Some(format!("https://{}", host))))
-            }
-            _ => futures::future::ok(Host(None)),
-        }
     }
 }

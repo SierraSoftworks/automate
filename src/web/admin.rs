@@ -36,7 +36,7 @@ pub async fn admin_index<S: Services>(_services: web::Data<S>) -> actix_web::Htt
                 <h1>{ "Admin " }<strong>{ "Dashboard" }</strong></h1>
                 <p class="admin-intro">
                     { "All endpoints require a request to originate from an address permitted by the " }
-                    <code>{ "web.admin_acl" }</code>
+                    <code>{ "web.admin.acl" }</code>
                     { " filter." }
                 </p>
 
@@ -125,6 +125,7 @@ pub async fn admin_db_overview<S: Services>(services: web::Data<S>) -> actix_web
         groups.entry(partition).or_default().push((key, value));
     }
     let partitions: Vec<(String, Vec<(String, serde_json::Value)>)> = groups.into_iter().collect();
+    let csrf_token = super::csrf::generate_token(&services.config().web.admin);
 
     render_page("DB | Admin | Automate", move || {
         html! {
@@ -145,6 +146,7 @@ pub async fn admin_db_overview<S: Services>(services: web::Data<S>) -> actix_web
                                         <crate::ui::KeyValueView
                                             partition={partition.clone()}
                                             entries={entries.clone()}
+                                            csrf_token={csrf_token.clone()}
                                         />
                                     }
                                 }) }
@@ -227,12 +229,13 @@ pub async fn admin_queue<S: Services>(services: web::Data<S>) -> actix_web::Http
     }
 
     display.sort_by_key(|msg| msg.scheduled_at);
+    let csrf_token = super::csrf::generate_token(&services.config().web.admin);
 
     render_page("Queue | Admin | Automate", move || {
         html! {
             <div class="admin-content">
                 <crate::ui::AdminHeader title="Queue" />
-                <crate::ui::QueueView messages={display.clone()} />
+                <crate::ui::QueueView messages={display.clone()} csrf_token={csrf_token.clone()} />
             </div>
         }
     })
@@ -243,6 +246,7 @@ pub async fn admin_queue<S: Services>(services: web::Data<S>) -> actix_web::Http
 pub struct DeleteFormData {
     pub partition: String,
     pub key: String,
+    pub csrf_token: String,
 }
 
 pub async fn admin_db_delete<S: Services>(
@@ -251,6 +255,9 @@ pub async fn admin_db_delete<S: Services>(
     form: web::Form<DeleteFormData>,
 ) -> actix_web::HttpResponse {
     let form = form.into_inner();
+    if !super::csrf::validate_token(&services.config().web.admin, &form.csrf_token) {
+        return csrf_rejected();
+    }
     if let Err(err) = services.kv().remove(form.partition, form.key).await {
         return actix_web::HttpResponse::InternalServerError().body(err.to_string());
     }
@@ -263,6 +270,7 @@ pub struct TriggerFormData {
     pub key: String,
     /// Serialised JSON payload
     pub payload: String,
+    pub csrf_token: String,
 }
 
 pub async fn admin_queue_trigger<S: Services>(
@@ -271,6 +279,9 @@ pub async fn admin_queue_trigger<S: Services>(
     form: web::Form<TriggerFormData>,
 ) -> actix_web::HttpResponse {
     let form = form.into_inner();
+    if !super::csrf::validate_token(&services.config().web.admin, &form.csrf_token) {
+        return csrf_rejected();
+    }
     let payload: serde_json::Value = match serde_json::from_str(&form.payload) {
         Ok(v) => v,
         Err(e) => {
@@ -294,10 +305,18 @@ pub async fn admin_queue_delete<S: Services>(
     form: web::Form<DeleteFormData>,
 ) -> actix_web::HttpResponse {
     let form = form.into_inner();
+    if !super::csrf::validate_token(&services.config().web.admin, &form.csrf_token) {
+        return csrf_rejected();
+    }
     if let Err(err) = services.queue().purge(form.partition, form.key).await {
         return actix_web::HttpResponse::InternalServerError().body(err.to_string());
     }
     redirect_back(&req)
+}
+
+fn csrf_rejected() -> actix_web::HttpResponse {
+    actix_web::HttpResponse::Forbidden()
+        .body("The form submission could not be verified. Please reload the page and try again.")
 }
 
 fn redirect_back(req: &actix_web::HttpRequest) -> actix_web::HttpResponse {
