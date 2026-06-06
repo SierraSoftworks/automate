@@ -88,14 +88,17 @@ jobs:
           toolchain: stable
           target: wasm32-unknown-unknown
 
-      - name: Setup Cache
-        uses: Swatinem/rust-cache@v2
+      - name: Install cargo-binstall
+        uses: cargo-bins/cargo-binstall@main
 
       - name: Install Trunk
         shell: bash
         run: |
-          curl -L --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/cargo-bins/cargo-binstall/main/install-from-binstall-release.sh | bash
           cargo binstall --no-confirm trunk
+          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+
+      - name: Setup Cache
+        uses: Swatinem/rust-cache@v2
 
       - name: Build UI
         working-directory: ui
