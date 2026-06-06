@@ -172,9 +172,13 @@ mod tests {
             .set(
                 collector.0.partition(),
                 collector.0.key(),
-                DateTime::parse_from_rfc2822("Mon, 01 Apr 2024 04:00:00 -0000")
-                    .unwrap()
-                    .with_timezone(&Utc),
+                crate::collectors::RssWatermark {
+                    published: DateTime::parse_from_rfc2822("Mon, 01 Apr 2024 04:00:00 -0000")
+                        .unwrap()
+                        .with_timezone(&Utc),
+                    etag: None,
+                    last_modified: None,
+                },
             )
             .await
             .unwrap();

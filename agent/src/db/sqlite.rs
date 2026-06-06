@@ -51,6 +51,15 @@ const MIGRATIONS: &[&str] = &[
      UPDATE queues SET partition = 'spotify/yearly-playlist'        WHERE partition = 'workflow/spotify-yearly-playlist';
      UPDATE queues SET partition = 'xkcd/todoist'                   WHERE partition = 'workflow/xkcd-todoist';
      UPDATE queues SET partition = 'youtube/todoist'                WHERE partition = 'workflow/youtube-todoist';",
+    // Migration 7: wrap legacy collector watermarks (which were stored as bare
+    // RFC 3339 date strings) in the JSON object format introduced alongside the
+    // optional ETag/Last-Modified validators. The `json_type` guard keeps the
+    // migration idempotent and avoids touching values already in the new form.
+    "UPDATE kv \
+     SET value = json_object('published', json(value)) \
+     WHERE partition IN ('rss/feed', 'github/releases') \
+     AND json_valid(value) \
+     AND json_type(value) = 'text';",
 ];
 
 impl SqliteDatabase {
@@ -717,5 +726,68 @@ mod tests {
 
         // Purging a missing key is a no-op rather than an error.
         db.purge("test_queue", "missing").await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_migration_wraps_legacy_watermarks() {
+        let db = SqliteDatabase::open_in_memory().await.unwrap();
+
+        // Simulate data written before the watermark format change: bare RFC 3339
+        // date strings in the affected partitions, an unaffected partition, and a
+        // value already in the new object form (to prove the migration is scoped
+        // and idempotent).
+        db.connection
+            .call(|c| {
+                c.execute_batch(
+                    "INSERT INTO kv (partition, key, value) VALUES \
+                     ('rss/feed', 'https://example.com/feed', '\"2024-04-15T12:00:00Z\"'), \
+                     ('github/releases', 'https://api.github.com', '\"2024-03-01T10:00:00Z\"'), \
+                     ('calendar/ics', 'https://example.com/cal', '\"2024-01-01T00:00:00Z\"'), \
+                     ('rss/feed', 'https://migrated.example.com/feed', '{\"published\":\"2024-02-02T02:02:02Z\"}');",
+                )
+            })
+            .await
+            .unwrap();
+
+        // Apply the migration SQL directly. Because `open_in_memory` already ran
+        // it against an empty table, re-running it here exercises the conversion
+        // against legacy data while also confirming it is idempotent.
+        db.connection
+            .call(|c| c.execute_batch(MIGRATIONS[6]))
+            .await
+            .unwrap();
+
+        // Affected partitions are wrapped into the new object form.
+        let rss: serde_json::Value = db
+            .get("rss/feed", "https://example.com/feed")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(rss["published"], "2024-04-15T12:00:00Z");
+        assert!(rss.get("etag").is_none());
+        assert!(rss.get("last_modified").is_none());
+
+        let releases: serde_json::Value = db
+            .get("github/releases", "https://api.github.com")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(releases["published"], "2024-03-01T10:00:00Z");
+
+        // Unaffected partitions retain their original representation.
+        let calendar: serde_json::Value = db
+            .get("calendar/ics", "https://example.com/cal")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(calendar, serde_json::json!("2024-01-01T00:00:00Z"));
+
+        // Values already in the new form are left untouched.
+        let migrated: serde_json::Value = db
+            .get("rss/feed", "https://migrated.example.com/feed")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(migrated["published"], "2024-02-02T02:02:02Z");
     }
 }

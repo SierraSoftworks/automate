@@ -16,7 +16,7 @@ pub use incremental::IncrementalCollector;
 pub use calendar::CalendarCollector;
 pub use github_notifications::{GitHubNotificationsCollector, GitHubSubjectInformation};
 pub use github_releases::GitHubReleasesCollector;
-pub use rss::RssCollector;
+pub use rss::{RssCollector, RssWatermark};
 pub use spotify_liked_tracks::SpotifyLikedTracksCollector;
 pub use xkcd::XkcdCollector;
 pub use youtube::YouTubeCollector;
