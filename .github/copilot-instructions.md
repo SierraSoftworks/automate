@@ -18,43 +18,64 @@ Automate is a Rust-based automation server designed to automate common manual ta
 
 ## Project Structure
 
+The project is a Cargo workspace with three crates (mirroring the
+[grey](https://github.com/SierraSoftworks/grey) project):
+
 ```
-src/
-├── collectors/     - Components that gather data from external sources
-├── config.rs       - Configuration file parsing and structures
-├── db/             - Database abstractions (SQLite is the primary implementation)
-├── filter/         - Custom filter language with zero-copy semantics and recursive descent parser
-├── job.rs          - Job management
-├── parsers/        - Parsers for various data formats
-├── publishers/     - Components that publish data to external services
-├── services.rs     - Services abstraction for dependency injection and mocking
-├── ui/             - User interface components (Yew SSR)
-├── web/            - Web server and routing
-├── webhooks/       - Webhook handlers (Tailscale, Honeycomb, etc.)
-└── workflows/      - Workflow definitions and scheduling
+agent/           - Backend automation server (actix-web); embeds the built UI
+  src/
+  ├── collectors/     - Components that gather data from external sources
+  ├── config.rs       - Configuration file parsing and structures
+  ├── db/             - Database abstractions (SQLite is the primary implementation)
+  ├── filter/         - Custom filter language with zero-copy semantics and recursive descent parser
+  ├── job.rs          - Job management
+  ├── parsers/        - Parsers for various data formats
+  ├── publishers/     - Components that publish data to external services
+  ├── services.rs     - Services abstraction for dependency injection and mocking
+  ├── web/            - Web server, REST API (`/api/v1`), static UI serving, OAuth
+  ├── webhooks/       - Webhook handlers (Tailscale, Honeycomb, etc.)
+  └── workflows/      - Workflow definitions and scheduling
+api/             - Pure serde DTOs shared by the agent and the UI (REST contract)
+ui/              - Yew client-side SPA compiled to WebAssembly with Trunk
 ```
+
+The `ui` crate is excluded from the default workspace (`exclude = ["ui"]`)
+because it targets `wasm32-unknown-unknown`; build it with `trunk`.
 
 ## Building and Running
 
 ### Prerequisites
 - Rust stable toolchain (currently using Rust 1.91.1)
 - Cargo package manager
+- For the UI: the `wasm32-unknown-unknown` target and [Trunk](https://trunkrs.dev)
+  (`rustup target add wasm32-unknown-unknown` and `cargo install trunk`)
 
 ### Build Commands
 
-**Development build:**
+**Development build (agent + api):**
 ```bash
 cargo build
 ```
 
 **Release build:**
 ```bash
-cargo build --release
+cargo build --release -p automate
 ```
 
-**Run the application:**
+**Build the UI bundle (from `ui/`):**
 ```bash
-cargo run --release
+cd ui && trunk build --release
+```
+
+**Run the UI dev server with live reload (from `ui/`):**
+```bash
+cd ui && trunk serve          # append ?demo to the URL for offline sample data
+```
+
+**Run the application (build the UI first so it can be embedded):**
+```bash
+(cd ui && trunk build --release)
+cargo run --release -p automate
 ```
 
 ### Configuration
@@ -206,6 +227,7 @@ The project uses GitHub Actions for CI/CD:
 ## Additional Notes
 
 - Use `tracing_batteries` for tracing support (available via `use tracing_batteries::prelude::*`, or more simply through `use crate::prelude::*` which re-exports it)
-- The web UI uses Yew with server-side rendering
+- The web UI is a Yew client-side SPA (WebAssembly) that talks to the agent over the `/api/v1` REST API
+- Admin authentication is server-driven OIDC: the agent performs the full Authorization Code + PKCE flow (`/api/v1/auth/login` → provider → `/api/v1/auth/callback`) and stores the ID token in an `HttpOnly` session cookie. Mutating API requests require a double-submit CSRF token (`GET /api/v1/csrf` sets a cookie; the UI echoes it in the `X-CSRF-Token` header). The browser never handles tokens.
 - Database operations use `tokio-rusqlite` for multi-threaded SQLite access
 - The `filter` module provides an interpreted language operating over `FilterValue`s for configurable filtering

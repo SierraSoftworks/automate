@@ -16,7 +16,7 @@ this file to `config.toml` and modify it to suit your needs.
 
 ### Admin interface
 
-The admin endpoints (under `/admin`) are protected by an access-control
+The admin REST API (under `/api/v1`) is protected by an access-control
 filter defined in `[web.admin]`. The `acl` expression is evaluated for
 every request and must return `true` for access to be granted; it can
 reference the request `method`, `path`, `client_ip`, and `headers.*`.
@@ -25,24 +25,77 @@ entire `[web.admin]` section) every request is rejected, so you must opt
 in explicitly.
 
 To require single sign-on, add a `[web.admin.oidc]` section pointing at
-an OpenID Connect provider. When configured, requests must carry a valid
-ID token (stored in an `HttpOnly` session cookie); unauthenticated users
-are redirected to the provider to sign in. The token's `aud`, `iss`,
-`exp`, and `nbf` claims are validated, and the remaining claims (e.g.
-`email`, `groups`) are exposed to the `acl` filter under the `claims.`
-prefix, so you can write rules such as
-`claims.email == "me@example.com"` or `"admins" in claims.groups`.
+an OpenID Connect provider. When configured, the agent drives the entire
+Authorization Code flow with PKCE server-side: `GET /api/v1/auth/login`
+redirects the browser to the provider, the provider returns to
+`GET /api/v1/auth/callback`, and the agent performs the confidential
+token exchange and stores the resulting ID token in an `HttpOnly` session
+cookie. The browser never handles tokens or the client secret. The
+token's `aud`, `iss`, `exp`, and `nbf` claims are validated, and the
+remaining claims (e.g. `email`, `groups`) are exposed to the `acl` filter
+under the `claims.` prefix, so you can write rules such as
+`claims.email == "me@example.com"` or `"admins" in claims.groups`. The
+provider's `redirect_uri` must point at the agent's
+`/api/v1/auth/callback` route.
 
-State-changing admin actions are protected against CSRF with signed,
-time-limited tokens embedded in each form. If you run behind a reverse
-proxy and want absolute URLs (and the `Secure` cookie flag) to honour
-the forwarded scheme/host, set `web.trust_proxy = true`; only do so when
-the proxy is trusted, since these headers can otherwise be spoofed.
+Mutating requests (`POST`/`PUT`/`PATCH`/`DELETE`) additionally require a
+double-submit CSRF token: the UI fetches one from `GET /api/v1/csrf`
+(which sets a matching cookie) and echoes it back in the `X-CSRF-Token`
+header. `POST /api/v1/auth/logout` clears the session cookie.
+
+
+If you run behind a reverse proxy and want absolute URLs to honour the
+forwarded scheme/host, set `web.trust_proxy = true`; only do so when the
+proxy is trusted, since these headers can otherwise be spoofed.
+
+## Project layout
+
+The project is a Cargo workspace split into three crates, mirroring the
+[grey](https://github.com/SierraSoftworks/grey) project:
+
+- `agent/` — the backend automation server (actix-web). It also serves
+  the compiled UI as static assets (embedded at build time from
+  `ui/dist`).
+- `api/` — pure serde data-transfer types shared by the agent and the UI
+  so the REST contract cannot drift between them.
+- `ui/` — a [Yew](https://yew.rs) client-side single-page app, compiled
+  to WebAssembly with [Trunk](https://trunkrs.dev). It talks to the agent
+  exclusively over the `/api/v1` REST API.
+
+## Web UI development
+
+The UI is a pure client-side app, so it can be developed independently of
+a running agent. Install the toolchain once:
+
+```bash
+rustup target add wasm32-unknown-unknown
+cargo install trunk
+```
+
+Then, from the `ui/` directory, start the dev server with live reload:
+
+```bash
+trunk serve
+```
+
+`trunk serve` proxies `/api/v1` and `/oauth` to a locally running agent
+(see `ui/Trunk.toml`). To preview the interface **without** a backend,
+append `?demo` to the URL — the app then renders baked-in sample data.
+
+To produce the production bundle that the agent embeds:
+
+```bash
+trunk build --release
+```
 
 ## Running
 
 To run Automate, ensure you have Rust installed and then execute:
 
 ```bash
-cargo run --release
+# Build the UI bundle first so the agent can embed it.
+(cd ui && trunk build --release)
+
+# Then build and run the agent.
+cargo run --release -p automate
 ```
