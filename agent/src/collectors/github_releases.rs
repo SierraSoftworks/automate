@@ -1,11 +1,30 @@
 use chrono::Utc;
 use human_errors::ResultExt;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use tracing_batteries::prelude::*;
 
 use crate::filter::Filterable;
 
 use super::{Collector, IncrementalCollector};
+
+/// The watermark persisted between GitHub Releases collector runs.
+///
+/// It tracks the publication date of the most recent release we have seen (used
+/// to filter out releases we have already processed) along with the optional
+/// HTTP cache validators returned by the GitHub API. The `ETag` and
+/// `Last-Modified` values let us issue a conditional request so we can skip
+/// downloading the releases when nothing has changed (which also avoids
+/// consuming GitHub API rate limit).
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct GitHubReleasesWatermark {
+    pub published: chrono::DateTime<chrono::Utc>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub etag: Option<String>,
+    /// The raw `Last-Modified` header value from the server, stored verbatim so
+    /// we can echo it back in `If-Modified-Since` without any reformatting.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_modified: Option<String>,
+}
 
 pub struct GitHubReleasesCollector {
     api_url: String,
@@ -75,7 +94,7 @@ impl Collector for GitHubReleasesCollector {
 }
 
 impl IncrementalCollector for GitHubReleasesCollector {
-    type Watermark = chrono::DateTime<chrono::Utc>;
+    type Watermark = GitHubReleasesWatermark;
 
     fn partition(&self) -> &'static str {
         "github/releases"
@@ -95,6 +114,10 @@ impl IncrementalCollector for GitHubReleasesCollector {
         watermark: Option<Self::Watermark>,
         services: &impl crate::services::Services,
     ) -> Result<(Vec<Self::Item>, Self::Watermark), human_errors::Error> {
+        let previous_published = watermark.as_ref().map(|wm| wm.published);
+        let previous_etag = watermark.as_ref().and_then(|wm| wm.etag.clone());
+        let previous_last_modified = watermark.as_ref().and_then(|wm| wm.last_modified.clone());
+
         let mut request = services
             .http_client()
             .get(format!("{}/repos/{}/releases", self.api_url, self.repo))
@@ -102,6 +125,13 @@ impl IncrementalCollector for GitHubReleasesCollector {
 
         if let Some(api_key) = services.config().connections.github.api_key.as_ref() {
             request = request.bearer_auth(api_key);
+        }
+
+        if let Some(etag) = &previous_etag {
+            request = request.header(reqwest::header::IF_NONE_MATCH, etag);
+        }
+        if let Some(last_modified) = &previous_last_modified {
+            request = request.header(reqwest::header::IF_MODIFIED_SINCE, last_modified);
         }
 
         let response = request
@@ -112,6 +142,19 @@ impl IncrementalCollector for GitHubReleasesCollector {
 
         match response.status() {
             reqwest::StatusCode::OK => {}
+            reqwest::StatusCode::NOT_MODIFIED => {
+                // GitHub told us nothing has changed since our last request, so
+                // we can skip downloading and parsing the releases entirely and
+                // preserve the existing watermark.
+                return Ok((
+                    Vec::new(),
+                    GitHubReleasesWatermark {
+                        published: previous_published.unwrap_or_else(Utc::now),
+                        etag: previous_etag,
+                        last_modified: previous_last_modified,
+                    },
+                ));
+            }
             reqwest::StatusCode::NOT_FOUND => {
                 return Err(human_errors::user(
                     "The specified GitHub repository was not found when trying to fetch releases.",
@@ -153,6 +196,18 @@ impl IncrementalCollector for GitHubReleasesCollector {
             }
         }
 
+        let new_etag = response
+            .headers()
+            .get(reqwest::header::ETAG)
+            .and_then(|value| value.to_str().ok())
+            .map(|value| value.to_string());
+
+        let new_last_modified = response
+            .headers()
+            .get(reqwest::header::LAST_MODIFIED)
+            .and_then(|value| value.to_str().ok())
+            .map(|value| value.to_string());
+
         let releases: Vec<GitHubReleaseItem> = response.json().await.wrap_user_err(
             format!(
                 "Failed to read the content of the GitHub Releases from URL '{}'.",
@@ -168,17 +223,25 @@ impl IncrementalCollector for GitHubReleasesCollector {
             .iter()
             .map(|item| item.published_at)
             .max()
-            .unwrap_or(Utc::now());
-        if let Some(watermark) = watermark {
+            .or(previous_published)
+            .unwrap_or_else(Utc::now);
+
+        let new_watermark = GitHubReleasesWatermark {
+            published: latest_release,
+            etag: new_etag,
+            last_modified: new_last_modified,
+        };
+
+        if let Some(previous_published) = previous_published {
             Ok((
                 releases
                     .into_iter()
-                    .filter(|item| item.published_at > watermark)
+                    .filter(|item| item.published_at > previous_published)
                     .collect(),
-                latest_release,
+                new_watermark,
             ))
         } else {
-            Ok((releases, latest_release))
+            Ok((releases, new_watermark))
         }
     }
 }
@@ -189,7 +252,7 @@ mod tests {
     use crate::db::KeyValueStore;
     use crate::services::Services;
     use crate::testing::mock_services;
-    use wiremock::matchers::{method, path};
+    use wiremock::matchers::{header, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     #[tokio::test]
@@ -227,7 +290,7 @@ mod tests {
 
         // Watermark should be set to the latest published_at date
         assert_eq!(
-            watermark,
+            watermark.published,
             chrono::DateTime::parse_from_rfc3339("2024-04-15T12:00:00Z")
                 .unwrap()
                 .with_timezone(&Utc)
@@ -249,11 +312,13 @@ mod tests {
         let services = mock_services().await.unwrap();
 
         // Set watermark to filter releases on or before March 1, 2024
-        let watermark = Some(
-            chrono::DateTime::parse_from_rfc3339("2024-03-01T10:00:00Z")
+        let watermark = Some(GitHubReleasesWatermark {
+            published: chrono::DateTime::parse_from_rfc3339("2024-03-01T10:00:00Z")
                 .unwrap()
                 .with_timezone(&Utc),
-        );
+            etag: None,
+            last_modified: None,
+        });
         let (items, _) = collector.fetch_since(watermark, &services).await.unwrap();
 
         assert_eq!(items.len(), 1, "Expected only releases after watermark");
@@ -338,6 +403,135 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_github_releases_captures_etag_and_last_modified() {
+        let mock_server = MockServer::start().await;
+        let test_data = crate::testing::get_test_file_contents("github_releases.json");
+
+        Mock::given(method("GET"))
+            .and(path("/repos/example/repo/releases"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("ETag", "\"abc123\"")
+                    .insert_header("Last-Modified", "Mon, 01 Apr 2024 04:00:00 GMT")
+                    .set_body_string(test_data),
+            )
+            .mount(&mock_server)
+            .await;
+
+        let collector = GitHubReleasesCollector::new_with_url(mock_server.uri(), "example/repo");
+        let services = mock_services().await.unwrap();
+
+        let (items, watermark) = collector.fetch_since(None, &services).await.unwrap();
+        assert_eq!(
+            items.len(),
+            4,
+            "Expected to fetch 4 releases from test data"
+        );
+        assert_eq!(
+            watermark.etag.as_deref(),
+            Some("\"abc123\""),
+            "Expected the ETag from the response to be captured in the watermark"
+        );
+        assert_eq!(
+            watermark.last_modified.as_deref(),
+            Some("Mon, 01 Apr 2024 04:00:00 GMT"),
+            "Expected the Last-Modified header to be captured in the watermark"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_github_releases_sends_if_none_match_and_handles_not_modified() {
+        let mock_server = MockServer::start().await;
+
+        // The collector should send the previously captured ETag via the
+        // If-None-Match header; respond with 304 to simulate unchanged releases.
+        Mock::given(method("GET"))
+            .and(path("/repos/example/repo/releases"))
+            .and(header("If-None-Match", "\"abc123\""))
+            .respond_with(ResponseTemplate::new(304))
+            .mount(&mock_server)
+            .await;
+
+        let collector = GitHubReleasesCollector::new_with_url(mock_server.uri(), "example/repo");
+        let services = mock_services().await.unwrap();
+
+        let previous = chrono::DateTime::parse_from_rfc3339("2024-04-15T12:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let watermark = Some(GitHubReleasesWatermark {
+            published: previous,
+            etag: Some("\"abc123\"".to_string()),
+            last_modified: None,
+        });
+
+        let (items, new_watermark) = collector.fetch_since(watermark, &services).await.unwrap();
+
+        assert!(
+            items.is_empty(),
+            "Expected no releases when nothing has been modified"
+        );
+        assert_eq!(
+            new_watermark.published, previous,
+            "Expected the published watermark to be preserved on a 304 response"
+        );
+        assert_eq!(
+            new_watermark.etag.as_deref(),
+            Some("\"abc123\""),
+            "Expected the ETag to be preserved on a 304 response"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_github_releases_sends_if_modified_since_and_handles_not_modified() {
+        let mock_server = MockServer::start().await;
+
+        // The collector should send the previously captured Last-Modified value
+        // via the If-Modified-Since header; respond with 304 to simulate
+        // unchanged releases. We match the header with a custom predicate
+        // because wiremock's `header` matcher splits values on commas, which are
+        // present in HTTP date strings.
+        Mock::given(method("GET"))
+            .and(path("/repos/example/repo/releases"))
+            .and(|req: &wiremock::Request| {
+                req.headers
+                    .get("If-Modified-Since")
+                    .and_then(|value| value.to_str().ok())
+                    == Some("Mon, 01 Apr 2024 04:00:00 GMT")
+            })
+            .respond_with(ResponseTemplate::new(304))
+            .mount(&mock_server)
+            .await;
+
+        let collector = GitHubReleasesCollector::new_with_url(mock_server.uri(), "example/repo");
+        let services = mock_services().await.unwrap();
+
+        let previous = chrono::DateTime::parse_from_rfc3339("2024-04-15T12:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let watermark = Some(GitHubReleasesWatermark {
+            published: previous,
+            etag: None,
+            last_modified: Some("Mon, 01 Apr 2024 04:00:00 GMT".to_string()),
+        });
+
+        let (items, new_watermark) = collector.fetch_since(watermark, &services).await.unwrap();
+
+        assert!(
+            items.is_empty(),
+            "Expected no releases when nothing has been modified"
+        );
+        assert_eq!(
+            new_watermark.published, previous,
+            "Expected the published watermark to be preserved on a 304 response"
+        );
+        assert_eq!(
+            new_watermark.last_modified.as_deref(),
+            Some("Mon, 01 Apr 2024 04:00:00 GMT"),
+            "Expected the Last-Modified value to be preserved on a 304 response"
+        );
+    }
+
+    #[tokio::test]
     async fn test_github_releases_incremental_with_stored_watermark() {
         let mock_server = MockServer::start().await;
         let test_data = crate::testing::get_test_file_contents("github_releases.json");
@@ -357,9 +551,13 @@ mod tests {
             .set(
                 collector.partition(),
                 collector.key(),
-                chrono::DateTime::parse_from_rfc3339("2024-03-01T10:00:00Z")
-                    .unwrap()
-                    .with_timezone(&Utc),
+                GitHubReleasesWatermark {
+                    published: chrono::DateTime::parse_from_rfc3339("2024-03-01T10:00:00Z")
+                        .unwrap()
+                        .with_timezone(&Utc),
+                    etag: None,
+                    last_modified: None,
+                },
             )
             .await
             .unwrap();
