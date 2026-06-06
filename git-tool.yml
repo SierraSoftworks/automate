@@ -1,0 +1,4 @@
+worktree:
+  symlinks:
+    - target
+    - ui/target
