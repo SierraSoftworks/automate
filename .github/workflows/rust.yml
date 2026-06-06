@@ -30,13 +30,13 @@ jobs:
         run: Add-Content -Path $env:GITHUB_ENV -Value "VERSION=$('${{ github.event.release.tag_name }}'.substring(1))"
 
       - name: Set Package Version
-        run: sed -i "s/^version\s*=\s*\".*\"/version = \"$VERSION\"/g" Cargo.toml
+        run: sed -i "s/^version\s*=\s*\".*\"/version = \"$VERSION\"/g" agent/Cargo.toml
 
       - name: Stash Versioned Cargo.toml
         uses: actions/upload-artifact@v7
         with:
           name: cargofile
-          path: Cargo.toml
+          path: agent/Cargo.toml
 
   test:
     name: Test
@@ -74,12 +74,49 @@ jobs:
         with:
           files: ./lcov.info
 
+  ui:
+    name: Build UI
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+          target: wasm32-unknown-unknown
+
+      - name: Install cargo-binstall
+        uses: cargo-bins/cargo-binstall@main
+
+      - name: Install Trunk
+        shell: bash
+        run: |
+          cargo binstall --no-confirm trunk
+          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+
+      - name: Setup Cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build UI
+        working-directory: ui
+        run: trunk build --release
+
+      - name: Upload UI artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: ui-dist
+          path: ui/dist
+
   build:
     name: ${{ matrix.os }}-${{ matrix.arch }}-release
     runs-on: ${{ matrix.run_on }}
 
     needs:
       - version
+      - ui
 
     strategy:
       matrix:
@@ -91,7 +128,7 @@ jobs:
             target: x86_64-pc-windows-msvc
             extension: .exe
             builder: cargo
-            cargo-flags: ""
+            cargo-flags: "-p automate"
 
           # Linux builds
           - arch: amd64
@@ -100,7 +137,7 @@ jobs:
             target: x86_64-unknown-linux-musl
             test: true
             builder: cargo
-            cargo-flags: "--features openssl-vendored"
+            cargo-flags: "-p automate --features openssl-vendored"
             setup: |
               sudo apt update && sudo apt install -y musl-tools
           - arch: "arm64"
@@ -108,7 +145,7 @@ jobs:
             run_on: ubuntu-latest
             target: aarch64-unknown-linux-musl
             builder: cross
-            cargo-flags: "--features openssl-vendored"
+            cargo-flags: "-p automate --features openssl-vendored"
 
           # Apple MacOS builds
           - arch: amd64
@@ -116,13 +153,13 @@ jobs:
             os: darwin
             target: x86_64-apple-darwin
             builder: cargo
-            cargo-flags: "--features openssl-vendored"
+            cargo-flags: "-p automate --features openssl-vendored"
           - arch: arm64
             run_on: macos-latest
             os: darwin
             target: aarch64-apple-darwin
             builder: cargo
-            cargo-flags: "--features openssl-vendored"
+            cargo-flags: "-p automate --features openssl-vendored"
 
     steps:
       - name: Run setup script
@@ -146,6 +183,13 @@ jobs:
         uses: actions/download-artifact@v8
         with:
           name: cargofile
+          path: agent
+
+      - name: Fetch UI bundle
+        uses: actions/download-artifact@v8
+        with:
+          name: ui-dist
+          path: ui/dist
 
       - name: Install Cross
         if: matrix.builder == 'cross'

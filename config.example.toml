@@ -32,19 +32,14 @@ address = "127.0.0.1:8080"
 # true to grant access. The filter can reference `client_ip`, `method`, `path`,
 # `headers.*`, and (when OIDC is configured) validated token claims via `claims.*`.
 acl = 'client_ip in ["127.0.0.1"]'
-# csrf_secret signs the CSRF tokens embedded in the admin forms. When set, tokens
-# remain valid across restarts; when omitted, a random secret is generated on
-# startup (sufficient for a single instance).
-# csrf_secret = 'change-me-to-a-long-random-string'
 
 [web.admin.oidc]
+# Configures support for OIDC authentication on the Admin API, using the provided
+# OIDC endpoint (which should not include the .well-known/openid-configuration suffix).
 endpoint = 'https://auth.example.com'
 client_id = '0000000000000000000000000'
 client_secret = '11111111111111111111111111111111111111111111111111'
 scopes = ['openid', 'profile', 'email']
-# base_url overrides the base URL used to build the OIDC redirect URI. Takes
-# precedence over web.base_url and the request host.
-# base_url = 'https://automate.example.com'
 
 [webhooks.azure_monitor]
 # filter = 'true'

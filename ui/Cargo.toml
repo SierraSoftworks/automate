@@ -1,0 +1,34 @@
+[package]
+name = "automate-ui"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[[bin]]
+name = "automate-ui"
+path = "src/main.rs"
+
+[dependencies]
+automate-api = { path = "../api" }
+
+yew = { version = "0.23", features = ["csr"] }
+yew-router = "0.20"
+
+gloo-net = "0.5"
+gloo-utils = "0.2"
+
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+js-sys = "0.3"
+web-sys = { version = "0.3", features = [
+    "Window",
+    "Location",
+] }
+
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+chrono = { version = "0.4", features = ["serde", "wasmbind"] }
+
+log = "0.4"
+wasm-logger = "0.2"
+console_error_panic_hook = "0.1"

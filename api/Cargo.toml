@@ -1,0 +1,9 @@
+[package]
+name = "automate-api"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+chrono = { version = "0.4.45", features = ["serde"] }
+serde = { version = "1.0.219", features = ["alloc", "derive"] }
+serde_json = { version = "1.0.150", features = ["alloc"] }

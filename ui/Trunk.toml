@@ -1,0 +1,26 @@
+# Trunk configuration for the Automate single-page UI.
+#
+# `trunk serve` runs a dev server with hot reload; pass `--open` to launch a
+# browser. During development the UI talks to a live agent for `/api/v1/*` and
+# `/oauth/*` requests via the proxy below, while serving the wasm bundle itself.
+# For a fully offline preview, append `?demo` to the URL to use baked-in fixture
+# data instead of the API.
+
+[build]
+target = "index.html"
+# Emit the compiled assets into ../dist so the agent can embed them via
+# `include_dir!("$CARGO_MANIFEST_DIR/../ui/dist")`.
+dist = "dist"
+
+[watch]
+watch = ["src", "styles.css", "index.html"]
+
+[serve]
+port = 8081
+# Proxy API and OAuth requests to a locally running agent so the dev UI can be
+# exercised against real data. Adjust the backend address as needed.
+[[proxy]]
+backend = "http://127.0.0.1:8080/api/v1"
+
+[[proxy]]
+backend = "http://127.0.0.1:8080/oauth"
