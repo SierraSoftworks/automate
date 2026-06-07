@@ -464,14 +464,21 @@ mod tests {
     use super::*;
     use rstest::rstest;
 
+    /// Sorts holdings by symbol so assertions don't depend on the
+    /// non-deterministic ordering produced by the underlying hash map.
+    fn sorted_holdings(mut holdings: Vec<(String, f64)>) -> Vec<(String, f64)> {
+        holdings.sort_by(|a, b| a.0.cmp(&b.0));
+        holdings
+    }
+
     #[test]
     fn parses_full_stock_command() {
         let note = "Some preamble\n/automate:stock MSFT=100 AAPL=50 cost_basis=USD5000 cgt_rate=40% payee_name=\"My Broker\"\nTrailing notes";
         let spec = parse_stock_command(note).expect("directive should parse");
 
         assert_eq!(
-            spec.holdings,
-            vec![("MSFT".to_string(), 100.0), ("AAPL".to_string(), 50.0)]
+            sorted_holdings(spec.holdings),
+            vec![("AAPL".to_string(), 50.0), ("MSFT".to_string(), 100.0)]
         );
         assert_eq!(spec.cost_basis.as_deref(), Some("USD5000"));
         assert!((spec.cgt_rate - 0.4).abs() < f64::EPSILON);
@@ -494,8 +501,8 @@ mod tests {
             parse_stock_command("/automate:stock VOD.L=12.5 BRK.B=2").expect("directive parses");
 
         assert_eq!(
-            spec.holdings,
-            vec![("VOD.L".to_string(), 12.5), ("BRK.B".to_string(), 2.0)]
+            sorted_holdings(spec.holdings),
+            vec![("BRK.B".to_string(), 2.0), ("VOD.L".to_string(), 12.5)]
         );
     }
 
