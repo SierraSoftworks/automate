@@ -4,6 +4,10 @@ api_key = "${{ env.GITHUB_API_KEY }}"
 [connections.todoist]
 api_key = "${{ env.TODOIST_API_KEY }}"
 
+[connections.ynab]
+# A YNAB Personal Access Token, created from your YNAB account settings.
+api_key = "${{ env.YNAB_API_KEY }}"
+
 [oauth2.spotify]
 name = "Spotify"
 jobs = ["workflow/spotify-yearly-playlist"]
@@ -127,3 +131,12 @@ filter = "title contains \"highlights | \" && !(title contains \"f2 \")"
 
 [[workflows.xkcd]]
 cron = "0 8 * * *"
+
+[[workflows.ynab_stocks]]
+# The YNAB budget (plan) ID whose stock accounts should be synchronised.
+budget = "00000000-0000-0000-0000-000000000000"
+cron = "0 */12 * * *"
+# Add `/automate:stock` to a YNAB account's note to opt it in, for example:
+#   /automate:stock MSFT=100 AAPL=50 cost_basis=USD5000 cgt_rate=40% payee_name="Stock Market"
+# Every `key=value` pair other than the reserved keys (cost_basis, cgt_rate,
+# payee_name) is treated as a ticker symbol and the quantity held.

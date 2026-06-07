@@ -7,6 +7,7 @@ mod rss;
 mod spotify_yearly_playlist;
 mod todoist_cleanup;
 mod xkcd;
+mod ynab_stocks;
 mod youtube;
 
 pub use calendar::CalendarWorkflow;
@@ -16,4 +17,5 @@ pub use github_notifications_cleanup::GitHubNotificationsCleanupWorkflow;
 pub use github_releases::GitHubReleasesWorkflow;
 pub use rss::RssWorkflow;
 pub use xkcd::XkcdWorkflow;
+pub use ynab_stocks::YnabStocksWorkflow;
 pub use youtube::YouTubeWorkflow;

@@ -107,6 +107,9 @@ pub struct ConnectionConfigs {
 
     #[serde(default)]
     pub github: GitHubConfig,
+
+    #[serde(default)]
+    pub ynab: YnabConfig,
 }
 
 #[derive(Clone, Deserialize, Default)]
@@ -221,10 +224,19 @@ pub struct WorkflowConfigs {
     pub youtube: Vec<CronJobConfig<YouTubeWorkflow>>,
     #[serde(default)]
     pub xkcd: Vec<CronJobConfig<XkcdWorkflow>>,
+    #[serde(default)]
+    pub ynab_stocks: Vec<CronJobConfig<YnabStocksWorkflow>>,
 }
 
 #[derive(Default, Clone, Deserialize)]
 pub struct GitHubConfig {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_key: Option<String>,
+}
+
+#[derive(Default, Clone, Deserialize)]
+pub struct YnabConfig {
+    /// The YNAB Personal Access Token used to authenticate with the YNAB API.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub api_key: Option<String>,
 }
