@@ -5,8 +5,9 @@ common manual tasks and use Todoist to request human involvement
 when necessary.
 
 It facilitates things like calendar sync, RSS syndication, and
-the automatic management of GitHub notifications; as well as
-handling webhooks from services like Tailscale and Honeycomb.
+the automatic management of GitHub notifications, as well as
+keeping YNAB stock accounts up to date with live market prices;
+it also handles webhooks from services like Tailscale and Honeycomb.
 
 ## Configuration
 

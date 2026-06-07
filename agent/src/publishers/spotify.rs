@@ -188,7 +188,9 @@ impl SpotifyClient {
         services: &(impl Services + Send + Sync + 'static),
     ) -> Result<OAuth2RefreshToken, human_errors::Error> {
         let config = services.config().get_oauth2("spotify")?;
-        config.get_access_token(token, &services.http_client()).await
+        config
+            .get_access_token(token, &services.http_client())
+            .await
     }
 }
 
