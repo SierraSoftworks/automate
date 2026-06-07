@@ -55,6 +55,11 @@ jobs:
       - name: Setup Cache
         uses: Swatinem/rust-cache@v2
 
+      - name: Install protoc
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y protobuf-compiler
+
       - name: cargo install grcov
         uses: SierraSoftworks/setup-grcov@v1
         with:
