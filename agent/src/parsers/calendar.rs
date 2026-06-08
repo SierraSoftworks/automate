@@ -159,6 +159,7 @@ impl FromStr for Calendar {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CalendarEvent {
     pub uid: String,
     pub summary: String,

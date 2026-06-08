@@ -63,7 +63,9 @@ impl Job for CalendarWorkflow {
 
         for item in items.into_iter() {
             match item {
-                Diff::Added(id, item) if job.filter.matches(&item).unwrap_or_default() => {
+                Diff::Added(id, item) | Diff::Modified(id, item)
+                    if job.filter.matches(&item).unwrap_or_default() =>
+                {
                     info!(
                         "Calendar item '{}' matched filter, creating Todoist task",
                         item.summary
@@ -89,7 +91,7 @@ impl Job for CalendarWorkflow {
                     )
                     .await?;
                 }
-                Diff::Added(id, item) => {
+                Diff::Added(id, item) | Diff::Modified(id, item) => {
                     info!(
                         "Calendar item '{}' did not match filter, skipping Todoist creation",
                         item.summary
