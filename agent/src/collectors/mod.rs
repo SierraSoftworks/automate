@@ -2,6 +2,7 @@ mod differential;
 mod incremental;
 
 mod calendar;
+mod ecb_rates;
 mod github_notifications;
 mod github_releases;
 mod rss;
@@ -14,6 +15,7 @@ pub use differential::{Diff, DifferentialCollector};
 pub use incremental::IncrementalCollector;
 
 pub use calendar::CalendarCollector;
+pub use ecb_rates::EcbRateCollector;
 pub use github_notifications::{GitHubNotificationsCollector, GitHubSubjectInformation};
 pub use github_releases::GitHubReleasesCollector;
 pub use rss::{RssCollector, RssWatermark};

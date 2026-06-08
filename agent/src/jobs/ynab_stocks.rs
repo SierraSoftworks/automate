@@ -5,6 +5,7 @@ use rust_ynab::{Account, ClearedStatus, Client, NewTransaction, PlanId};
 use uuid::Uuid;
 use yfinance_rs::{Ticker, YfClient};
 
+use crate::collectors::EcbRateCollector;
 use crate::parsers::parse_key_value_pairs;
 use crate::prelude::*;
 
@@ -115,6 +116,7 @@ impl Job for YnabStocksWorkflow {
         )?;
 
         let yf = YfClient::default();
+        let ecb = EcbRateCollector::new();
 
         let budget = job.budget;
         let plan = PlanId::Id(budget);
@@ -173,14 +175,16 @@ impl Job for YnabStocksWorkflow {
             let mut values = Vec::with_capacity(spec.holdings.len());
             for (symbol, quantity) in &spec.holdings {
                 let quote = fetch_quote(&yf, services, symbol).await?;
-                let rate = fetch_rate(&yf, services, &quote.currency, &budget_currency).await?;
                 let native_value = quantity * quote.price;
+                let value = ecb
+                    .convert(services, native_value, &quote.currency, &budget_currency)
+                    .await?;
                 values.push(StockValue {
                     symbol: symbol.clone(),
                     native_currency: quote.currency,
                     native_price: quote.price,
                     native_value,
-                    value: native_value * rate,
+                    value,
                 });
             }
 
@@ -195,8 +199,8 @@ impl Job for YnabStocksWorkflow {
             let cost_basis = match spec.cost_basis.as_deref() {
                 Some(raw) => match parse_currency_value(raw) {
                     Some((Some(ccy), amount)) => {
-                        let rate = fetch_rate(&yf, services, &ccy, &budget_currency).await?;
-                        amount * rate
+                        ecb.convert(services, amount, &ccy, &budget_currency)
+                            .await?
                     }
                     Some((None, amount)) => amount,
                     None => 0.0,
@@ -302,58 +306,6 @@ async fn fetch_quote(
                         price: amount,
                         currency: price.currency().code().to_string(),
                     })
-                })
-            },
-            chrono::Duration::hours(12),
-        )
-        .await
-}
-
-/// Fetches the exchange rate from `from` to `to`, caching the result for
-/// 12 hours. Returns `1.0` when the currencies match.
-async fn fetch_rate(
-    yf: &YfClient,
-    services: &(impl Services + Send + Sync + 'static),
-    from: &str,
-    to: &str,
-) -> Result<f64, human_errors::Error> {
-    let from = from.to_uppercase();
-    let to = to.to_uppercase();
-
-    if from == to {
-        return Ok(1.0);
-    }
-
-    let yf = yf.clone();
-    let key = format!("{from}:{to}");
-    let pair = format!("{from}{to}=X");
-
-    services
-        .cache()
-        .cached(
-            "ynab/stocks/fx",
-            key,
-            move || {
-                Box::pin(async move {
-                    let ticker = Ticker::new(&yf, pair.as_str());
-                    let quote = ticker.quote().await.wrap_system_err(
-                        format!("Failed to fetch the exchange rate '{pair}' from Yahoo Finance."),
-                        &["Check that both currency codes are valid ISO currency codes."],
-                    )?;
-
-                    let price = quote.price.ok_or_else(|| {
-                        human_errors::system(
-                            format!("Yahoo Finance did not return an exchange rate for '{pair}'."),
-                            &["The currency pair may not be supported by Yahoo Finance."],
-                        )
-                    })?;
-
-                    let rate = price.amount().to_string().parse::<f64>().wrap_system_err(
-                        format!("Failed to parse the exchange rate returned for '{pair}'."),
-                        &["Report this issue to the development team on GitHub."],
-                    )?;
-
-                    Ok(rate)
                 })
             },
             chrono::Duration::hours(12),
