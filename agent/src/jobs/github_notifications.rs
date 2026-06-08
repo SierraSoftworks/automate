@@ -138,6 +138,12 @@ impl Job for GitHubNotificationsWorkflow {
         "github/notifications/todoist"
     }
 
+    /// Visibility timeout / retry backoff. Calls the rate-limited GitHub API, so
+    /// a failed run waits an hour before retrying.
+    fn timeout(&self) -> chrono::TimeDelta {
+        chrono::TimeDelta::hours(1)
+    }
+
     #[instrument(
         "workflow.github_notifications.setup",
         skip(self, services),

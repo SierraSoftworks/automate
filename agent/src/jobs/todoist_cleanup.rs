@@ -34,6 +34,12 @@ impl Job for TodoistCleanupWorkflow {
         "workflow/todoist-cleanup"
     }
 
+    /// Visibility timeout / retry backoff. Calls the Todoist API, so a failed
+    /// run waits an hour before retrying.
+    fn timeout(&self) -> chrono::TimeDelta {
+        chrono::TimeDelta::hours(1)
+    }
+
     #[instrument("workflow.todoist_cleanup.setup", skip(self, services), err(Display))]
     async fn setup(
         &self,

@@ -38,6 +38,12 @@ impl Job for XkcdWorkflow {
         "xkcd/todoist"
     }
 
+    /// Visibility timeout / retry backoff. Polls the public xkcd feed, so a
+    /// failed run waits an hour before retrying to avoid hammering it.
+    fn timeout(&self) -> chrono::TimeDelta {
+        chrono::TimeDelta::hours(1)
+    }
+
     #[instrument("workflow.xkcd.setup", skip(self, services), err(Display))]
     async fn setup(
         &self,

@@ -87,6 +87,24 @@ pub trait Queue {
         msg: QueueMessage<T>,
     ) -> Result<(), errors::Error>;
 
+    /// Adjust the visibility timeout of a message this consumer currently holds,
+    /// identified by its reservation id. The message stays hidden for
+    /// `reserve_for` from now; if the holder never completes it, it becomes
+    /// available again once that window elapses. This lets the job consumer
+    /// narrow the generous dequeue reservation down to each job's own timeout,
+    /// which doubles as the backoff before a failed message is retried.
+    async fn reserve<
+        P: Into<Cow<'static, str>> + Send,
+        K: Into<Cow<'static, str>> + Send,
+        R: Into<Cow<'static, str>> + Send,
+    >(
+        &self,
+        partition: P,
+        key: K,
+        reservation_id: R,
+        reserve_for: chrono::Duration,
+    ) -> Result<(), errors::Error>;
+
     async fn peek<P: Into<Cow<'static, str>> + Send, T: DeserializeOwned + Send + 'static>(
         &self,
         partition: P,

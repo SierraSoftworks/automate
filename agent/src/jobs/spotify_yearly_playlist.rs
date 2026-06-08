@@ -14,6 +14,12 @@ impl Job for SpotifyYearlyPlaylistWorkflow {
         "spotify/yearly-playlist"
     }
 
+    /// Visibility timeout / retry backoff. Calls the rate-limited Spotify API,
+    /// so a failed run waits an hour before retrying.
+    fn timeout(&self) -> chrono::TimeDelta {
+        chrono::TimeDelta::hours(1)
+    }
+
     fn propagate_parent() -> bool {
         false
     }

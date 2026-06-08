@@ -74,6 +74,13 @@ impl Job for YnabStocksWorkflow {
         "ynab/stocks"
     }
 
+    /// Visibility timeout / retry backoff. This job calls the YNAB API and
+    /// Yahoo Finance for quotes, both of which are aggressively rate limited, so
+    /// a failed run backs off for a long time before retrying.
+    fn timeout(&self) -> chrono::TimeDelta {
+        chrono::TimeDelta::hours(4)
+    }
+
     #[instrument("workflow.ynab_stocks.setup", skip(self, services), err(Display))]
     async fn setup(
         &self,

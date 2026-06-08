@@ -31,6 +31,13 @@ impl Job for GitHubNotificationsCleanupWorkflow {
         "github/notifications/cleanup"
     }
 
+    /// Visibility timeout / retry backoff. Reconciles GitHub notifications
+    /// against Todoist, hitting both rate-limited APIs, so a failed run waits an
+    /// hour before retrying.
+    fn timeout(&self) -> chrono::TimeDelta {
+        chrono::TimeDelta::hours(1)
+    }
+
     #[instrument(
         "workflow.github_notifications_cleanup.setup",
         skip(self, services),

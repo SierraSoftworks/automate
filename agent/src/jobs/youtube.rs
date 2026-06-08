@@ -39,6 +39,12 @@ impl Job for YouTubeWorkflow {
         "youtube/todoist"
     }
 
+    /// Visibility timeout / retry backoff. Polls YouTube feeds that can rate
+    /// limit, so a failed run waits an hour before retrying.
+    fn timeout(&self) -> chrono::TimeDelta {
+        chrono::TimeDelta::hours(1)
+    }
+
     #[instrument("workflow.youtube.setup", skip(self, services), err(Display))]
     async fn setup(
         &self,

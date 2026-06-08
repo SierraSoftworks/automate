@@ -41,6 +41,12 @@ impl Job for CalendarWorkflow {
         "calendar/todoist"
     }
 
+    /// Visibility timeout / retry backoff. Calendar sync is cheap and not
+    /// heavily rate limited, so a failed run can be retried promptly.
+    fn timeout(&self) -> chrono::TimeDelta {
+        chrono::TimeDelta::minutes(5)
+    }
+
     #[instrument("workflow.calendar.setup", skip(self, services), err(Display))]
     async fn setup(
         &self,

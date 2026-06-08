@@ -507,6 +507,36 @@ impl Queue for SqliteDatabase {
         Ok(())
     }
 
+    #[instrument("db.sqlite.reserve", skip(self, partition, key, reservation_id, reserve_for), fields(otel.kind=?OpenTelemetrySpanKind::Consumer), err(Display))]
+    async fn reserve<
+        P: Into<Cow<'static, str>> + Send,
+        K: Into<Cow<'static, str>> + Send,
+        R: Into<Cow<'static, str>> + Send,
+    >(
+        &self,
+        partition: P,
+        key: K,
+        reservation_id: R,
+        reserve_for: chrono::Duration,
+    ) -> std::result::Result<(), errors::Error> {
+        let partition = partition.into().into_owned();
+        let key = key.into().into_owned();
+        let reservation_id = reservation_id.into().into_owned();
+        let reserved_until = chrono::Utc::now() + reserve_for;
+        self.connection
+            .call(move |c| {
+                c.execute(
+                    "UPDATE queues
+                    SET hiddenUntil = ?1
+                    WHERE partition = ?2 AND key = ?3 AND reservedBy = ?4",
+                    (&reserved_until, &partition, &key, &reservation_id),
+                )
+            })
+            .await
+            .or_system_err(ADVICE_DB_ERROR)?;
+        Ok(())
+    }
+
     #[instrument("db.sqlite.peek", skip(self, partition, max_items), fields(otel.kind=?OpenTelemetrySpanKind::Client
     ), err(Display))]
     async fn peek<P: Into<Cow<'static, str>> + Send, T: DeserializeOwned + Send + 'static>(
@@ -726,6 +756,71 @@ mod tests {
 
         // Purging a missing key is a no-op rather than an error.
         db.purge("test_queue", "missing").await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_queue_reserve_adjusts_visibility() {
+        let db = SqliteDatabase::open_in_memory().await.unwrap();
+
+        db.enqueue("test_queue", "job1", Some("key1".into()), None)
+            .await
+            .unwrap();
+
+        // Dequeue with a long reservation so the message is hidden from other
+        // consumers for a minute.
+        let msg = db.dequeue_any(chrono::Duration::seconds(60)).await.unwrap();
+        assert_eq!(msg.key, "key1");
+
+        // While reserved, the message is not available to dequeue again.
+        let blocked = tokio::time::timeout(
+            std::time::Duration::from_millis(250),
+            db.dequeue_any(chrono::Duration::seconds(60)),
+        )
+        .await;
+        assert!(
+            blocked.is_err(),
+            "message should stay hidden while reserved"
+        );
+
+        // Shortening the reservation into the past releases the message so it
+        // becomes available again immediately.
+        db.reserve(
+            msg.partition.clone(),
+            msg.key.clone(),
+            msg.reservation_id.clone(),
+            chrono::Duration::seconds(-1),
+        )
+        .await
+        .unwrap();
+
+        let released = tokio::time::timeout(
+            std::time::Duration::from_millis(500),
+            db.dequeue_any(chrono::Duration::seconds(60)),
+        )
+        .await
+        .expect("message should be available after its reservation is released")
+        .unwrap();
+        assert_eq!(released.key, "key1");
+
+        // Reserving with a non-matching reservation id must not release the
+        // message held by another consumer.
+        db.reserve(
+            "test_queue",
+            "key1",
+            "not-the-holder",
+            chrono::Duration::seconds(-1),
+        )
+        .await
+        .unwrap();
+        let still_blocked = tokio::time::timeout(
+            std::time::Duration::from_millis(250),
+            db.dequeue_any(chrono::Duration::seconds(60)),
+        )
+        .await;
+        assert!(
+            still_blocked.is_err(),
+            "a non-matching reservation id must not release the message"
+        );
     }
 
     #[tokio::test]

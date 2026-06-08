@@ -48,6 +48,12 @@ impl Job for RssWorkflow {
         "rss/todoist"
     }
 
+    /// Visibility timeout / retry backoff. Polls third-party RSS feeds that can
+    /// rate limit or throttle, so a failed run waits an hour before retrying.
+    fn timeout(&self) -> chrono::TimeDelta {
+        chrono::TimeDelta::hours(1)
+    }
+
     #[instrument("workflow.rss.setup", skip(self, services), err(Display))]
     async fn setup(
         &self,

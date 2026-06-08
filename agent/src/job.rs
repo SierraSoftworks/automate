@@ -289,7 +289,8 @@ impl JobHost {
 
         // Reserve dequeued messages for at least as long as the slowest job may
         // take, so that a message is never released back to the queue while it
-        // is still being processed.
+        // is still being processed. Once a message is dequeued and its handler
+        // is known, `process` narrows this to the handler's own timeout.
         let reserve_for = registry
             .values()
             .map(|handler| handler.timeout())
@@ -339,6 +340,23 @@ impl JobHost {
         let queue = services.queue();
         let name = handler.partition();
         let delay = Utc::now() - item.scheduled_at;
+
+        // Narrow the generous dequeue reservation down to this job's own timeout.
+        // The reservation window doubles as the retry backoff: if the job fails
+        // (or the process dies) the message stays hidden for this long before it
+        // becomes available again, which keeps rate-limited jobs from retrying
+        // too aggressively.
+        if let Err(err) = queue
+            .reserve(
+                item.partition.clone(),
+                item.key.clone(),
+                item.reservation_id.clone(),
+                handler.timeout(),
+            )
+            .await
+        {
+            warn!(error = %err, "Failed to set the reservation window for job '{name}': {err}");
+        }
 
         let span = info_span!(
             parent: None,
@@ -470,6 +488,34 @@ mod tests {
         }
     }
 
+    /// A job that always fails, with a timeout in the past so a failed message
+    /// becomes available again immediately. This lets tests assert that the
+    /// consumer applies the job's own reservation window without waiting.
+    struct FailingJob;
+
+    impl Job for FailingJob {
+        type JobType = TestPayload;
+
+        fn partition() -> &'static str {
+            "test/failing-retry"
+        }
+
+        fn timeout(&self) -> TimeDelta {
+            TimeDelta::seconds(-1)
+        }
+
+        async fn handle(
+            &self,
+            _ctx: JobContext<impl Services + Send + Sync + 'static>,
+            _job: &Self::JobType,
+        ) -> Result<(), human_errors::Error> {
+            Err(human_errors::user(
+                "The job failed.".to_string(),
+                &["This failure is expected in tests."],
+            ))
+        }
+    }
+
     #[test]
     fn test_registry_has_unique_partitions() {
         let mut seen = HashSet::new();
@@ -580,5 +626,50 @@ mod tests {
             next.is_err(),
             "expected the queue to be empty after the job completed"
         );
+    }
+
+    #[tokio::test]
+    async fn test_consumer_applies_job_timeout_on_failure() {
+        static FAILING: FailingJob = FailingJob;
+
+        let services = ServicesContainer::new_mock().await.unwrap();
+
+        services
+            .queue()
+            .enqueue(
+                "test/failing-retry",
+                TestPayload {
+                    id: "k3".into(),
+                    value: "v3".into(),
+                },
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        // Dequeue with a long reservation. If `process` did not narrow this to
+        // the job's own timeout, the failed message would stay hidden for a
+        // minute instead of becoming immediately retriable.
+        let item = services
+            .queue()
+            .dequeue_any(chrono::Duration::seconds(60))
+            .await
+            .unwrap();
+        assert_eq!(item.partition, "test/failing-retry");
+
+        JobHost::process(&FAILING, item, services.clone(), tracing::Span::none()).await;
+
+        // The job failed, so the message must remain on the queue and become
+        // available again immediately because its timeout released the
+        // reservation.
+        let retried = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            services.queue().dequeue_any(chrono::Duration::seconds(60)),
+        )
+        .await
+        .expect("a failed job whose timeout has elapsed should be retriable immediately")
+        .unwrap();
+        assert_eq!(retried.partition, "test/failing-retry");
     }
 }

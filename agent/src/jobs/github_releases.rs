@@ -35,6 +35,12 @@ impl Job for GitHubReleasesWorkflow {
         "github/releases/todoist"
     }
 
+    /// Visibility timeout / retry backoff. Calls the rate-limited GitHub API, so
+    /// a failed run waits an hour before retrying.
+    fn timeout(&self) -> chrono::TimeDelta {
+        chrono::TimeDelta::hours(1)
+    }
+
     #[instrument("workflow.github_releases.setup", skip(self, services), err(Display))]
     async fn setup(
         &self,
