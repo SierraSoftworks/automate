@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 
 use automate_api::KeyValueEntry;
+use gloo_timers::callback::Interval;
 use wasm_bindgen_futures::spawn_local;
 use yew::prelude::*;
 
@@ -11,6 +12,69 @@ use crate::components::{
     RefreshButton,
 };
 use crate::fixtures;
+use crate::util;
+
+/// Forces a re-render once per second so the relative expiry times shown on
+/// cache entries stay current. The interval is torn down when the component
+/// unmounts.
+#[hook]
+fn use_seconds_tick() {
+    let trigger = use_force_update();
+    use_effect_with((), move |_| {
+        let interval = Interval::new(1_000, move || trigger.force_update());
+        move || drop(interval)
+    });
+}
+
+/// Detects whether a key-value payload is a cache envelope (`{ value, expires_at }`)
+/// and, if so, returns its parsed expiry instant. Cache entries are written by
+/// the agent's [`Cache`] layer and wrap their real payload alongside an
+/// `expires_at` timestamp.
+fn cache_expiry(payload: &serde_json::Value) -> Option<chrono::DateTime<chrono::Utc>> {
+    let obj = payload.as_object()?;
+    if obj.len() != 2 || !obj.contains_key("value") || !obj.contains_key("expires_at") {
+        return None;
+    }
+    let expires_at = obj.get("expires_at")?.as_str()?;
+    chrono::DateTime::parse_from_rfc3339(expires_at)
+        .ok()
+        .map(|dt| dt.with_timezone(&chrono::Utc))
+}
+
+/// A stopwatch glyph marking a cache entry's expiry time.
+fn stopwatch_icon() -> Html {
+    html! {
+        <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor"
+            stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <line x1="10" y1="2" x2="14" y2="2" />
+            <line x1="12" y1="14" x2="12" y2="9" />
+            <circle cx="12" cy="14" r="8" />
+        </svg>
+    }
+}
+
+/// Builds the always-visible expiry indicator shown beneath a cache entry's key:
+/// a stopwatch icon alongside the relative expiry time (for example
+/// `expires in 6h` or `expired 30m ago`).
+fn cache_expiry_meta(expires_at: chrono::DateTime<chrono::Utc>) -> Html {
+    let expired = expires_at <= chrono::Utc::now();
+    let relative = util::short_relative(expires_at);
+    let text = if expired {
+        format!("expired {relative}")
+    } else {
+        format!("expires {relative}")
+    };
+    let class = classes!(
+        "db-entity__expiry",
+        expired.then_some("db-entity__expiry--expired"),
+    );
+    html! {
+        <div class={class} title={util::format_iso8601(expires_at)}>
+            <span class="db-entity__expiry-icon">{ stopwatch_icon() }</span>
+            <span class="db-entity__expiry-label">{ text }</span>
+        </div>
+    }
+}
 
 enum Load {
     Loading,
@@ -41,6 +105,10 @@ pub fn db() -> Html {
     // Tracks an in-flight in-place refresh so the toolbar button can spin without
     // tearing the loaded view down.
     let refreshing = use_state(|| false);
+
+    // Re-render every second so the relative expiry times shown on cache entries
+    // stay current.
+    use_seconds_tick();
 
     // Initial load on mount. This is the only path that leaves the page in the
     // loading state; every subsequent fetch updates the data in place.
@@ -169,6 +237,11 @@ pub fn db() -> Html {
                             let onclick = Callback::from(move |_| {
                                 on_delete.emit((partition_for_cb.clone(), key_for_cb.clone()));
                             });
+                            // Cache entries wrap their payload in an `expires_at`
+                            // envelope; surface the relative expiry beneath the key.
+                            let meta = cache_expiry(&value)
+                                .map(cache_expiry_meta)
+                                .unwrap_or_default();
                             // Key the entry by partition + key so that native
                             // `<details>` expansion is preserved across in-place
                             // refreshes but reset when the partition changes
@@ -179,6 +252,7 @@ pub fn db() -> Html {
                                     key={entity_id}
                                     partition={partition_for_entity}
                                     entity_key={key.clone()}
+                                    meta={meta}
                                     payload={value}
                                 >
                                     <button class="btn btn--small btn--danger" onclick={onclick}>

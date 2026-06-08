@@ -935,6 +935,27 @@ footer {
     margin-right: 0.35rem;
   }
 
+  // Always-visible relative expiry shown beneath a cache entry's key.
+  &__expiry {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    margin-top: 0.5rem;
+    padding-left: 1.1rem;
+    font-size: 0.75rem;
+    color: $text-secondary;
+
+    &--expired {
+      color: $warning;
+    }
+  }
+
+  &__expiry-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+
   &__payload {
     margin: 0;
     padding: 0.75rem 1.1rem 0.85rem 2.1rem;
