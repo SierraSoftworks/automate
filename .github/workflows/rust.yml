@@ -181,6 +181,12 @@ jobs:
           target: ${{ matrix.target }}
           components: llvm-tools-preview
 
+      - name: Install protoc
+        if: matrix.builder != 'cross'
+        uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Setup Cache
         uses: Swatinem/rust-cache@v2
 
