@@ -47,9 +47,7 @@ impl DifferentialCollector for CalendarCollector {
     type Identifier = CalendarEventIdentifier;
 
     fn partition(&self) -> &'static str {
-        // v2 stores the full serialized event (not just its identifier) so that
-        // changes to fields such as the busy status retrigger evaluation.
-        "calendar/ics/v2"
+        "calendar/ics"
     }
 
     fn key(&self) -> std::borrow::Cow<'static, str> {
