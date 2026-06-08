@@ -39,11 +39,23 @@ where
 
         let items = self.fetch(services).await?;
 
-        let old_items: Vec<Self::Item> = services
-            .kv()
-            .get(partition, key.clone())
-            .await?
-            .unwrap_or_default();
+        // Load the previously seen items. If the stored state can't be loaded or
+        // deserialized (for example because the storage format changed between
+        // versions), discard it and start from an empty baseline rather than
+        // blocking the collector. The consuming jobs are idempotent, so
+        // replaying items is safe.
+        let old_items: Vec<Self::Item> = match services.kv().get(partition, key.clone()).await {
+            Ok(old_items) => old_items.unwrap_or_default(),
+            Err(err) => {
+                warn!(
+                    collector.partition = partition,
+                    collector.key = %key,
+                    error = %err,
+                    "Failed to load previous collector state; discarding it and continuing from an empty baseline."
+                );
+                Vec::new()
+            }
+        };
 
         let old_by_identifier: HashMap<Self::Identifier, Self::Item> = old_items
             .into_iter()
@@ -76,5 +88,84 @@ where
         services.kv().set(partition, key, items).await?;
 
         Ok(output)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::services::Services;
+
+    #[derive(Clone, PartialEq, Serialize, Deserialize)]
+    struct TestItem {
+        id: u32,
+    }
+
+    struct TestCollector {
+        items: Vec<TestItem>,
+    }
+
+    #[async_trait::async_trait]
+    impl Collector for TestCollector {
+        type Item = TestItem;
+
+        async fn list(
+            &self,
+            _services: &(impl Services + Send + Sync + 'static),
+        ) -> Result<Vec<Self::Item>, human_errors::Error> {
+            Ok(self.items.clone())
+        }
+    }
+
+    impl DifferentialCollector for TestCollector {
+        type Identifier = u32;
+
+        fn partition(&self) -> &'static str {
+            "test/differential"
+        }
+
+        fn key(&self) -> Cow<'static, str> {
+            Cow::Borrowed("key")
+        }
+
+        fn identifier(&self, item: &Self::Item) -> Self::Identifier {
+            item.id
+        }
+
+        async fn fetch(
+            &self,
+            _services: &impl Services,
+        ) -> Result<Vec<Self::Item>, human_errors::Error> {
+            Ok(self.items.clone())
+        }
+    }
+
+    #[tokio::test]
+    async fn test_diff_discards_unreadable_state() {
+        let services = crate::testing::mock_services().await.unwrap();
+
+        // Seed the store with a value that cannot be deserialized into the
+        // collector's `Vec<TestItem>` state, simulating a state-format change
+        // between versions (as happened with the calendar collector).
+        services
+            .kv()
+            .set("test/differential", "key", "not a list of items")
+            .await
+            .unwrap();
+
+        let collector = TestCollector {
+            items: vec![TestItem { id: 1 }, TestItem { id: 2 }],
+        };
+
+        // The unreadable state is discarded rather than blocking the collector,
+        // so every fetched item is treated as newly added.
+        let diffs = collector.diff(&services).await.unwrap();
+        assert_eq!(diffs.len(), 2);
+        assert!(diffs.iter().all(|d| matches!(d, Diff::Added(_, _))));
+
+        // The store now holds the fresh, well-formed state, so a subsequent run
+        // observes no changes.
+        let diffs = collector.diff(&services).await.unwrap();
+        assert!(diffs.is_empty());
     }
 }
