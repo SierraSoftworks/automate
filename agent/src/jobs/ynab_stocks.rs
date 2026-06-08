@@ -292,8 +292,8 @@ fn build_memo(values: &[StockValue]) -> String {
         .iter()
         .map(|v| {
             format!(
-                "{}: {} {:.2} @ {:.2}",
-                v.symbol, v.native_currency, v.native_value, v.native_price
+                "{}: {} {:.2} @ {} {:.2}",
+                v.symbol, v.native_currency, v.native_value, v.native_currency, v.native_price
             )
         })
         .collect::<Vec<_>>()
