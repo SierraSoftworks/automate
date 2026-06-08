@@ -18,33 +18,59 @@ enum Load {
     Failed(ApiError),
 }
 
+/// Fetches the key-value store and stores the result, replacing the current page
+/// state in place. This never flips the page back to [`Load::Loading`], so when
+/// it is used to refresh an already-loaded page the [`PartitionBrowser`] stays
+/// mounted and the user's selected partition, filters, and expanded entries are
+/// preserved.
+async fn fetch_kv(state: UseStateHandle<Load>) {
+    if fixtures::is_demo() {
+        state.set(Load::Ready(fixtures::kv_entries()));
+        return;
+    }
+    match api::list_kv().await {
+        Ok(entries) => state.set(Load::Ready(entries)),
+        Err(error) => state.set(Load::Failed(error)),
+    }
+}
+
 #[function_component(Db)]
 pub fn db() -> Html {
     let auth = use_context::<AuthHandle>().expect("AuthHandle context must be provided");
     let state = use_state(|| Load::Loading);
-    let reload = use_state(|| 0u32);
+    // Tracks an in-flight in-place refresh so the toolbar button can spin without
+    // tearing the loaded view down.
+    let refreshing = use_state(|| false);
 
+    // Initial load on mount. This is the only path that leaves the page in the
+    // loading state; every subsequent fetch updates the data in place.
     {
         let state = state.clone();
-        use_effect_with(*reload, move |_| {
-            state.set(Load::Loading);
-            spawn_local(async move {
-                if fixtures::is_demo() {
-                    state.set(Load::Ready(fixtures::kv_entries()));
-                    return;
-                }
-                match api::list_kv().await {
-                    Ok(entries) => state.set(Load::Ready(entries)),
-                    Err(error) => state.set(Load::Failed(error)),
-                }
-            });
+        use_effect_with((), move |_| {
+            spawn_local(fetch_kv(state));
             || ()
         });
     }
 
-    let on_delete = {
-        let reload = reload.clone();
+    // Re-fetches the store without unmounting the browser, used by the toolbar
+    // refresh button and after a mutation.
+    let refresh = {
         let state = state.clone();
+        let refreshing = refreshing.clone();
+        Callback::from(move |_: ()| {
+            let state = state.clone();
+            let refreshing = refreshing.clone();
+            refreshing.set(true);
+            spawn_local(async move {
+                fetch_kv(state).await;
+                refreshing.set(false);
+            });
+        })
+    };
+
+    let on_delete = {
+        let state = state.clone();
+        let refresh = refresh.clone();
         Callback::from(move |(partition, key): (String, String)| {
             if fixtures::is_demo() {
                 if let Load::Ready(entries) = &*state {
@@ -57,17 +83,21 @@ pub fn db() -> Html {
                 }
                 return;
             }
-            let reload = reload.clone();
+            let refresh = refresh.clone();
             spawn_local(async move {
                 let _ = api::delete_kv(&partition, &key).await;
-                reload.set(*reload + 1);
+                refresh.emit(());
             });
         })
     };
 
     let retry = {
-        let reload = reload.clone();
-        Callback::from(move |_: MouseEvent| reload.set(*reload + 1))
+        let state = state.clone();
+        Callback::from(move |_: MouseEvent| {
+            let state = state.clone();
+            state.set(Load::Loading);
+            spawn_local(fetch_kv(state));
+        })
     };
 
     // Publish a refresh button into the page title row that re-fetches the store
@@ -75,13 +105,13 @@ pub fn db() -> Html {
     let page_actions = use_context::<PageActions>();
     {
         let page_actions = page_actions.clone();
-        let reload = reload.clone();
-        let busy = matches!(&*state, Load::Loading);
-        use_effect_with((busy, *reload), move |&(busy, reload_count)| {
+        let refresh = refresh.clone();
+        let busy = *refreshing || matches!(&*state, Load::Loading);
+        use_effect_with(busy, move |&busy| {
             if let Some(actions) = &page_actions {
                 let onclick = {
-                    let reload = reload.clone();
-                    Callback::from(move |_: MouseEvent| reload.set(reload_count + 1))
+                    let refresh = refresh.clone();
+                    Callback::from(move |_: MouseEvent| refresh.emit(()))
                 };
                 actions.set(html! { <RefreshButton {onclick} {busy} /> });
             }
@@ -139,8 +169,14 @@ pub fn db() -> Html {
                             let onclick = Callback::from(move |_| {
                                 on_delete.emit((partition_for_cb.clone(), key_for_cb.clone()));
                             });
+                            // Key the entry by partition + key so that native
+                            // `<details>` expansion is preserved across in-place
+                            // refreshes but reset when the partition changes
+                            // (the keys become disjoint, forcing a remount).
+                            let entity_id = format!("{partition_for_entity}\u{0}{key}");
                             let content = html! {
                                 <DbEntity
+                                    key={entity_id}
                                     partition={partition_for_entity}
                                     entity_key={key.clone()}
                                     payload={value}
