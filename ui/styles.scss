@@ -1,0 +1,956 @@
+// =============================================================================
+// Automate admin UI stylesheet
+//
+// A lightweight, typography-centric theme drawing on Element Plus for its
+// neutral palette, spacing, and component shapes. Organised top-down:
+//   1. Design tokens (variables, maps, mixins)
+//   2. Base / reset
+//   3. Primitives (buttons, badges, alerts)
+//   4. Layout chrome (app bar, shell, footer)
+//   5. Pages (landing, dashboard, auth)
+//   6. Partition browser (db / queue)
+//   7. Responsive
+// =============================================================================
+
+// -----------------------------------------------------------------------------
+// 1. Design tokens
+// -----------------------------------------------------------------------------
+
+// Brand
+$brand: #0f5a80;
+$brand-light: #117bb0;
+$brand-dark: #0c4866;
+$brand-tint: #eef6fb;
+$brand-tint-border: #d6e6ef;
+
+// Element-Plus inspired neutrals
+$text-primary: #303133;
+$text-regular: #606266;
+$text-secondary: #909399;
+$text-placeholder: #a8abb2;
+
+$border-base: #dcdfe6;
+$border-light: #e4e7ed;
+$border-lighter: #ebeef5;
+
+$bg-page: #f5f7fa;
+$bg-white: #ffffff;
+$fill-light: #f5f7fa;
+$fill-lighter: #fafafa;
+
+// Status colours (Element Plus)
+$success: #67c23a;
+$success-bg: #f0f9eb;
+$success-border: #e1f3d8;
+$warning: #e6a23c;
+$warning-bg: #fdf6ec;
+$warning-border: #faecd8;
+$danger: #f56c6c;
+$danger-bg: #fef0f0;
+$danger-border: #fbc4c4;
+$info: #909399;
+$info-bg: #f4f4f5;
+$info-border: #e9e9eb;
+
+// Shape & motion
+$radius-sm: 4px;
+$radius: 6px;
+$radius-lg: 8px;
+$shadow-sm: 0 1px 4px rgba(0, 0, 0, 0.06);
+$shadow-md: 0 4px 14px rgba(15, 90, 128, 0.12);
+$transition: 120ms ease;
+
+$container-width: 1280px;
+
+$font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica,
+  Arial, sans-serif;
+$font-mono: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+
+@mixin card {
+  background: $bg-white;
+  border: 1px solid $border-lighter;
+  border-radius: $radius-lg;
+  box-shadow: $shadow-sm;
+}
+
+@mixin focus-ring {
+  outline: none;
+  border-color: $brand;
+  box-shadow: 0 0 0 2px rgba(15, 90, 128, 0.18);
+}
+
+// -----------------------------------------------------------------------------
+// 2. Base / reset
+// -----------------------------------------------------------------------------
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  font-family: $font-sans;
+  color: $text-primary;
+  -webkit-font-smoothing: antialiased;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background: $bg-page;
+  display: flex;
+  flex-direction: column;
+  line-height: 1.5;
+}
+
+h1,
+h2,
+h3 {
+  margin: 0;
+  font-weight: 600;
+  color: $text-primary;
+}
+
+a {
+  color: $brand;
+  text-decoration: none;
+
+  &:hover {
+    color: $brand-light;
+  }
+}
+
+code,
+pre {
+  font-family: $font-mono;
+}
+
+.loading-note {
+  color: $text-secondary;
+  font-size: 0.95rem;
+  padding: 2rem 0;
+}
+
+// -----------------------------------------------------------------------------
+// 3. Primitives
+// -----------------------------------------------------------------------------
+
+// Buttons (Element-Plus "plain" style by default, brand fill for primary)
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+  font-family: inherit;
+  font-size: 0.875rem;
+  font-weight: 500;
+  line-height: 1;
+  padding: 0.6rem 1.1rem;
+  border-radius: $radius-sm;
+  border: 1px solid $border-base;
+  background: $bg-white;
+  color: $text-regular;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: color $transition, background $transition, border-color $transition,
+    box-shadow $transition, opacity $transition;
+
+  &:hover:not(:disabled) {
+    color: $brand;
+    border-color: $brand-tint-border;
+    background: $brand-tint;
+  }
+
+  &:focus-visible {
+    @include focus-ring;
+  }
+
+  &:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+
+  &--small {
+    font-size: 0.75rem;
+    padding: 0.4rem 0.7rem;
+  }
+
+  &--lg {
+    font-size: 0.95rem;
+    padding: 0.8rem 1.6rem;
+  }
+
+  &--primary {
+    color: #fff;
+    background: $brand;
+    border-color: $brand;
+
+    &:hover:not(:disabled) {
+      color: #fff;
+      background: $brand-light;
+      border-color: $brand-light;
+    }
+  }
+
+  &--danger {
+    color: $danger;
+    background: $danger-bg;
+    border-color: $danger-border;
+
+    &:hover:not(:disabled) {
+      color: #fff;
+      background: $danger;
+      border-color: $danger;
+    }
+  }
+}
+
+// Status badges
+.badge {
+  display: inline-flex;
+  align-items: center;
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 0.15rem 0.5rem;
+  border-radius: $radius-sm;
+  border: 1px solid transparent;
+  white-space: nowrap;
+
+  &--pending {
+    color: $success;
+    background: $success-bg;
+    border-color: $success-border;
+  }
+
+  &--delayed {
+    color: $brand;
+    background: $brand-tint;
+    border-color: $brand-tint-border;
+  }
+
+  &--reserved {
+    color: $warning;
+    background: $warning-bg;
+    border-color: $warning-border;
+  }
+}
+
+// Alerts
+.alert {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.75rem;
+  padding: 1rem 1.1rem;
+  border-radius: $radius;
+  border: 1px solid transparent;
+  margin-bottom: 1.5rem;
+
+  &__icon {
+    display: inline-flex;
+    flex-shrink: 0;
+    margin-top: 0.05rem;
+  }
+
+  &__body {
+    flex: 1;
+    min-width: 0;
+  }
+
+  &__title {
+    display: block;
+    font-weight: 600;
+    font-size: 0.95rem;
+  }
+
+  &__message {
+    margin: 0.35rem 0 0;
+    font-size: 0.875rem;
+    color: $text-regular;
+    word-break: break-word;
+  }
+
+  &__actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    margin-top: 0.85rem;
+  }
+
+  &__close {
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0.15rem;
+    border: none;
+    background: none;
+    color: $text-secondary;
+    cursor: pointer;
+    border-radius: $radius-sm;
+
+    &:hover {
+      color: $text-primary;
+    }
+  }
+
+  &--error {
+    background: $danger-bg;
+    border-color: $danger-border;
+
+    .alert__title,
+    .alert__icon {
+      color: $danger;
+    }
+  }
+
+  &--warning {
+    background: $warning-bg;
+    border-color: $warning-border;
+
+    .alert__title,
+    .alert__icon {
+      color: $warning;
+    }
+  }
+
+  &--info {
+    background: $info-bg;
+    border-color: $info-border;
+
+    .alert__title,
+    .alert__icon {
+      color: $info;
+    }
+  }
+
+  &--success {
+    background: $success-bg;
+    border-color: $success-border;
+
+    .alert__title,
+    .alert__icon {
+      color: $success;
+    }
+  }
+}
+
+// -----------------------------------------------------------------------------
+// 4. Layout chrome
+// -----------------------------------------------------------------------------
+
+.app-shell {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+}
+
+// Persistent top app bar
+.app-bar {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  background: rgba(255, 255, 255, 0.92);
+  backdrop-filter: saturate(180%) blur(8px);
+  border-bottom: 1px solid $border-lighter;
+
+  &__inner {
+    width: 100%;
+    max-width: $container-width;
+    margin: 0 auto;
+    padding: 0 2.5rem;
+    height: 60px;
+    display: flex;
+    align-items: center;
+    gap: 1.5rem;
+  }
+
+  &__brand {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.6rem;
+    color: $text-primary;
+
+    &:hover {
+      color: $text-primary;
+    }
+
+    img {
+      height: 26px;
+      aspect-ratio: 5 / 1;
+    }
+  }
+
+  &__brand-name {
+    font-weight: 600;
+    font-size: 1.05rem;
+    letter-spacing: -0.01em;
+  }
+
+  &__nav {
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+  }
+
+  &__link {
+    padding: 0.4rem 0.8rem;
+    border-radius: $radius-sm;
+    font-size: 0.9rem;
+    font-weight: 500;
+    color: $text-regular;
+    transition: color $transition, background $transition;
+
+    &:hover {
+      color: $brand;
+      background: $brand-tint;
+    }
+
+    &--active {
+      color: $brand;
+      background: $brand-tint;
+    }
+  }
+
+  &__spacer {
+    flex: 1;
+  }
+}
+
+// Signed-in user chip
+.user-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.6rem;
+
+  &__avatar {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 34px;
+    height: 34px;
+    flex-shrink: 0;
+    border-radius: 50%;
+    background: $brand;
+    color: #fff;
+    font-size: 0.8rem;
+    font-weight: 600;
+  }
+
+  &__meta {
+    display: flex;
+    flex-direction: column;
+    line-height: 1.25;
+  }
+
+  &__name {
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: $text-primary;
+  }
+
+  &__email {
+    font-size: 0.75rem;
+    color: $text-secondary;
+  }
+
+  &__signout {
+    margin-left: 0.5rem;
+    font-size: 0.75rem;
+    color: $text-secondary;
+    background: none;
+    border: none;
+    cursor: pointer;
+    text-decoration: underline;
+
+    &:hover {
+      color: $danger;
+    }
+  }
+}
+
+// Main content column
+.app-main {
+  flex: 1;
+  width: 100%;
+}
+
+.app-container {
+  width: 100%;
+  max-width: $container-width;
+  margin: 0 auto;
+  padding: 2.5rem;
+}
+
+.app-footer {
+  padding: 1.5rem 0;
+  text-align: center;
+  font-size: 0.8rem;
+  color: $text-secondary;
+}
+
+// Page-specific title row
+.page-title {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 2rem;
+  padding-bottom: 1.25rem;
+  border-bottom: 1px solid $border-lighter;
+
+  &__heading {
+    font-size: 1.5rem;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+  }
+
+  &__subtitle {
+    margin: 0.35rem 0 0;
+    font-size: 0.9rem;
+    color: $text-secondary;
+  }
+}
+
+// Public chrome (landing / 404)
+.header {
+  position: absolute;
+  top: 1.25rem;
+  left: 1.5rem;
+
+  img {
+    height: 30px;
+    aspect-ratio: 5 / 1;
+  }
+}
+
+footer {
+  margin-top: auto;
+  padding: 1rem 0;
+  text-align: center;
+  font-size: 0.8rem;
+  color: $text-secondary;
+}
+
+// -----------------------------------------------------------------------------
+// 5. Pages
+// -----------------------------------------------------------------------------
+
+// Landing
+.landing {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 6rem 1.5rem;
+
+  &__inner {
+    max-width: 40rem;
+    text-align: center;
+  }
+
+  &__title {
+    font-size: 3rem;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+  }
+
+  &__lead {
+    margin: 1.25rem 0 2rem;
+    font-size: 1.1rem;
+    line-height: 1.7;
+    color: $text-regular;
+  }
+}
+
+// Dashboard cards
+.admin-cards {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1.5rem;
+}
+
+.admin-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 1rem;
+  flex: 1 1 260px;
+  min-width: 240px;
+  padding: 1.5rem;
+  @include card;
+  color: inherit;
+  transition: border-color $transition, box-shadow $transition, transform $transition;
+
+  &:hover {
+    color: inherit;
+    border-color: $brand-tint-border;
+    box-shadow: $shadow-md;
+    transform: translateY(-2px);
+  }
+
+  &-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 48px;
+    height: 48px;
+    flex-shrink: 0;
+    border-radius: $radius-lg;
+    color: $brand;
+    background: $brand-tint;
+    border: 1px solid $brand-tint-border;
+  }
+
+  &-body {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+  }
+
+  &-title {
+    font-size: 1.05rem;
+    font-weight: 600;
+    color: $text-primary;
+  }
+
+  &-desc {
+    font-size: 0.85rem;
+    color: $text-regular;
+    line-height: 1.5;
+  }
+}
+
+// Auth / login
+.auth-screen {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 40vh;
+  padding: 2rem 0;
+}
+
+.auth-card {
+  max-width: 26rem;
+  margin: 0 auto;
+  padding: 2rem 2.5rem;
+  text-align: center;
+  @include card;
+
+  &__title {
+    font-size: 1.5rem;
+  }
+
+  &__lead {
+    margin: 0.75rem 0 1.5rem;
+    color: $text-regular;
+    font-size: 0.95rem;
+  }
+}
+
+// Centred helper (404)
+.center-screen {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: min(90vw, 30rem);
+}
+
+// -----------------------------------------------------------------------------
+// 6. Partition browser (db / queue)
+// -----------------------------------------------------------------------------
+
+.browser {
+  display: grid;
+  grid-template-columns: minmax(220px, 280px) 1fr;
+  gap: 1.5rem;
+  align-items: start;
+
+  &--empty {
+    display: block;
+    padding: 2.5rem;
+    text-align: center;
+    color: $text-secondary;
+    @include card;
+  }
+
+  // Left rail: partition list
+  &__sidebar {
+    @include card;
+    overflow: hidden;
+    position: sticky;
+    top: 84px;
+  }
+
+  &__search {
+    padding: 0.75rem;
+    border-bottom: 1px solid $border-lighter;
+  }
+
+  &__search-input {
+    width: 100%;
+    font-family: inherit;
+    font-size: 0.85rem;
+    padding: 0.5rem 0.7rem;
+    border: 1px solid $border-base;
+    border-radius: $radius-sm;
+    color: $text-primary;
+    background: $bg-white;
+    transition: border-color $transition, box-shadow $transition;
+
+    &::placeholder {
+      color: $text-placeholder;
+    }
+
+    &::-webkit-search-cancel-button {
+      cursor: pointer;
+    }
+
+    &:focus {
+      @include focus-ring;
+    }
+  }
+
+  &__list {
+    list-style: none;
+    margin: 0;
+    padding: 0.4rem;
+    max-height: 70vh;
+    overflow-y: auto;
+  }
+
+  &__item {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    width: 100%;
+    padding: 0.55rem 0.65rem;
+    border: none;
+    border-radius: $radius-sm;
+    background: none;
+    cursor: pointer;
+    text-align: left;
+    font-family: inherit;
+    color: $text-regular;
+    transition: background $transition, color $transition;
+
+    &:hover {
+      background: $fill-light;
+      color: $text-primary;
+    }
+
+    &--active {
+      background: $brand-tint;
+      color: $brand;
+
+      .browser__item-count {
+        background: $bg-white;
+      }
+    }
+  }
+
+  &__item-name {
+    flex: 1;
+    min-width: 0;
+    font-family: $font-mono;
+    font-size: 0.82rem;
+    font-weight: 600;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  &__item-count {
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 1.4rem;
+    height: 1.4rem;
+    padding: 0 0.45rem;
+    border-radius: 999px;
+    background: $brand-tint;
+    color: $brand;
+    font-size: 0.72rem;
+    font-weight: 600;
+  }
+
+  &__no-match {
+    padding: 0.75rem 0.65rem;
+    color: $text-secondary;
+    font-size: 0.82rem;
+  }
+
+  // Right pane: selected partition contents
+  &__detail {
+    @include card;
+    overflow: hidden;
+  }
+
+  &__detail-head {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    flex-wrap: wrap;
+    padding: 0.9rem 1.1rem;
+    border-bottom: 1px solid $border-lighter;
+    background: $fill-lighter;
+  }
+
+  &__detail-title {
+    font-family: $font-mono;
+    font-size: 0.95rem;
+    font-weight: 600;
+    color: $text-primary;
+    word-break: break-all;
+  }
+
+  &__detail-count {
+    font-size: 0.8rem;
+    color: $text-secondary;
+  }
+
+  &__detail-search {
+    margin-left: auto;
+    width: min(220px, 100%);
+  }
+
+  &__detail-empty {
+    padding: 2.5rem;
+    text-align: center;
+    color: $text-secondary;
+    font-size: 0.9rem;
+  }
+
+  &__entries {
+    display: flex;
+    flex-direction: column;
+  }
+}
+
+// Collapsible entity card
+.db-entity {
+  border-top: 1px solid $border-lighter;
+
+  &:first-child {
+    border-top: none;
+  }
+
+  &__summary {
+    padding: 0.7rem 1.1rem;
+    cursor: pointer;
+    list-style: none;
+    transition: background $transition;
+
+    &::-webkit-details-marker {
+      display: none;
+    }
+
+    &:hover {
+      background: $fill-lighter;
+    }
+  }
+
+  &__head {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+  }
+
+  &__chevron {
+    width: 0;
+    height: 0;
+    flex-shrink: 0;
+    border-left: 5px solid $text-placeholder;
+    border-top: 4px solid transparent;
+    border-bottom: 4px solid transparent;
+    transition: transform $transition;
+  }
+
+  &[open] > .db-entity__summary .db-entity__chevron {
+    transform: rotate(90deg);
+  }
+
+  &__key {
+    font-family: $font-mono;
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: $text-primary;
+    word-break: break-all;
+  }
+
+  &__controls {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin-left: auto;
+    flex-shrink: 0;
+
+    form {
+      display: contents;
+    }
+  }
+
+  &__meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.25rem 1.5rem;
+    margin-top: 0.5rem;
+    padding-left: 1.1rem;
+    font-size: 0.8rem;
+    color: $text-regular;
+  }
+
+  &__meta-label {
+    font-weight: 600;
+    color: $text-primary;
+    margin-right: 0.35rem;
+  }
+
+  &__payload {
+    margin: 0;
+    padding: 0.75rem 1.1rem 0.85rem 2.1rem;
+    font-size: 0.8rem;
+    line-height: 1.5;
+    color: $text-regular;
+    background: $fill-lighter;
+    border-top: 1px solid $border-lighter;
+    overflow-x: auto;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+}
+
+// -----------------------------------------------------------------------------
+// 7. Responsive
+// -----------------------------------------------------------------------------
+
+@media (max-width: 860px) {
+  .app-bar__inner,
+  .app-container {
+    padding-left: 1.25rem;
+    padding-right: 1.25rem;
+  }
+
+  .app-bar__brand-name {
+    display: none;
+  }
+
+  .user-chip__meta {
+    display: none;
+  }
+
+  .browser {
+    grid-template-columns: 1fr;
+  }
+
+  .browser__sidebar {
+    position: static;
+  }
+
+  .browser__list {
+    max-height: 240px;
+  }
+}

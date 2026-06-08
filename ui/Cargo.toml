@@ -23,6 +23,8 @@ js-sys = "0.3"
 web-sys = { version = "0.3", features = [
     "Window",
     "Location",
+    "HtmlInputElement",
+    "InputEvent",
 ] }
 
 serde = { version = "1", features = ["derive"] }

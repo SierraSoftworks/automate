@@ -1,7 +1,7 @@
 use yew::prelude::*;
 
 use crate::app::{AuthHandle, AuthStatus};
-use crate::components::Center;
+use crate::components::{Alert, AlertKind};
 
 use super::Login;
 
@@ -19,17 +19,25 @@ pub fn protected(props: &ProtectedProps) -> Html {
 
     match auth.status {
         AuthStatus::Loading => html! {
-            <Center><p>{ "Loading…" }</p></Center>
+            <p class="loading-note">{ "Loading…" }</p>
         },
         AuthStatus::NeedsLogin => html! { <Login /> },
-        AuthStatus::Error(msg) => html! {
-            <Center>
-                <div class="auth-card">
-                    <h1>{ "Something went wrong" }</h1>
-                    <p class="auth-error">{ msg }</p>
-                </div>
-            </Center>
-        },
+        AuthStatus::Error(msg) => {
+            let onclick = Callback::from(|_: MouseEvent| {
+                if let Some(window) = web_sys::window() {
+                    let _ = window.location().reload();
+                }
+            });
+            html! {
+                <Alert
+                    kind={AlertKind::Error}
+                    title="Couldn't verify your session"
+                    message={msg}
+                >
+                    <button class="btn btn--small btn--primary" {onclick}>{ "Reload" }</button>
+                </Alert>
+            }
+        }
         AuthStatus::SignedIn(_) | AuthStatus::Disabled => props.children.clone(),
     }
 }

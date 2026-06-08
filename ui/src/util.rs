@@ -1,5 +1,16 @@
 //! Small formatting helpers shared across pages.
 
+/// Builds an href for in-app navigation, preserving demo mode across full-page
+/// navigations by carrying the `?demo` query forward when it is active.
+pub fn nav_href(path: &str) -> String {
+    if crate::fixtures::is_demo() {
+        let separator = if path.contains('?') { '&' } else { '?' };
+        format!("{path}{separator}demo")
+    } else {
+        path.to_string()
+    }
+}
+
 /// Formats a UTC timestamp as `YYYY-MM-DD HH:MM:SS UTC`.
 pub fn format_abs(dt: chrono::DateTime<chrono::Utc>) -> String {
     dt.format("%Y-%m-%d %H:%M:%S UTC").to_string()
