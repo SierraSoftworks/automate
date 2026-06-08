@@ -206,6 +206,24 @@ pre {
   }
 }
 
+// Refresh button icon (spins while a refresh is in flight)
+.refresh-btn__icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+
+  &--spin svg {
+    transform-origin: center;
+    animation: spin 0.8s linear infinite;
+  }
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 // Status badges
 .badge {
   display: inline-flex;
@@ -379,7 +397,7 @@ pre {
 
     img {
       height: 26px;
-      aspect-ratio: 5 / 1;
+      aspect-ratio: 1;
     }
   }
 
@@ -522,7 +540,7 @@ pre {
 
   img {
     height: 30px;
-    aspect-ratio: 5 / 1;
+    aspect-ratio: 1;
   }
 }
 
@@ -901,6 +919,14 @@ footer {
     padding-left: 1.1rem;
     font-size: 0.8rem;
     color: $text-regular;
+
+    // Variant revealed with the payload when the entity is expanded.
+    &--expanded {
+      margin-top: 0;
+      padding: 0.6rem 1.1rem 0.6rem 2.1rem;
+      background: $fill-lighter;
+      border-top: 1px solid $border-lighter;
+    }
   }
 
   &__meta-label {
@@ -920,6 +946,228 @@ footer {
     overflow-x: auto;
     white-space: pre-wrap;
     word-break: break-word;
+
+    // JSON syntax highlighting tokens.
+    .tok-key {
+      color: $brand-dark;
+      font-weight: 600;
+    }
+
+    .tok-str {
+      color: $success;
+    }
+
+    .tok-num {
+      color: $brand-light;
+    }
+
+    .tok-bool {
+      color: $warning;
+    }
+
+    .tok-null {
+      color: $text-placeholder;
+      font-style: italic;
+    }
+
+    .tok-punct {
+      color: $text-secondary;
+    }
+  }
+}
+
+// Queue schedule/availability/state timeline
+.queue-tl {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-top: 0.7rem;
+  padding-left: 1.1rem;
+  font-size: 0.72rem;
+  color: $text-secondary;
+
+  &--collapsed {
+    gap: 0.4rem;
+  }
+
+  &__node {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
+    flex-shrink: 0;
+    white-space: nowrap;
+    cursor: help;
+    border-radius: $radius-sm;
+
+    &:focus-visible {
+      outline: 2px solid $brand;
+      outline-offset: 2px;
+    }
+  }
+
+  &__icon {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    color: $text-secondary;
+
+    &--pending {
+      color: $brand;
+    }
+
+    &--spin svg {
+      color: $warning;
+      transform-origin: center;
+      animation: queue-tl-spin 1.4s linear infinite;
+    }
+  }
+
+  // Red notification dot on the pending state icon.
+  &__dot {
+    position: absolute;
+    top: -2px;
+    right: -2px;
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: $danger;
+    box-shadow: 0 0 0 1.5px $bg-white;
+  }
+
+  &__label {
+    font-variant-numeric: tabular-nums;
+  }
+
+  // ISO 8601 popover revealed when a node is hovered or keyboard-focused. It is
+  // anchored toward the centre of the timeline (via the --start / --end
+  // modifiers) so it grows inward and is never clipped by the entry box edges.
+  &__popover {
+    position: absolute;
+    bottom: calc(100% + 8px);
+    z-index: 20;
+    padding: 0.35rem 0.55rem;
+    border-radius: $radius-sm;
+    background: $text-primary;
+    color: $bg-white;
+    font-family: $font-mono;
+    font-size: 0.7rem;
+    line-height: 1.2;
+    letter-spacing: 0.01em;
+    white-space: nowrap;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.18);
+    opacity: 0;
+    visibility: hidden;
+    transform: translateY(4px);
+    transition:
+      opacity $transition,
+      transform $transition,
+      visibility $transition;
+    pointer-events: none;
+
+    // Downward-pointing arrow.
+    &::after {
+      content: "";
+      position: absolute;
+      top: 100%;
+      border: 5px solid transparent;
+      border-top-color: $text-primary;
+    }
+
+    // Left-hand (queued) node: anchor to the start and grow rightward.
+    &--start {
+      left: 0;
+
+      &::after {
+        left: 12px;
+        transform: translateX(-50%);
+      }
+    }
+
+    // Right-hand (state) node: anchor to the end and grow leftward.
+    &--end {
+      right: 0;
+
+      &::after {
+        right: 12px;
+        transform: translateX(50%);
+      }
+    }
+  }
+
+  &__node:hover &__popover,
+  &__node:focus-visible &__popover {
+    opacity: 1;
+    visibility: visible;
+    transform: translateY(0);
+  }
+
+  // The number-line connecting the queued and availability nodes.
+  &__track {
+    position: relative;
+    flex: 1 1 auto;
+    min-width: 56px;
+    max-width: 240px;
+    height: 2px;
+    margin: 0 0.15rem;
+    background: $border-base;
+    border-radius: 1px;
+  }
+
+  &__fill {
+    position: absolute;
+    left: 0;
+    top: 0;
+    bottom: 0;
+    width: 0;
+    background: $brand-tint-border;
+    border-radius: 1px;
+  }
+
+  &__now {
+    position: absolute;
+    top: -4px;
+    bottom: -4px;
+    left: 0;
+    width: 2px;
+    border-radius: 1px;
+    background: $brand;
+    transform: translateX(-50%);
+  }
+
+  &__duration {
+    position: absolute;
+    left: 50%;
+    bottom: calc(100% + 3px);
+    transform: translateX(-50%);
+    font-size: 0.68rem;
+    color: $text-placeholder;
+    white-space: nowrap;
+  }
+}
+
+@keyframes queue-tl-now {
+  from {
+    left: 0%;
+  }
+  to {
+    left: 100%;
+  }
+}
+
+@keyframes queue-tl-fill {
+  from {
+    width: 0%;
+  }
+  to {
+    width: 100%;
+  }
+}
+
+@keyframes queue-tl-spin {
+  to {
+    transform: rotate(360deg);
   }
 }
 

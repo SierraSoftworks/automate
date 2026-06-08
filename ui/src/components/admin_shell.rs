@@ -12,6 +12,26 @@ pub struct AdminShellProps {
     pub children: Html,
 }
 
+/// A slot for page-specific actions rendered at the end of the page title row.
+/// Pages obtain it from context and push controls (such as a refresh button)
+/// into the shared header without owning the title itself.
+#[derive(Clone, PartialEq)]
+pub struct PageActions {
+    set: Callback<Html>,
+}
+
+impl PageActions {
+    /// Replaces the title-row actions with the given content.
+    pub fn set(&self, actions: Html) {
+        self.set.emit(actions);
+    }
+
+    /// Clears the title-row actions, restoring an empty header.
+    pub fn clear(&self) {
+        self.set.emit(Html::default());
+    }
+}
+
 /// Maps a route to the page title and supporting subtitle shown in the
 /// page-specific header.
 fn context_for(route: &Route) -> (&'static str, Option<&'static str>) {
@@ -43,15 +63,31 @@ pub fn admin_shell(props: &AdminShellProps) -> Html {
     };
     let (title, subtitle) = context_for(&route);
 
+    // A title-row action slot that routed pages fill via the `PageActions`
+    // context (for example with a refresh button). The setter is memoised so the
+    // context identity stays stable and pages don't re-render when the actions
+    // change.
+    let actions = use_state(Html::default);
+    let page_actions = {
+        let actions = actions.clone();
+        use_memo((), move |_| PageActions {
+            set: Callback::from(move |content: Html| actions.set(content)),
+        })
+    };
+
     html! {
         <div class="app-shell">
             <AppBar active={route} />
             <main class="app-main">
                 <div class="app-container">
-                    <Protected>
-                        <PageTitle title={title} subtitle={subtitle.map(AttrValue::from)} />
-                        { props.children.clone() }
-                    </Protected>
+                    <ContextProvider<PageActions> context={(*page_actions).clone()}>
+                        <Protected>
+                            <PageTitle title={title} subtitle={subtitle.map(AttrValue::from)}>
+                                { (*actions).clone() }
+                            </PageTitle>
+                            { props.children.clone() }
+                        </Protected>
+                    </ContextProvider<PageActions>>
                 </div>
             </main>
             <footer class="app-footer">

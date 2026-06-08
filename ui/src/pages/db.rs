@@ -7,7 +7,8 @@ use yew::prelude::*;
 use crate::api::{self, ApiError};
 use crate::app::AuthHandle;
 use crate::components::{
-    Alert, AlertKind, BrowserEntry, BrowserPartition, DbEntity, PartitionBrowser,
+    Alert, AlertKind, BrowserEntry, BrowserPartition, DbEntity, PageActions, PartitionBrowser,
+    RefreshButton,
 };
 use crate::fixtures;
 
@@ -68,6 +69,29 @@ pub fn db() -> Html {
         let reload = reload.clone();
         Callback::from(move |_: MouseEvent| reload.set(*reload + 1))
     };
+
+    // Publish a refresh button into the page title row that re-fetches the store
+    // in place. It is cleared when the page unmounts.
+    let page_actions = use_context::<PageActions>();
+    {
+        let page_actions = page_actions.clone();
+        let reload = reload.clone();
+        let busy = matches!(&*state, Load::Loading);
+        use_effect_with((busy, *reload), move |&(busy, reload_count)| {
+            if let Some(actions) = &page_actions {
+                let onclick = {
+                    let reload = reload.clone();
+                    Callback::from(move |_: MouseEvent| reload.set(reload_count + 1))
+                };
+                actions.set(html! { <RefreshButton {onclick} {busy} /> });
+            }
+            move || {
+                if let Some(actions) = page_actions {
+                    actions.clear();
+                }
+            }
+        });
+    }
 
     match &*state {
         Load::Loading => html! { <p class="loading-note">{ "Loading…" }</p> },

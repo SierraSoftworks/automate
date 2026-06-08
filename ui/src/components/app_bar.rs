@@ -42,10 +42,7 @@ fn initials(name: &str) -> String {
 pub fn app_bar(props: &AppBarProps) -> Html {
     let auth = use_context::<AuthHandle>().expect("AuthHandle context must be provided");
 
-    let signed_in = matches!(
-        auth.status,
-        AuthStatus::SignedIn(_) | AuthStatus::Disabled
-    );
+    let signed_in = matches!(auth.status, AuthStatus::SignedIn(_) | AuthStatus::Disabled);
 
     let nav_items = [
         NavItem {
@@ -112,7 +109,7 @@ pub fn app_bar(props: &AppBarProps) -> Html {
             <div class="app-bar__inner">
                 <a class="app-bar__brand" href={util::nav_href("/admin")}>
                     <img
-                        src="https://cdn.sierrasoftworks.com/logos/logo.svg"
+                        src="https://cdn.sierrasoftworks.com/logos/icon.svg"
                         alt="The Sierra Softworks logo."
                     />
                     <span class="app-bar__brand-name">{ "Automate" }</span>
