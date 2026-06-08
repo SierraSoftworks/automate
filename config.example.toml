@@ -8,6 +8,12 @@ api_key = "${{ env.TODOIST_API_KEY }}"
 # A YNAB Personal Access Token, created from your YNAB account settings.
 api_key = "${{ env.YNAB_API_KEY }}"
 
+[connections.alphavantage]
+# An AlphaVantage API key, used by the YNAB stocks workflow to fetch stock
+# quotes and currency exchange rates. Claim a free key from
+# https://www.alphavantage.co/support/#api-key.
+api_key = "${{ env.ALPHAVANTAGE_API_KEY }}"
+
 [oauth2.spotify]
 name = "Spotify"
 jobs = ["workflow/spotify-yearly-playlist"]
