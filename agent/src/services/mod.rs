@@ -2,6 +2,10 @@ use std::sync::Arc;
 
 use crate::config::Config;
 
+mod alphavantage;
+
+pub use alphavantage::AlphaVantageClient;
+
 /// The concrete [`Services`] implementation used by the running application and
 /// the job consumer.
 ///

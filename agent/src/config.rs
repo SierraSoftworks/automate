@@ -110,6 +110,9 @@ pub struct ConnectionConfigs {
 
     #[serde(default)]
     pub ynab: YnabConfig,
+
+    #[serde(default)]
+    pub alphavantage: AlphaVantageConfig,
 }
 
 #[derive(Clone, Deserialize, Default)]
@@ -237,6 +240,13 @@ pub struct GitHubConfig {
 #[derive(Default, Clone, Deserialize)]
 pub struct YnabConfig {
     /// The YNAB Personal Access Token used to authenticate with the YNAB API.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_key: Option<String>,
+}
+
+#[derive(Default, Clone, Deserialize)]
+pub struct AlphaVantageConfig {
+    /// The AlphaVantage API key used to fetch stock quotes and exchange rates.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub api_key: Option<String>,
 }

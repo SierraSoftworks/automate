@@ -3,10 +3,10 @@ use std::fmt::Display;
 
 use rust_ynab::{Account, ClearedStatus, Client, NewTransaction, PlanId};
 use uuid::Uuid;
-use yfinance_rs::{Ticker, YfClient};
 
 use crate::parsers::parse_key_value_pairs;
 use crate::prelude::*;
+use crate::services::AlphaVantageClient;
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct YnabStocksConfig {
@@ -34,13 +34,6 @@ struct StocksState {
     server_knowledge: Option<i64>,
     #[serde(default)]
     accounts: HashMap<Uuid, Account>,
-}
-
-/// A cached ticker quote, expressed in the instrument's native currency.
-#[derive(Clone, Serialize, Deserialize)]
-struct CachedQuote {
-    price: f64,
-    currency: String,
 }
 
 /// The parsed `/automate:stock` directive from an account note.
@@ -75,10 +68,10 @@ impl Job for YnabStocksWorkflow {
     }
 
     /// Visibility timeout / retry backoff. This job calls the YNAB API and
-    /// Yahoo Finance for quotes, both of which are aggressively rate limited, so
-    /// a failed run backs off for a long time before retrying.
+    /// AlphaVantage for quotes and exchange rates, both of which are rate
+    /// limited, so a failed run backs off for a long time before retrying.
     fn timeout(&self) -> chrono::TimeDelta {
-        chrono::TimeDelta::hours(4)
+        chrono::TimeDelta::hours(1)
     }
 
     #[instrument("workflow.ynab_stocks.setup", skip(self, services), err(Display))]
@@ -114,7 +107,17 @@ impl Job for YnabStocksWorkflow {
             &["Check that your YNAB Personal Access Token is valid."],
         )?;
 
-        let yf = YfClient::default();
+        let alphavantage_api_key =
+            config.connections.alphavantage.api_key.as_deref().ok_or_else(|| {
+                human_errors::user(
+                    "No AlphaVantage API key has been configured.",
+                    &[
+                        "Set `connections.alphavantage.api_key` in your configuration file (for example via the ALPHAVANTAGE_API_KEY environment variable).",
+                        "Claim a free API key from https://www.alphavantage.co/support/#api-key.",
+                    ],
+                )
+            })?;
+        let alphavantage = AlphaVantageClient::new(services.http_client(), alphavantage_api_key);
 
         let budget = job.budget;
         let plan = PlanId::Id(budget);
@@ -172,13 +175,16 @@ impl Job for YnabStocksWorkflow {
             // Value each holding in the budget's currency.
             let mut values = Vec::with_capacity(spec.holdings.len());
             for (symbol, quantity) in &spec.holdings {
-                let quote = fetch_quote(&yf, services, symbol).await?;
-                let rate = fetch_rate(&yf, services, &quote.currency, &budget_currency).await?;
-                let native_value = quantity * quote.price;
+                let price = alphavantage.quote(services, symbol).await?;
+                let currency = alphavantage.currency(services, symbol).await?;
+                let rate = alphavantage
+                    .exchange_rate(services, &currency, &budget_currency)
+                    .await?;
+                let native_value = quantity * price;
                 values.push(StockValue {
                     symbol: symbol.clone(),
-                    native_currency: quote.currency,
-                    native_price: quote.price,
+                    native_currency: currency,
+                    native_price: price,
                     native_value,
                     value: native_value * rate,
                 });
@@ -195,7 +201,9 @@ impl Job for YnabStocksWorkflow {
             let cost_basis = match spec.cost_basis.as_deref() {
                 Some(raw) => match parse_currency_value(raw) {
                     Some((Some(ccy), amount)) => {
-                        let rate = fetch_rate(&yf, services, &ccy, &budget_currency).await?;
+                        let rate = alphavantage
+                            .exchange_rate(services, &ccy, &budget_currency)
+                            .await?;
                         amount * rate
                     }
                     Some((None, amount)) => amount,
@@ -260,105 +268,6 @@ impl Job for YnabStocksWorkflow {
 
         Ok(())
     }
-}
-
-/// Fetches a ticker quote, caching the result for 12 hours.
-async fn fetch_quote(
-    yf: &YfClient,
-    services: &(impl Services + Send + Sync + 'static),
-    symbol: &str,
-) -> Result<CachedQuote, human_errors::Error> {
-    let yf = yf.clone();
-    let symbol_owned = symbol.to_string();
-
-    services
-        .cache()
-        .cached(
-            "ynab/stocks/quotes",
-            symbol.to_string(),
-            move || {
-                Box::pin(async move {
-                    let ticker = Ticker::new(&yf, symbol_owned.as_str());
-                    let quote = ticker.quote().await.wrap_system_err(
-                        format!(
-                            "Failed to fetch a stock quote for '{symbol_owned}' from Yahoo Finance."
-                        ),
-                        &["Check that the ticker symbol is valid and recognised by Yahoo Finance."],
-                    )?;
-
-                    let price = quote.price.ok_or_else(|| {
-                        human_errors::system(
-                            format!("Yahoo Finance did not return a price for '{symbol_owned}'."),
-                            &["The market may be closed or the symbol may be delisted."],
-                        )
-                    })?;
-
-                    let amount = price.amount().to_string().parse::<f64>().wrap_system_err(
-                        format!("Failed to parse the price returned for '{symbol_owned}'."),
-                        &["Report this issue to the development team on GitHub."],
-                    )?;
-
-                    Ok(CachedQuote {
-                        price: amount,
-                        currency: price.currency().code().to_string(),
-                    })
-                })
-            },
-            chrono::Duration::hours(12),
-        )
-        .await
-}
-
-/// Fetches the exchange rate from `from` to `to`, caching the result for
-/// 12 hours. Returns `1.0` when the currencies match.
-async fn fetch_rate(
-    yf: &YfClient,
-    services: &(impl Services + Send + Sync + 'static),
-    from: &str,
-    to: &str,
-) -> Result<f64, human_errors::Error> {
-    let from = from.to_uppercase();
-    let to = to.to_uppercase();
-
-    if from == to {
-        return Ok(1.0);
-    }
-
-    let yf = yf.clone();
-    let key = format!("{from}:{to}");
-    let pair = format!("{from}{to}=X");
-
-    services
-        .cache()
-        .cached(
-            "ynab/stocks/fx",
-            key,
-            move || {
-                Box::pin(async move {
-                    let ticker = Ticker::new(&yf, pair.as_str());
-                    let quote = ticker.quote().await.wrap_system_err(
-                        format!("Failed to fetch the exchange rate '{pair}' from Yahoo Finance."),
-                        &["Check that both currency codes are valid ISO currency codes."],
-                    )?;
-
-                    let price = quote.price.ok_or_else(|| {
-                        human_errors::system(
-                            format!("Yahoo Finance did not return an exchange rate for '{pair}'."),
-                            &["The currency pair may not be supported by Yahoo Finance."],
-                        )
-                    })?;
-
-                    let rate = price.amount().to_string().parse::<f64>().wrap_system_err(
-                        format!("Failed to parse the exchange rate returned for '{pair}'."),
-                        &["Report this issue to the development team on GitHub."],
-                    )?;
-
-                    Ok(rate)
-                })
-            },
-            chrono::Duration::hours(12),
-        )
-        .await
 }
 
 /// Computes the net portfolio value after applying a capital gains tax
