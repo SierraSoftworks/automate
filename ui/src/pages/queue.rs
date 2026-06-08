@@ -32,6 +32,22 @@ enum Load {
     Failed(ApiError),
 }
 
+/// Fetches the queue and stores the result, replacing the current page state in
+/// place. This never flips the page back to [`Load::Loading`], so when it is
+/// used to refresh an already-loaded page the [`PartitionBrowser`] stays mounted
+/// and the user's selected partition, filters, and expanded entries are
+/// preserved.
+async fn fetch_queue(state: UseStateHandle<Load>) {
+    if fixtures::is_demo() {
+        state.set(Load::Ready(fixtures::queue_messages()));
+        return;
+    }
+    match api::list_queue().await {
+        Ok(messages) => state.set(Load::Ready(messages)),
+        Err(error) => state.set(Load::Failed(error)),
+    }
+}
+
 /// A queue message prepared for display. Timestamps are retained as raw instants
 /// so the timeline can both compute positions and render exact ISO 8601 values
 /// in its popovers.
@@ -64,47 +80,57 @@ fn to_display(msg: &QueueMessage) -> QueueMessageDisplay {
 pub fn queue() -> Html {
     let auth = use_context::<AuthHandle>().expect("AuthHandle context must be provided");
     let state = use_state(|| Load::Loading);
-    let reload = use_state(|| 0u32);
+    // Tracks an in-flight in-place refresh so the toolbar button can spin without
+    // tearing the loaded view down.
+    let refreshing = use_state(|| false);
 
     // Re-render every second so relative timestamps tick in step with the
     // timeline's animated "now" marker.
     use_seconds_tick();
 
+    // Initial load on mount. This is the only path that leaves the page in the
+    // loading state; every subsequent fetch updates the data in place.
     {
         let state = state.clone();
-        use_effect_with(*reload, move |_| {
-            state.set(Load::Loading);
-            spawn_local(async move {
-                if fixtures::is_demo() {
-                    state.set(Load::Ready(fixtures::queue_messages()));
-                    return;
-                }
-                match api::list_queue().await {
-                    Ok(messages) => state.set(Load::Ready(messages)),
-                    Err(error) => state.set(Load::Failed(error)),
-                }
-            });
+        use_effect_with((), move |_| {
+            spawn_local(fetch_queue(state));
             || ()
         });
     }
 
+    // Re-fetches the queue without unmounting the browser, used by the toolbar
+    // refresh button and after a mutation.
+    let refresh = {
+        let state = state.clone();
+        let refreshing = refreshing.clone();
+        Callback::from(move |_: ()| {
+            let state = state.clone();
+            let refreshing = refreshing.clone();
+            refreshing.set(true);
+            spawn_local(async move {
+                fetch_queue(state).await;
+                refreshing.set(false);
+            });
+        })
+    };
+
     let on_trigger = {
-        let reload = reload.clone();
+        let refresh = refresh.clone();
         Callback::from(move |msg: QueueMessageDisplay| {
             if fixtures::is_demo() {
                 return;
             }
-            let reload = reload.clone();
+            let refresh = refresh.clone();
             spawn_local(async move {
                 let _ = api::trigger_queue(&msg.partition, &msg.key, msg.payload.clone()).await;
-                reload.set(*reload + 1);
+                refresh.emit(());
             });
         })
     };
 
     let on_delete = {
-        let reload = reload.clone();
         let state = state.clone();
+        let refresh = refresh.clone();
         Callback::from(move |(partition, key): (String, String)| {
             if fixtures::is_demo() {
                 if let Load::Ready(messages) = &*state {
@@ -117,17 +143,21 @@ pub fn queue() -> Html {
                 }
                 return;
             }
-            let reload = reload.clone();
+            let refresh = refresh.clone();
             spawn_local(async move {
                 let _ = api::delete_queue(&partition, &key).await;
-                reload.set(*reload + 1);
+                refresh.emit(());
             });
         })
     };
 
     let retry = {
-        let reload = reload.clone();
-        Callback::from(move |_: MouseEvent| reload.set(*reload + 1))
+        let state = state.clone();
+        Callback::from(move |_: MouseEvent| {
+            let state = state.clone();
+            state.set(Load::Loading);
+            spawn_local(fetch_queue(state));
+        })
     };
 
     // Publish a refresh button into the page title row that re-fetches the queue
@@ -135,13 +165,13 @@ pub fn queue() -> Html {
     let page_actions = use_context::<PageActions>();
     {
         let page_actions = page_actions.clone();
-        let reload = reload.clone();
-        let busy = matches!(&*state, Load::Loading);
-        use_effect_with((busy, *reload), move |&(busy, reload_count)| {
+        let refresh = refresh.clone();
+        let busy = *refreshing || matches!(&*state, Load::Loading);
+        use_effect_with(busy, move |&busy| {
             if let Some(actions) = &page_actions {
                 let onclick = {
-                    let reload = reload.clone();
-                    Callback::from(move |_: MouseEvent| reload.set(reload_count + 1))
+                    let refresh = refresh.clone();
+                    Callback::from(move |_: MouseEvent| refresh.emit(()))
                 };
                 actions.set(html! { <RefreshButton {onclick} {busy} /> });
             }
@@ -252,6 +282,7 @@ fn queue_entry(
 
     html! {
         <DbEntity
+            key={format!("{}\u{0}{}", msg.partition, msg.key)}
             partition={msg.partition.clone()}
             entity_key={msg.key.clone()}
             meta={queue_timeline(msg)}
