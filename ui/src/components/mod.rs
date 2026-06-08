@@ -4,18 +4,26 @@
 //! plain text nodes inside `<pre><code>` so that untrusted payload data can
 //! never inject markup.
 
+mod admin_shell;
+mod alert;
+mod app_bar;
 mod card;
 mod entity;
 mod helpers;
-mod kv;
+mod json_highlight;
 mod layout;
-mod page_header;
-mod queue;
+mod page_title;
+mod partition_browser;
+mod refresh_button;
 
+pub use admin_shell::{AdminShell, PageActions};
+pub use alert::{Alert, AlertKind};
+pub use app_bar::AppBar;
 pub use card::Card;
-pub use entity::{DbEntity, EntityMetadata, Partition};
+pub use entity::{DbEntity, EntityMetadata};
 pub use helpers::Center;
-pub use kv::KeyValueView;
+pub use json_highlight::JsonHighlight;
 pub use layout::Layout;
-pub use page_header::PageHeader;
-pub use queue::{QueueMessageDisplay, QueueView};
+pub use page_title::PageTitle;
+pub use partition_browser::{BrowserEntry, BrowserPartition, PartitionBrowser};
+pub use refresh_button::RefreshButton;

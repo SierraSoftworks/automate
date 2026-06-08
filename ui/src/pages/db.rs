@@ -4,26 +4,22 @@ use automate_api::KeyValueEntry;
 use wasm_bindgen_futures::spawn_local;
 use yew::prelude::*;
 
-use crate::api;
+use crate::api::{self, ApiError};
 use crate::app::AuthHandle;
-use crate::components::{KeyValueView, PageHeader};
+use crate::components::{
+    Alert, AlertKind, BrowserEntry, BrowserPartition, DbEntity, PageActions, PartitionBrowser,
+    RefreshButton,
+};
 use crate::fixtures;
-
-use super::Protected;
 
 enum Load {
     Loading,
     Ready(Vec<KeyValueEntry>),
-    Failed(String),
+    Failed(ApiError),
 }
 
 #[function_component(Db)]
 pub fn db() -> Html {
-    html! { <Protected><DbContent /></Protected> }
-}
-
-#[function_component(DbContent)]
-fn db_content() -> Html {
     let auth = use_context::<AuthHandle>().expect("AuthHandle context must be provided");
     let state = use_state(|| Load::Loading);
     let reload = use_state(|| 0u32);
@@ -39,7 +35,7 @@ fn db_content() -> Html {
                 }
                 match api::list_kv().await {
                     Ok(entries) => state.set(Load::Ready(entries)),
-                    Err(error) => state.set(Load::Failed(error.to_string())),
+                    Err(error) => state.set(Load::Failed(error)),
                 }
             });
             || ()
@@ -69,19 +65,57 @@ fn db_content() -> Html {
         })
     };
 
-    let on_signout = {
-        let signout = auth.signout.clone();
-        Callback::from(move |_: MouseEvent| signout.emit(()))
+    let retry = {
+        let reload = reload.clone();
+        Callback::from(move |_: MouseEvent| reload.set(*reload + 1))
     };
 
-    let body = match &*state {
-        Load::Loading => html! { <p class="admin-intro">{ "Loading…" }</p> },
-        Load::Failed(error) => html! {
-            <div class="error-banner">{ error.clone() }</div>
-        },
-        Load::Ready(entries) if entries.is_empty() => html! {
-            <div class="kv-empty"><p>{ "No entries found in the key-value store." }</p></div>
-        },
+    // Publish a refresh button into the page title row that re-fetches the store
+    // in place. It is cleared when the page unmounts.
+    let page_actions = use_context::<PageActions>();
+    {
+        let page_actions = page_actions.clone();
+        let reload = reload.clone();
+        let busy = matches!(&*state, Load::Loading);
+        use_effect_with((busy, *reload), move |&(busy, reload_count)| {
+            if let Some(actions) = &page_actions {
+                let onclick = {
+                    let reload = reload.clone();
+                    Callback::from(move |_: MouseEvent| reload.set(reload_count + 1))
+                };
+                actions.set(html! { <RefreshButton {onclick} {busy} /> });
+            }
+            move || {
+                if let Some(actions) = page_actions {
+                    actions.clear();
+                }
+            }
+        });
+    }
+
+    match &*state {
+        Load::Loading => html! { <p class="loading-note">{ "Loading…" }</p> },
+        Load::Failed(error) => {
+            let needs_login = matches!(error, ApiError::Unauthorized);
+            html! {
+                <Alert
+                    kind={AlertKind::Error}
+                    title="Couldn't load the key-value store"
+                    message={error.to_string()}
+                >
+                    <button class="btn btn--small" onclick={retry}>{ "Retry" }</button>
+                    {
+                        if needs_login {
+                            let login = auth.login.clone();
+                            let onclick = Callback::from(move |_: MouseEvent| login.emit(()));
+                            html! { <button class="btn btn--small btn--primary" onclick={onclick}>{ "Sign in" }</button> }
+                        } else {
+                            html! {}
+                        }
+                    }
+                </Alert>
+            }
+        }
         Load::Ready(entries) => {
             let mut groups: BTreeMap<String, Vec<(String, serde_json::Value)>> = BTreeMap::new();
             for entry in entries {
@@ -90,32 +124,51 @@ fn db_content() -> Html {
                     .or_default()
                     .push((entry.key.clone(), entry.payload.clone()));
             }
+
+            let partitions: Vec<BrowserPartition> = groups
+                .into_iter()
+                .map(|(partition, mut entries)| {
+                    entries.sort_by(|a, b| a.0.cmp(&b.0));
+                    let entries = entries
+                        .into_iter()
+                        .map(|(key, value)| {
+                            let on_delete = on_delete.clone();
+                            let partition_for_entity = partition.clone();
+                            let partition_for_cb = partition.clone();
+                            let key_for_cb = key.clone();
+                            let onclick = Callback::from(move |_| {
+                                on_delete.emit((partition_for_cb.clone(), key_for_cb.clone()));
+                            });
+                            let content = html! {
+                                <DbEntity
+                                    partition={partition_for_entity}
+                                    entity_key={key.clone()}
+                                    payload={value}
+                                >
+                                    <button class="btn btn--small btn--danger" onclick={onclick}>
+                                        { "Delete" }
+                                    </button>
+                                </DbEntity>
+                            };
+                            BrowserEntry {
+                                key: key.into(),
+                                content,
+                            }
+                        })
+                        .collect();
+                    BrowserPartition {
+                        name: partition.into(),
+                        entries,
+                    }
+                })
+                .collect();
+
             html! {
-                <div class="kv-overview">
-                    { for groups.into_iter().map(|(partition, mut entries)| {
-                        entries.sort_by(|a, b| a.0.cmp(&b.0));
-                        html! {
-                            <KeyValueView
-                                partition={partition}
-                                entries={entries}
-                                on_delete={on_delete.clone()}
-                            />
-                        }
-                    }) }
-                </div>
+                <PartitionBrowser
+                    partitions={partitions}
+                    empty="No entries found in the key-value store."
+                />
             }
         }
-    };
-
-    html! {
-        <div class="admin-content">
-            <PageHeader
-                title="Key-Value Store"
-                user_name={auth.user.as_ref().map(|u| AttrValue::from(u.name.clone()))}
-                user_email={auth.user.as_ref().and_then(|u| u.email.clone()).map(AttrValue::from)}
-                on_signout={on_signout}
-            />
-            { body }
-        </div>
     }
 }

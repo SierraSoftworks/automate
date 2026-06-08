@@ -8,18 +8,24 @@ use yew_router::prelude::*;
 
 use crate::api::{self, ApiError};
 use crate::auth;
-use crate::components::Layout;
+use crate::components::AdminShell;
 use crate::fixtures;
 use crate::pages;
 
 /// The client-side routes handled by the SPA.
 #[derive(Clone, Routable, PartialEq)]
 pub enum Route {
+    /// The public landing page.
     #[at("/")]
+    Landing,
+    /// The admin dashboard (also serves the bare `/admin/` path).
+    #[at("/admin")]
+    AdminRoot,
+    #[at("/admin/")]
     Dashboard,
-    #[at("/db")]
+    #[at("/admin/db")]
     Db,
-    #[at("/queue")]
+    #[at("/admin/queue")]
     Queue,
     #[not_found]
     #[at("/404")]
@@ -106,9 +112,7 @@ fn use_auth() -> AuthHandle {
 pub fn app() -> Html {
     html! {
         <BrowserRouter>
-            <Layout>
-                <AppInner />
-            </Layout>
+            <AppInner />
         </BrowserRouter>
     }
 }
@@ -125,9 +129,12 @@ fn app_inner() -> Html {
 
 fn switch(route: Route) -> Html {
     match route {
-        Route::Dashboard => html! { <pages::Dashboard /> },
-        Route::Db => html! { <pages::Db /> },
-        Route::Queue => html! { <pages::Queue /> },
+        Route::Landing => html! { <pages::Landing /> },
+        Route::AdminRoot | Route::Dashboard => html! {
+            <AdminShell><pages::Dashboard /></AdminShell>
+        },
+        Route::Db => html! { <AdminShell><pages::Db /></AdminShell> },
+        Route::Queue => html! { <AdminShell><pages::Queue /></AdminShell> },
         Route::NotFound => html! { <pages::NotFound /> },
     }
 }

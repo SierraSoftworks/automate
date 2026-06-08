@@ -16,7 +16,7 @@ pub fn layout(props: &LayoutProps) -> Html {
         <>
             <div class="header">
                 <img
-                    src="https://cdn.sierrasoftworks.com/logos/logo.svg"
+                    src="https://cdn.sierrasoftworks.com/logos/icon.svg"
                     alt="The Sierra Softworks logo."
                 />
             </div>

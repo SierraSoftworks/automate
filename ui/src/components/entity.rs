@@ -1,5 +1,7 @@
 use yew::prelude::*;
 
+use super::JsonHighlight;
+
 /// A single labelled metadata fact rendered alongside a [`DbEntity`], such as a
 /// scheduled time or a trace parent.
 #[derive(Clone, PartialEq)]
@@ -23,7 +25,12 @@ pub struct DbEntityProps {
     pub partition: AttrValue,
     /// The entity's key within its partition.
     pub entity_key: AttrValue,
-    /// Labelled metadata facts shown beneath the key (always visible).
+    /// Custom metadata content rendered beneath the key (for example a queue
+    /// timeline), always visible.
+    #[prop_or_default]
+    pub meta: Html,
+    /// Labelled metadata facts revealed alongside the payload when the entity is
+    /// expanded (for example a trace parent).
     #[prop_or_default]
     pub metadata: Vec<EntityMetadata>,
     /// The entity's payload, pretty-printed and revealed only when expanded.
@@ -39,16 +46,11 @@ pub struct DbEntityProps {
 /// expanded.
 #[function_component(DbEntity)]
 pub fn db_entity(props: &DbEntityProps) -> Html {
-    // Render the payload as a pretty-printed string and place it in a text node
-    // so any markup it contains is escaped rather than interpreted.
-    let pretty =
-        serde_json::to_string_pretty(&props.payload).unwrap_or_else(|_| props.payload.to_string());
-
     let metadata = if props.metadata.is_empty() {
         html! {}
     } else {
         html! {
-            <div class="db-entity__meta">
+            <div class="db-entity__meta db-entity__meta--expanded">
                 { for props.metadata.iter().map(|item| html! {
                     <span class="db-entity__meta-item">
                         <span class="db-entity__meta-label">{ item.label.clone() }</span>
@@ -67,37 +69,10 @@ pub fn db_entity(props: &DbEntityProps) -> Html {
                     <span class="db-entity__key">{ props.entity_key.clone() }</span>
                     <div class="db-entity__controls">{ props.children.clone() }</div>
                 </div>
-                { metadata }
+                { props.meta.clone() }
             </summary>
-            <pre class="db-entity__payload"><code>{ pretty }</code></pre>
-        </details>
-    }
-}
-
-#[derive(Properties, PartialEq)]
-pub struct PartitionProps {
-    /// The partition's name.
-    pub name: AttrValue,
-    /// The number of entities contained within the partition.
-    pub count: usize,
-    /// The entities ([`DbEntity`]) belonging to this partition.
-    #[prop_or_default]
-    pub children: Html,
-}
-
-/// A collapsible container grouping the entities of a single partition. It is
-/// collapsed by default and displays a marker with the number of entities it
-/// holds.
-#[function_component(Partition)]
-pub fn partition(props: &PartitionProps) -> Html {
-    html! {
-        <details class="partition">
-            <summary class="partition__summary">
-                <span class="partition__chevron" aria-hidden="true" />
-                <span class="partition__name">{ props.name.clone() }</span>
-                <span class="partition__count">{ props.count }</span>
-            </summary>
-            <div class="partition__entries">{ props.children.clone() }</div>
+            { metadata }
+            <JsonHighlight value={props.payload.clone()} />
         </details>
     }
 }

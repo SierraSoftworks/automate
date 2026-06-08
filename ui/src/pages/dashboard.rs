@@ -1,34 +1,10 @@
 use yew::prelude::*;
 
-use crate::app::AuthHandle;
-use crate::components::{Card, PageHeader};
-use crate::fixtures;
-
-use super::Protected;
+use crate::components::Card;
+use crate::util;
 
 #[function_component(Dashboard)]
 pub fn dashboard() -> Html {
-    html! { <Protected><DashboardContent /></Protected> }
-}
-
-#[function_component(DashboardContent)]
-fn dashboard_content() -> Html {
-    let auth = use_context::<AuthHandle>().expect("AuthHandle context must be provided");
-
-    // Preserve demo mode across navigation: the dashboard cards are plain links
-    // (a full-page navigation), so the `?demo` query must be carried forward.
-    let db_href = if fixtures::is_demo() { "/db?demo" } else { "/db" };
-    let queue_href = if fixtures::is_demo() {
-        "/queue?demo"
-    } else {
-        "/queue"
-    };
-
-    let on_signout = {
-        let signout = auth.signout.clone();
-        Callback::from(move |_: MouseEvent| signout.emit(()))
-    };
-
     let kv_icon = html! {
         <svg
             viewBox="0 0 24 24"
@@ -69,32 +45,19 @@ fn dashboard_content() -> Html {
     };
 
     html! {
-        <div class="admin-content">
-            <PageHeader
-                title="Dashboard"
-                show_back={false}
-                user_name={auth.user.as_ref().map(|u| AttrValue::from(u.name.clone()))}
-                user_email={auth.user.as_ref().and_then(|u| u.email.clone()).map(AttrValue::from)}
-                on_signout={on_signout}
+        <div class="admin-cards">
+            <Card
+                href={util::nav_href("/admin/db")}
+                title="Key-Value Store"
+                description="Browse and manage the persistent key-value state used by collectors and publishers."
+                icon={kv_icon}
             />
-            <p class="admin-intro">
-                { "Inspect the persistent state that drives Automate's workflows. \
-                   Browse the key-value store or the pending job queues below." }
-            </p>
-            <div class="admin-cards">
-                <Card
-                    href={db_href}
-                    title="Key-Value Store"
-                    description="Browse and manage the persistent key-value state used by collectors and publishers."
-                    icon={kv_icon}
-                />
-                <Card
-                    href={queue_href}
-                    title="Queue"
-                    description="Inspect pending jobs, trigger them on demand, or remove them from their queues."
-                    icon={queue_icon}
-                />
-            </div>
+            <Card
+                href={util::nav_href("/admin/queue")}
+                title="Queue"
+                description="Inspect pending jobs, trigger them on demand, or remove them from their queues."
+                icon={queue_icon}
+            />
         </div>
     }
 }
