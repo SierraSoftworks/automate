@@ -1,4 +1,15 @@
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+
+use tokio::sync::Mutex;
+
 use crate::prelude::*;
+
+/// The minimum interval between successive AlphaVantage requests. The free plan
+/// permits at most one request per second, so requests are spaced at least this
+/// far apart. The daily request quota is not enforced here; the general failure
+/// handler retries once that limit is reached.
+const MIN_REQUEST_INTERVAL: Duration = Duration::from_secs(2);
 
 /// A minimal AlphaVantage API client used to fetch stock quotes, company
 /// overviews, and currency exchange rates.
@@ -6,11 +17,16 @@ use crate::prelude::*;
 /// AlphaVantage signals errors (invalid symbols, rate limiting, premium-only
 /// endpoints) with a `200 OK` status and a structured JSON body rather than an
 /// HTTP error, so every response is inspected for those markers.
+///
+/// Requests are rate limited to honour the free plan's one-request-per-second
+/// limit. The limiter is shared across all clones of the client, so cloning the
+/// client (as the per-request helpers do) does not bypass the limit.
 #[derive(Clone)]
 pub struct AlphaVantageClient {
     http_client: reqwest::Client,
     api_key: String,
     base_url: String,
+    rate_limiter: Arc<RateLimiter>,
 }
 
 impl AlphaVantageClient {
@@ -19,6 +35,7 @@ impl AlphaVantageClient {
             http_client,
             api_key: api_key.into(),
             base_url: "https://www.alphavantage.co".to_string(),
+            rate_limiter: Arc::new(RateLimiter::new(MIN_REQUEST_INTERVAL)),
         }
     }
 
@@ -32,7 +49,16 @@ impl AlphaVantageClient {
             http_client,
             api_key: api_key.into(),
             base_url: base_url.into(),
+            rate_limiter: Arc::new(RateLimiter::new(MIN_REQUEST_INTERVAL)),
         }
+    }
+
+    /// Overrides the minimum interval between requests. Used by tests to keep
+    /// rate-limiting assertions fast.
+    #[cfg(test)]
+    pub fn with_min_request_interval(mut self, interval: Duration) -> Self {
+        self.rate_limiter = Arc::new(RateLimiter::new(interval));
+        self
     }
 
     /// Fetches the latest price for a ticker symbol via the `GLOBAL_QUOTE`
@@ -189,6 +215,10 @@ impl AlphaVantageClient {
         let mut query = params.to_vec();
         query.push(("apikey", &self.api_key));
 
+        // Honour the free plan's one-request-per-second limit before issuing
+        // the request.
+        self.rate_limiter.acquire().await;
+
         let response = self
             .http_client
             .get(&url)
@@ -238,6 +268,41 @@ impl AlphaVantageClient {
         }
 
         Ok(body)
+    }
+}
+
+/// A simple asynchronous rate limiter that spaces successive operations at
+/// least `min_interval` apart. Multiple callers serialise on the internal
+/// mutex, so concurrent requests queue up rather than racing.
+struct RateLimiter {
+    min_interval: Duration,
+    last_request: Mutex<Option<Instant>>,
+}
+
+impl RateLimiter {
+    fn new(min_interval: Duration) -> Self {
+        Self {
+            min_interval,
+            last_request: Mutex::new(None),
+        }
+    }
+
+    /// Waits until enough time has elapsed since the previous call to keep
+    /// successive requests at least `min_interval` apart, then records the
+    /// current time as the most recent request. The mutex is held across the
+    /// wait so concurrent callers are spaced out rather than all proceeding at
+    /// once.
+    async fn acquire(&self) {
+        let mut last_request = self.last_request.lock().await;
+
+        if let Some(previous) = *last_request {
+            let elapsed = previous.elapsed();
+            if elapsed < self.min_interval {
+                tokio::time::sleep(self.min_interval - elapsed).await;
+            }
+        }
+
+        *last_request = Some(Instant::now());
     }
 }
 
@@ -360,5 +425,33 @@ mod tests {
 
         let rate = client.exchange_rate(&services, "usd", "USD").await.unwrap();
         assert_eq!(rate, 1.0);
+    }
+
+    #[tokio::test]
+    async fn requests_are_rate_limited() {
+        let server = mock_alphavantage(
+            "GLOBAL_QUOTE",
+            r#"{"Global Quote":{"01. symbol":"MSFT","05. price":"1.0000"}}"#,
+        )
+        .await;
+        let services = mock_services().await.unwrap();
+        let interval = Duration::from_millis(200);
+        let client = AlphaVantageClient::new_with_url(services.http_client(), "demo", server.uri())
+            .with_min_request_interval(interval);
+
+        // The first request proceeds immediately; the next two must each wait
+        // for the interval to elapse, so three requests take at least two
+        // intervals in total.
+        let start = Instant::now();
+        for _ in 0..3 {
+            client.get(&[("function", "GLOBAL_QUOTE")]).await.unwrap();
+        }
+        let elapsed = start.elapsed();
+
+        assert!(
+            elapsed >= interval * 2,
+            "expected at least {:?} to elapse across three requests, got {elapsed:?}",
+            interval * 2
+        );
     }
 }
