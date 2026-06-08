@@ -66,6 +66,30 @@ pub fn kv_entries() -> Vec<KeyValueEntry> {
                 "etag": "\"a1b2c3\""
             }),
         ),
+        // Cached entries wrap their payload in a `value`/`expires_at` envelope.
+        // This one is still fresh (expires in the future).
+        KeyValueEntry::new(
+            "alphavantage/quote",
+            "MSFT",
+            json!({
+                "value": 423.85,
+                "expires_at": (chrono::Utc::now() + Duration::hours(6)).to_rfc3339()
+            }),
+        ),
+        // An expired cache entry (its `expires_at` is in the past).
+        KeyValueEntry::new(
+            "oidc:discovery",
+            "https://accounts.google.com",
+            json!({
+                "value": {
+                    "issuer": "https://accounts.google.com",
+                    "authorization_endpoint": "https://accounts.google.com/o/oauth2/v2/auth",
+                    "token_endpoint": "https://oauth2.googleapis.com/token",
+                    "jwks_uri": "https://www.googleapis.com/oauth2/v3/certs"
+                },
+                "expires_at": (chrono::Utc::now() - Duration::minutes(30)).to_rfc3339()
+            }),
+        ),
     ]
 }
 
