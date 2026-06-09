@@ -57,18 +57,19 @@ fn to_display(msg: &QueueMessage) -> QueueMessageDisplay {
 }
 
 /// Groups the queued messages into [`BrowserPartition`]s of kind `queue`,
-/// preserving the schedule order within each partition. Each message is rendered
-/// with a schedule/availability/state timeline plus trigger and delete controls.
+/// ordering messages by their idempotency key within each partition. Each
+/// message is rendered with a schedule/availability/state timeline plus trigger
+/// and delete controls.
 pub fn queue_partitions(
     messages: &[QueueMessage],
     on_trigger: &Callback<(String, String, serde_json::Value)>,
     on_delete: &Callback<(String, String)>,
 ) -> Vec<BrowserPartition> {
     let mut display: Vec<QueueMessageDisplay> = messages.iter().map(to_display).collect();
-    display.sort_by(|a, b| a.scheduled_at.cmp(&b.scheduled_at));
+    display.sort_by(|a, b| a.key.cmp(&b.key));
 
-    // Group by partition (alphabetically), preserving the schedule order within
-    // each partition.
+    // Group by partition (alphabetically), preserving the idempotency-key order
+    // within each partition.
     let mut groups: BTreeMap<String, Vec<QueueMessageDisplay>> = BTreeMap::new();
     for msg in display {
         groups.entry(msg.partition.clone()).or_default().push(msg);
