@@ -94,7 +94,7 @@ impl Job for RssWorkflow {
                     title: format!(
                         "[{}]({}): {}",
                         &job.name,
-                        urlencoding::encode(&item.links[0].href),
+                        &item.links[0].href,
                         item.title
                             .as_ref()
                             .map(|t| t.content.as_str())
