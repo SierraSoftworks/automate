@@ -27,8 +27,14 @@ fn current_path() -> String {
 /// Begins the login flow by navigating the browser to the agent's login
 /// endpoint, preserving the current location as the post-login destination.
 pub fn begin_login() {
-    let return_to = current_path();
-    let encoded: String = js_sys::encode_uri_component(&return_to).into();
+    begin_login_to(&current_path());
+}
+
+/// Begins the login flow, returning the user to `return_to` once they have
+/// authenticated. Used to send a visitor straight into the OIDC flow with the
+/// admin area as their destination, skipping an intermediate sign-in screen.
+pub fn begin_login_to(return_to: &str) {
+    let encoded: String = js_sys::encode_uri_component(return_to).into();
     let url = format!("/api/v1/auth/login?return_to={encoded}");
     let _ = window().location().set_href(&url);
 }
