@@ -4,6 +4,7 @@ mod auth;
 mod components;
 mod fixtures;
 mod pages;
+mod search;
 mod util;
 
 pub use app::Route;

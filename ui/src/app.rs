@@ -18,15 +18,11 @@ pub enum Route {
     /// The public landing page.
     #[at("/")]
     Landing,
-    /// The admin dashboard (also serves the bare `/admin/` path).
+    /// The unified admin browser (also serves the bare `/admin/` path).
     #[at("/admin")]
     AdminRoot,
     #[at("/admin/")]
-    Dashboard,
-    #[at("/admin/db")]
-    Db,
-    #[at("/admin/queue")]
-    Queue,
+    Admin,
     #[not_found]
     #[at("/404")]
     NotFound,
@@ -130,11 +126,9 @@ fn app_inner() -> Html {
 fn switch(route: Route) -> Html {
     match route {
         Route::Landing => html! { <pages::Landing /> },
-        Route::AdminRoot | Route::Dashboard => html! {
-            <AdminShell><pages::Dashboard /></AdminShell>
+        Route::AdminRoot | Route::Admin => html! {
+            <AdminShell><pages::Admin /></AdminShell>
         },
-        Route::Db => html! { <AdminShell><pages::Db /></AdminShell> },
-        Route::Queue => html! { <AdminShell><pages::Queue /></AdminShell> },
         Route::NotFound => html! { <pages::NotFound /> },
     }
 }
