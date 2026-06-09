@@ -101,7 +101,7 @@ impl IncrementalCollector for GitHubReleasesCollector {
     }
 
     fn key(&self) -> std::borrow::Cow<'static, str> {
-        std::borrow::Cow::Owned(self.api_url.clone())
+        std::borrow::Cow::Owned(format!("{}/repos/{}/releases", self.api_url, self.repo))
     }
 
     #[instrument(
@@ -610,5 +610,21 @@ mod tests {
             crate::filter::FilterValue::Bool(true)
         );
         assert_eq!(item.get("unknown"), crate::filter::FilterValue::Null);
+    }
+
+    #[test]
+    fn test_github_releases_key_is_scoped_per_repo() {
+        let one = GitHubReleasesCollector::new_with_url("https://api.github.com", "example/one");
+        let two = GitHubReleasesCollector::new_with_url("https://api.github.com", "example/two");
+
+        assert_eq!(
+            one.key(),
+            "https://api.github.com/repos/example/one/releases"
+        );
+        assert_ne!(
+            one.key(),
+            two.key(),
+            "Collectors for different repositories must use distinct keys so their watermarks do not collide."
+        );
     }
 }
