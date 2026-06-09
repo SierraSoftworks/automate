@@ -93,7 +93,7 @@ pub fn kv_partitions(
     groups
         .into_iter()
         .map(|(partition, mut entries)| {
-            entries.sort_by(|a, b| a.0.cmp(&b.0));
+            entries.sort_by(|a, b| b.0.cmp(&a.0));
             let entries = entries
                 .into_iter()
                 .map(|(key, value)| {
