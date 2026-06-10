@@ -183,7 +183,7 @@ jobs:
 
       - name: Install protoc
         if: matrix.builder != 'cross'
-        uses: arduino/setup-protoc@v3
+        uses: SierraSoftworks/setup-protoc@v3.0.1
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
 
