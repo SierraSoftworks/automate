@@ -187,6 +187,13 @@ jobs:
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Install Cross
+        if: matrix.builder == 'cross'
+        shell: bash
+        run: |
+          curl -L --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/cargo-bins/cargo-binstall/main/install-from-binstall-release.sh | bash
+          cargo binstall --no-confirm cross
+
       - name: Setup Cache
         uses: Swatinem/rust-cache@v2
 
@@ -201,13 +208,6 @@ jobs:
         with:
           name: ui-dist
           path: ui/dist
-
-      - name: Install Cross
-        if: matrix.builder == 'cross'
-        shell: bash
-        run: |
-          curl -L --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/cargo-bins/cargo-binstall/main/install-from-binstall-release.sh | bash
-          cargo binstall --no-confirm cross
 
       - name: cargo build
         run: ${{ matrix.builder }} build --release --target ${{ matrix.target }} ${{ matrix.cargo-flags }}
