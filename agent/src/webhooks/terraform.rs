@@ -100,7 +100,7 @@ impl Job for TerraformWebhook {
                                 .join("\n"),
                         ),
                         priority: Some(payload.priority()),
-                        due: crate::publishers::TodoistDueDate::None,
+                        due: crate::publishers::TodoistDueDate::DateTime(ctx.scheduled_at()),
                         config: services
                             .config()
                             .connections
@@ -126,7 +126,7 @@ impl Job for TerraformWebhook {
                             ])?
                         )),
                         priority: Some(payload.priority()),
-                        due: crate::publishers::TodoistDueDate::None,
+                        due: crate::publishers::TodoistDueDate::DateTime(ctx.scheduled_at()),
                         config: services
                             .config()
                             .connections
