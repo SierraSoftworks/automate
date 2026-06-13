@@ -50,12 +50,12 @@ pub struct GitHubReleaseItem {
 }
 
 impl Filterable for GitHubReleaseItem {
-    fn get(&self, key: &str) -> crate::filter::FilterValue {
+    fn get(&self, key: &str) -> crate::filter::FilterValue<'_> {
         match key {
-            "tag" => self.tag_name.clone().into(),
-            "name" => self.name.clone().into(),
+            "tag" => self.tag_name.as_str().into(),
+            "name" => self.name.as_str().into(),
             "published" => self.published_at.to_rfc3339().into(),
-            "link" => self.html_url.clone().into(),
+            "link" => self.html_url.as_str().into(),
             "draft" => self.draft.into(),
             "prerelease" => self.prerelease.into(),
             _ => crate::filter::FilterValue::Null,
@@ -590,18 +590,15 @@ mod tests {
             html_url: "https://github.com/example/repo/releases/tag/v1.0.0".to_string(),
         };
 
-        assert_eq!(
-            item.get("tag"),
-            crate::filter::FilterValue::String("v1.0.0".to_string())
-        );
+        assert_eq!(item.get("tag"), crate::filter::FilterValue::from("v1.0.0"));
         assert_eq!(
             item.get("name"),
-            crate::filter::FilterValue::String("Test Release".to_string())
+            crate::filter::FilterValue::from("Test Release")
         );
         assert_eq!(
             item.get("link"),
-            crate::filter::FilterValue::String(
-                "https://github.com/example/repo/releases/tag/v1.0.0".to_string()
+            crate::filter::FilterValue::from(
+                "https://github.com/example/repo/releases/tag/v1.0.0"
             )
         );
         assert_eq!(item.get("draft"), crate::filter::FilterValue::Bool(false));

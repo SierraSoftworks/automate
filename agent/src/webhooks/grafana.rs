@@ -239,19 +239,19 @@ pub struct GrafanaAlertPayload {
 }
 
 impl Filterable for GrafanaAlertPayload {
-    fn get(&self, key: &str) -> FilterValue {
+    fn get(&self, key: &str) -> FilterValue<'_> {
         match key {
-            "receiver" => self.receiver.clone().into(),
+            "receiver" => self.receiver.as_str().into(),
             "status" => format!("{}", self.status).into(),
             "org_id" => self.org_id.into(),
-            "title" => self.title.clone().into(),
+            "title" => self.title.as_str().into(),
             "state" => format!("{}", self.state).into(),
-            "message" => self.message.clone().into(),
+            "message" => self.message.as_str().into(),
             "alerts.status" => self
                 .alerts
                 .iter()
                 .map(|a| format!("{}", a.status).into())
-                .collect::<Vec<FilterValue>>()
+                .collect::<Vec<_>>()
                 .into(),
             _ => FilterValue::Null,
         }
