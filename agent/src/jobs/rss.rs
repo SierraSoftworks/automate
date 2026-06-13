@@ -130,7 +130,7 @@ impl Job for RssWorkflow {
 struct RssEntryFilter<'a>(&'a feed_rs::model::Entry);
 
 impl<'a> Filterable for RssEntryFilter<'a> {
-    fn get(&self, key: &str) -> crate::filter::FilterValue {
+    fn get(&self, key: &str) -> crate::filter::FilterValue<'_> {
         match key {
             "title" => self
                 .0

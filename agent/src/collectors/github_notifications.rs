@@ -273,16 +273,16 @@ pub struct GitHubNotificationsItem {
 }
 
 impl Filterable for GitHubNotificationsItem {
-    fn get(&self, key: &str) -> crate::filter::FilterValue {
+    fn get(&self, key: &str) -> crate::filter::FilterValue<'_> {
         match key {
             "reason" => serde_json::to_string(&self.reason)
                 .unwrap_or_default()
                 .into(),
-            "repository.name" => self.repository.name.clone().into(),
-            "repository.full_name" => self.repository.full_name.clone().into(),
-            "repository.owner" => self.repository.owner.login.clone().into(),
-            "subject.title" => self.subject.title.clone().into(),
-            "subject.type" => self.subject.type_.clone().into(),
+            "repository.name" => self.repository.name.as_str().into(),
+            "repository.full_name" => self.repository.full_name.as_str().into(),
+            "repository.owner" => self.repository.owner.login.as_str().into(),
+            "subject.title" => self.subject.title.as_str().into(),
+            "subject.type" => self.subject.type_.as_str().into(),
 
             "unread" => self.unread.into(),
             _ => crate::filter::FilterValue::Null,

@@ -359,6 +359,7 @@ dependencies = [
  "croner",
  "dotenvy",
  "feed-rs",
+ "filt-rs",
  "futures",
  "futures-concurrency",
  "hex",
@@ -1184,6 +1185,16 @@ dependencies = [
  "siphasher",
  "url",
  "uuid",
+]
+
+[[package]]
+name = "filt-rs"
+version = "1.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "09b729c44478072040180e720cd278664aeb425bbfe17f6ce00b94b958b09d7c"
+dependencies = [
+ "human-errors",
+ "serde",
 ]
 
 [[package]]

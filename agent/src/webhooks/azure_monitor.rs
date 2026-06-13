@@ -111,20 +111,20 @@ pub struct CommonAlertSchema {
 }
 
 impl Filterable for CommonAlertSchema {
-    fn get(&self, key: &str) -> crate::filter::FilterValue {
+    fn get(&self, key: &str) -> FilterValue<'_> {
         match key {
-            "alert_id" => self.data.essentials.alert_id.clone().into(),
-            "alert_rule" => self.data.essentials.alert_rule.clone().into(),
+            "alert_id" => self.data.essentials.alert_id.as_str().into(),
+            "alert_rule" => self.data.essentials.alert_rule.as_str().into(),
             "severity" => (&self.data.essentials.severity).into(),
             "monitor_condition" => (&self.data.essentials.monitor_condition).into(),
-            "monitor_service" => self.data.essentials.monitor_service.clone().into(),
+            "monitor_service" => self.data.essentials.monitor_service.as_str().into(),
             "alert_target_ids" => self
                 .data
                 .essentials
                 .alert_target_ids
                 .iter()
-                .map(|s| s.clone().into())
-                .collect::<Vec<FilterValue>>()
+                .map(|s| s.as_str().into())
+                .collect::<Vec<_>>()
                 .into(),
             _ => FilterValue::Null,
         }
@@ -194,7 +194,7 @@ impl CommonAlertSchemaSeverity {
     }
 }
 
-impl From<&CommonAlertSchemaSeverity> for FilterValue {
+impl<'a> From<&CommonAlertSchemaSeverity> for FilterValue<'a> {
     fn from(value: &CommonAlertSchemaSeverity) -> Self {
         match value {
             CommonAlertSchemaSeverity::Sev0 => 0.into(),
@@ -212,7 +212,7 @@ pub enum CommonAlertSchemaMonitorCondition {
     Resolved,
 }
 
-impl From<&CommonAlertSchemaMonitorCondition> for FilterValue {
+impl<'a> From<&CommonAlertSchemaMonitorCondition> for FilterValue<'a> {
     fn from(value: &CommonAlertSchemaMonitorCondition) -> Self {
         match value {
             CommonAlertSchemaMonitorCondition::Fired => "fired".into(),

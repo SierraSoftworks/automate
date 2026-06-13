@@ -141,11 +141,11 @@ pub struct AdminRequestFilter<'a> {
 }
 
 impl Filterable for AdminRequestFilter<'_> {
-    fn get(&self, key: &str) -> FilterValue {
+    fn get(&self, key: &str) -> FilterValue<'_> {
         match key {
             "method" => self.method.into(),
             "path" => self.path.into(),
-            "client_ip" => self.client_ip.clone().into(),
+            "client_ip" => self.client_ip.as_deref().into(),
             key if key.starts_with("headers.") => {
                 let header_name = &key["headers.".len()..];
                 match self.headers.get(header_name) {
@@ -159,7 +159,7 @@ impl Filterable for AdminRequestFilter<'_> {
             key if key.starts_with("claims.") => {
                 let claim_name = &key["claims.".len()..];
                 match self.claims.and_then(|c| c.get(claim_name)) {
-                    Some(value) => FilterValue::from(value),
+                    Some(value) => crate::filter::json_to_filter_value(value),
                     None => FilterValue::Null,
                 }
             }

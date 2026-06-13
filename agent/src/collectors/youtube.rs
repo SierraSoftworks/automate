@@ -17,11 +17,11 @@ pub struct YouTubeItem {
 }
 
 impl Filterable for YouTubeItem {
-    fn get(&self, key: &str) -> crate::filter::FilterValue {
+    fn get(&self, key: &str) -> crate::filter::FilterValue<'_> {
         match key {
-            "channel" => self.channel.clone().into(),
-            "title" => self.title.clone().into(),
-            "link" => self.link.clone().into(),
+            "channel" => self.channel.as_str().into(),
+            "title" => self.title.as_str().into(),
+            "link" => self.link.as_str().into(),
             _ => crate::filter::FilterValue::Null,
         }
     }

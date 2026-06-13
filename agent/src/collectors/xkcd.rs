@@ -18,10 +18,10 @@ pub struct XkcdItem {
 }
 
 impl Filterable for XkcdItem {
-    fn get(&self, key: &str) -> crate::filter::FilterValue {
+    fn get(&self, key: &str) -> crate::filter::FilterValue<'_> {
         match key {
-            "title" => self.title.clone().into(),
-            "url" => self.url.clone().into(),
+            "title" => self.title.as_str().into(),
+            "url" => self.url.as_str().into(),
             "has_image" => self.image_url.is_some().into(),
             _ => crate::filter::FilterValue::Null,
         }
