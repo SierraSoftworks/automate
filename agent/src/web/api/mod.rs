@@ -20,6 +20,7 @@ use crate::prelude::*;
 use crate::web::helpers::oidc::{
     AdminRequestFilter, admin_user_from_claims, filterable_claims, validate_token,
 };
+use crate::web::helpers::request::client_ip;
 
 mod auth;
 mod kv;
@@ -159,7 +160,7 @@ pub async fn api_auth<S: Services + Send + Sync + 'static>(
     let filter = AdminRequestFilter {
         method: req.method().as_str(),
         path: req.path(),
-        client_ip: req.peer_addr().map(|addr| addr.ip().to_string()),
+        client_ip: client_ip(config.web.trust_proxy, req.headers(), req.peer_addr()),
         headers: req.headers(),
         claims: filterable.as_ref(),
     };
@@ -167,13 +168,15 @@ pub async fn api_auth<S: Services + Send + Sync + 'static>(
     let allowed = admin.acl.matches(&filter).unwrap_or(false);
 
     if !allowed {
-        let status = if claims.is_some() {
-            actix_web::http::StatusCode::FORBIDDEN
-        } else {
-            actix_web::http::StatusCode::UNAUTHORIZED
-        };
+        // We only reach the ACL check after authentication has already been
+        // resolved: either OIDC is configured and the session validated above, or
+        // OIDC is disabled and there is nothing to sign in to. In both cases a
+        // denial here is a permanent authorization failure, so respond `403`.
+        // Returning `401` would tell the browser to start a sign-in that cannot
+        // change the outcome — and, when OIDC is disabled, would leave the admin
+        // UI bouncing through a sign-in flow that goes nowhere.
         return Ok(req.into_response(json_error(
-            status,
+            actix_web::http::StatusCode::FORBIDDEN,
             "Your account is not permitted to access this resource.",
         )));
     }
@@ -184,21 +187,126 @@ pub async fn api_auth<S: Services + Send + Sync + 'static>(
     next.call(req).await
 }
 
-/// Validates the double-submit CSRF token: the `X-CSRF-Token` header must be
-/// present, non-empty, and equal to the `automate_csrf` cookie value.
+/// Compares the two halves of a double-submit CSRF token: they must both be
+/// present, non-empty, and equal.
+fn csrf_tokens_match(header: Option<&str>, cookie: Option<&str>) -> bool {
+    matches!((header, cookie), (Some(h), Some(c)) if !h.is_empty() && h == c)
+}
+
+/// Validates the double-submit CSRF token on a [`ServiceRequest`]: the
+/// `X-CSRF-Token` header must equal the `automate_csrf` cookie. Used by the
+/// [`api_auth`] middleware.
 fn csrf_ok(req: &ServiceRequest) -> bool {
-    let header = req
-        .headers()
-        .get(CSRF_HEADER)
-        .and_then(|v| v.to_str().ok())
-        .map(str::to_string);
+    let cookie = req.cookie(CSRF_COOKIE);
+    csrf_tokens_match(
+        req.headers().get(CSRF_HEADER).and_then(|v| v.to_str().ok()),
+        cookie.as_ref().map(|c: &Cookie| c.value()),
+    )
+}
 
-    let cookie = req
-        .cookie(CSRF_COOKIE)
-        .map(|c: Cookie| c.value().to_string());
+/// Validates the double-submit CSRF token on an [`actix_web::HttpRequest`]. Used
+/// by the public logout handler, which sits outside the [`api_auth`] middleware
+/// and so must perform the check itself.
+pub(crate) fn csrf_ok_request(req: &actix_web::HttpRequest) -> bool {
+    let cookie = req.cookie(CSRF_COOKIE);
+    csrf_tokens_match(
+        req.headers().get(CSRF_HEADER).and_then(|v| v.to_str().ok()),
+        cookie.as_ref().map(|c: &Cookie| c.value()),
+    )
+}
 
-    match (header, cookie) {
-        (Some(header), Some(cookie)) => !header.is_empty() && header == cookie,
-        _ => false,
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use actix_web::http::StatusCode;
+    use actix_web::{App, cookie::Cookie as TestCookie, test, web};
+
+    use crate::config::Config;
+    use crate::db::SqliteDatabase;
+    use crate::filter::Filter;
+    use crate::services::ServicesContainer;
+
+    /// Builds a services container with OIDC disabled and the given admin ACL.
+    async fn service_with_acl(acl: &str) -> ServicesContainer<SqliteDatabase> {
+        let db = SqliteDatabase::open_in_memory().await.unwrap();
+        let mut config = Config::default();
+        config.web.admin.acl = Filter::new(acl).unwrap();
+        ServicesContainer::new(config, db)
+    }
+
+    #[actix_web::test]
+    async fn acl_denial_without_oidc_is_forbidden_not_unauthorized() {
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(service_with_acl("false").await))
+                .service(configure::<ServicesContainer<SqliteDatabase>>()),
+        )
+        .await;
+
+        let req = test::TestRequest::get().uri("/api/v1/me").to_request();
+        let resp = test::call_service(&app, req).await;
+
+        // A denial while OIDC is disabled is permanent — there is nothing to sign
+        // in to — so it must be a 403, never a 401 that would send the admin UI
+        // into a sign-in flow that can never succeed.
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[actix_web::test]
+    async fn acl_allow_without_oidc_reports_no_signed_in_user() {
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(service_with_acl("true").await))
+                .service(configure::<ServicesContainer<SqliteDatabase>>()),
+        )
+        .await;
+
+        let req = test::TestRequest::get().uri("/api/v1/me").to_request();
+        let resp = test::call_service(&app, req).await;
+
+        assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+    }
+
+    #[actix_web::test]
+    async fn mutating_request_without_csrf_is_rejected() {
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(service_with_acl("true").await))
+                .service(configure::<ServicesContainer<SqliteDatabase>>()),
+        )
+        .await;
+
+        let req = test::TestRequest::delete()
+            .uri("/api/v1/kv/cache?key=foo")
+            .to_request();
+        let resp = test::call_service(&app, req).await;
+
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[actix_web::test]
+    async fn logout_requires_a_matching_csrf_token() {
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(service_with_acl("true").await))
+                .service(configure::<ServicesContainer<SqliteDatabase>>()),
+        )
+        .await;
+
+        // No CSRF token: rejected, so a cross-site POST cannot force a logout.
+        let req = test::TestRequest::post()
+            .uri("/api/v1/auth/logout")
+            .to_request();
+        let resp = test::call_service(&app, req).await;
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+
+        // A matching double-submit header and cookie: accepted.
+        let req = test::TestRequest::post()
+            .uri("/api/v1/auth/logout")
+            .cookie(TestCookie::new(CSRF_COOKIE, "tok"))
+            .insert_header((CSRF_HEADER, "tok"))
+            .to_request();
+        let resp = test::call_service(&app, req).await;
+        assert_eq!(resp.status(), StatusCode::NO_CONTENT);
     }
 }

@@ -144,10 +144,11 @@ pub struct AdminConfig {
     #[serde(default = "default_admin_acl")]
     pub acl: Filter,
 
-    /// Optional OIDC configuration. When present, requests to the admin API
-    /// must include an `Authorization: Bearer <id_token>` header holding a valid
-    /// ID token issued by the configured provider; the browser obtains this
-    /// token via the Authorization Code + PKCE flow.
+    /// Optional OIDC configuration. When present, requests to the admin API must
+    /// carry a valid session cookie (`automate_session`) holding an ID token
+    /// issued by the configured provider. The agent drives the entire
+    /// Authorization Code + PKCE flow server-side and sets the cookie; the browser
+    /// never handles tokens.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub oidc: Option<OidcConfig>,
 }

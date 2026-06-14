@@ -13,9 +13,11 @@
 //! resulting ID token is stored in an `HttpOnly` session cookie rather than ever
 //! being exposed to JavaScript.
 //!
-//! The provider's discovery document and signing keys (JWKS) are cached for an
-//! hour via [`crate::db::Cache`] so that we avoid hitting the provider on every
-//! request while still picking up key rotations in a timely fashion.
+//! The provider's discovery document is cached for an hour via
+//! [`crate::db::Cache`] to avoid hitting the provider on every request. The
+//! signing keys (JWKS) are cached for longer (24 hours) because key rotations are
+//! picked up on demand: [`validate_token`] refetches the JWKS when a token
+//! presents an unrecognised `kid`.
 
 use actix_web::http::header::HeaderMap;
 use base64::Engine;
@@ -45,6 +47,17 @@ const ADVICE_PROVIDER: &[&str] = &[
     "Ensure that the `web.admin.oidc.endpoint` points at a valid OIDC provider.",
     "Check that the provider is reachable from this server.",
 ];
+
+/// Cache partition holding the provider's discovery document.
+const DISCOVERY_CACHE_PARTITION: &str = "oidc:discovery";
+
+/// Cache partition holding the provider's signing keys (JWKS).
+const JWKS_CACHE_PARTITION: &str = "oidc:jwks";
+
+/// How long the provider's signing keys (JWKS) are cached. Key rotations are
+/// handled on demand — [`validate_token`] refetches when a token presents an
+/// unknown `kid` — so a long TTL does not risk locking out valid sessions.
+const JWKS_CACHE_TTL_HOURS: i64 = 24;
 
 /// The subset of the OIDC discovery document we rely upon.
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
@@ -181,7 +194,7 @@ pub async fn discovery<S: Services>(
     services
         .cache()
         .cached(
-            "oidc:discovery",
+            DISCOVERY_CACHE_PARTITION,
             endpoint,
             move || {
                 Box::pin(async move {
@@ -215,19 +228,36 @@ pub async fn discovery<S: Services>(
 }
 
 /// Fetches and caches the JSON Web Key Set used to verify token signatures.
+///
+/// When `force_refresh` is set, any cached key set is dropped first so the
+/// provider is queried afresh. This is used when a token presents a `kid` we
+/// don't recognise — typically because the provider has rotated its signing keys
+/// since we last cached them — so that a rotation doesn't lock out otherwise
+/// valid sessions until the cache expires.
 #[instrument("web.oidc.jwks", skip(services, discovery), err(Display))]
 async fn jwks<S: Services>(
     services: &S,
     discovery: &OidcDiscovery,
+    force_refresh: bool,
 ) -> Result<jsonwebtoken::jwk::JwkSet, human_errors::Error> {
     let jwks_uri = discovery.jwks_uri.clone();
+
+    if force_refresh {
+        // `services.cache()` and `services.kv()` are the same store, so removing
+        // the cache entry here forces the `cached` call below to rebuild it.
+        services
+            .kv()
+            .remove(JWKS_CACHE_PARTITION, jwks_uri.clone())
+            .await?;
+    }
+
     let fetch_uri = jwks_uri.clone();
     let http_client = services.http_client();
 
     services
         .cache()
         .cached(
-            "oidc:jwks",
+            JWKS_CACHE_PARTITION,
             jwks_uri,
             move || {
                 Box::pin(async move {
@@ -254,7 +284,7 @@ async fn jwks<S: Services>(
                     Ok(keys)
                 })
             },
-            chrono::Duration::hours(1),
+            chrono::Duration::hours(JWKS_CACHE_TTL_HOURS),
         )
         .await
 }
@@ -270,9 +300,31 @@ pub async fn validate_token<S: Services>(
     token: &str,
 ) -> Result<serde_json::Map<String, serde_json::Value>, human_errors::Error> {
     let discovery = discovery(services, oidc).await?;
-    let key_set = jwks(services, &discovery).await?;
+    let key_set = jwks(services, &discovery, false).await?;
+
+    // If the token's signing key isn't in the cached JWKS, the provider may have
+    // rotated its keys since we cached them. Refetch once, bypassing the cache,
+    // before rejecting the token so that a key rotation doesn't lock out
+    // otherwise valid sessions for the lifetime of the cache entry.
+    let key_set = if needs_jwks_refresh(&key_set, token) {
+        jwks(services, &discovery, true).await?
+    } else {
+        key_set
+    };
 
     verify_token(&oidc.client_id, &discovery.issuer, &key_set, token)
+}
+
+/// Returns `true` when the token names a signing key (`kid`) that is absent from
+/// the supplied key set, indicating the cached JWKS may be stale (for example
+/// after the provider rotates its keys). A token that cannot be decoded, or one
+/// without a `kid`, returns `false` so the verification path surfaces the real
+/// error rather than triggering a pointless refetch.
+fn needs_jwks_refresh(key_set: &jsonwebtoken::jwk::JwkSet, token: &str) -> bool {
+    match jsonwebtoken::decode_header(token).ok().and_then(|h| h.kid) {
+        Some(kid) => key_set.find(&kid).is_none(),
+        None => false,
+    }
 }
 
 /// Verifies an ID token against a known JWKS, audience, and issuer. This is the
@@ -560,6 +612,83 @@ mod tests {
     fn verify_token_rejects_malformed_tokens() {
         let keys = jsonwebtoken::jwk::JwkSet { keys: vec![] };
         let result = verify_token("client", "https://idp.example.com", &keys, "not-a-jwt");
+        assert!(result.is_err());
+    }
+
+    /// Crafts a token whose header advertises an asymmetric algorithm and the
+    /// given `kid`, with an unverifiable signature. This is enough to exercise the
+    /// header-only `kid` inspection in [`needs_jwks_refresh`].
+    fn rs256_token_with_kid(kid: &str) -> String {
+        use base64::Engine;
+        let mut header = jsonwebtoken::Header::new(jsonwebtoken::Algorithm::RS256);
+        header.kid = Some(kid.to_string());
+        let claims = serde_json::json!({ "sub": "user-1" });
+        let engine = base64::engine::general_purpose::URL_SAFE_NO_PAD;
+        let header_segment = engine.encode(serde_json::to_vec(&header).unwrap());
+        let claims_segment = engine.encode(serde_json::to_vec(&claims).unwrap());
+        format!("{header_segment}.{claims_segment}.sig")
+    }
+
+    #[test]
+    fn needs_jwks_refresh_only_for_unknown_kid() {
+        let empty = jsonwebtoken::jwk::JwkSet { keys: vec![] };
+
+        // A token naming a key absent from the set should trigger a refresh.
+        assert!(needs_jwks_refresh(&empty, &rs256_token_with_kid("rotated")));
+
+        // A token we can't decode, or one without a `kid`, should not.
+        assert!(!needs_jwks_refresh(&empty, "not-a-jwt"));
+        assert!(!needs_jwks_refresh(&empty, &hs256_token(None)));
+    }
+
+    #[tokio::test]
+    async fn validate_token_refetches_jwks_on_unknown_kid() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+
+        let discovery_body = serde_json::json!({
+            "issuer": server.uri(),
+            "authorization_endpoint": format!("{}/authorize", server.uri()),
+            "token_endpoint": format!("{}/token", server.uri()),
+            "jwks_uri": format!("{}/jwks", server.uri()),
+        });
+        Mock::given(method("GET"))
+            .and(path("/.well-known/openid-configuration"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(discovery_body))
+            .mount(&server)
+            .await;
+
+        // The JWKS never contains the token's key. We expect it to be fetched
+        // twice: once on the initial cache-miss read, and once more after the
+        // unknown `kid` forces a cache-bypassing refetch. The `.expect(2)` is
+        // verified when the server is dropped at the end of the test.
+        Mock::given(method("GET"))
+            .and(path("/jwks"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({ "keys": [] })),
+            )
+            .expect(2)
+            .mount(&server)
+            .await;
+
+        let db = crate::db::SqliteDatabase::open_in_memory().await.unwrap();
+        let mut config = crate::config::Config::default();
+        config.web.admin.oidc = Some(crate::config::OidcConfig {
+            endpoint: server.uri(),
+            client_id: "client".to_string(),
+            client_secret: "secret".to_string(),
+            scopes: vec![],
+        });
+        let services = crate::services::ServicesContainer::new(config, db);
+        let oidc = services.config().web.admin.oidc.clone().unwrap();
+
+        let token = rs256_token_with_kid("rotated");
+        let result = validate_token(&services, &oidc, &token).await;
+
+        // Verification can't succeed against an empty JWKS, but the refetch must
+        // have been attempted (asserted via the mock's expected hit count).
         assert!(result.is_err());
     }
 }

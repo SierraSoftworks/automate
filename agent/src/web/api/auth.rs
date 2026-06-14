@@ -248,7 +248,19 @@ pub async fn auth_callback<S: Services>(
 }
 
 /// `POST /api/v1/auth/logout` — clears the session cookie.
-pub async fn auth_logout() -> HttpResponse {
+///
+/// Logout lives in the public `/auth` scope, outside the [`super::api_auth`]
+/// middleware that guards the rest of the API, so it enforces the double-submit
+/// CSRF check itself. Without it a cross-site `POST` could forcibly sign the user
+/// out (the response's `Set-Cookie` clears the session regardless of `SameSite`).
+pub async fn auth_logout(req: HttpRequest) -> HttpResponse {
+    if !super::csrf_ok_request(&req) {
+        return json_error(
+            actix_web::http::StatusCode::FORBIDDEN,
+            "The request could not be verified. Please refresh the page and try again.",
+        );
+    }
+
     let mut removal = Cookie::build(SESSION_COOKIE, "").path(COOKIE_PATH).finish();
     removal.make_removal();
 
