@@ -47,7 +47,22 @@ header. `POST /api/v1/auth/logout` clears the session cookie.
 
 If you run behind a reverse proxy and want absolute URLs to honour the
 forwarded scheme/host, set `web.trust_proxy = true`; only do so when the
-proxy is trusted, since these headers can otherwise be spoofed.
+proxy is trusted, since these headers can otherwise be spoofed. The same flag
+governs whether `X-Forwarded-For` is trusted when the admin `acl` evaluates
+`client_ip`.
+
+### OAuth setup wizard
+
+Some workflows act on third-party accounts (for example Spotify) that you link
+by walking through an OAuth flow at `/oauth/<provider>/`. The agent drives the
+flow server-side and stores the resulting refresh token. The wizard is protected
+like the admin area: by default it requires you to be signed in as an admin, and
+renders an HTML sign-in prompt (rather than a bare error) if you are not. A
+provider can instead opt into self-service access by setting its own `acl` under
+`[oauth2.<provider>]`, evaluated just like the admin ACL — for example
+`acl = 'true'` lets anyone connect their own account without signing in. Each
+flow is bound to the browser that began it by a single-use `state` value to
+prevent login CSRF.
 
 ## Project layout
 

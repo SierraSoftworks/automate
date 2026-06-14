@@ -44,6 +44,9 @@ pub enum AuthStatus {
     SignedIn(AdminUser),
     /// Authentication is required; the browser must start the login flow.
     NeedsLogin,
+    /// Access was refused by the admin ACL. Signing in cannot change the outcome
+    /// (and, when OIDC is disabled, is not possible), so the UI must not offer it.
+    Forbidden,
     /// Resolving the authentication state failed.
     Error(String),
 }
@@ -80,6 +83,7 @@ fn use_auth() -> AuthHandle {
                     Ok(Some(user)) => status.set(AuthStatus::SignedIn(user)),
                     Ok(None) => status.set(AuthStatus::Disabled),
                     Err(ApiError::Unauthorized) => status.set(AuthStatus::NeedsLogin),
+                    Err(ApiError::Forbidden) => status.set(AuthStatus::Forbidden),
                     Err(e) => status.set(AuthStatus::Error(e.to_string())),
                 }
             });

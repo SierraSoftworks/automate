@@ -12,6 +12,78 @@ use futures::{
 use opentelemetry::propagation::Extractor;
 use tracing_batteries::prelude::*;
 
+/// Query-string parameters whose values carry credentials or single-use secrets
+/// and must never be written to a span. The most important here are the OAuth /
+/// OIDC `code` and `state` returned on the auth callback.
+const SENSITIVE_QUERY_PARAMS: &[&str] = &[
+    "code",
+    "state",
+    "id_token",
+    "access_token",
+    "refresh_token",
+    "token",
+    "client_secret",
+];
+
+/// Request headers whose values carry credentials and must be redacted from the
+/// span's header dump. `cookie` holds the session ID token; `authorization`
+/// holds any bearer token; `x-csrf-token` is the double-submit secret.
+const SENSITIVE_HEADERS: &[&str] = &[
+    "authorization",
+    "proxy-authorization",
+    "cookie",
+    "set-cookie",
+    "x-csrf-token",
+];
+
+/// Renders the request target (path + query) for the span, redacting the values
+/// of any [`SENSITIVE_QUERY_PARAMS`] so secrets such as the OIDC `code`/`state`
+/// never land in telemetry. Parameter names are preserved so the shape of the
+/// request is still legible.
+fn redact_target(uri: &actix_web::http::Uri) -> String {
+    match uri.query() {
+        None => uri.path().to_string(),
+        Some(query) => {
+            let redacted = query
+                .split('&')
+                .map(|pair| {
+                    let name = pair.split('=').next().unwrap_or(pair);
+                    if SENSITIVE_QUERY_PARAMS
+                        .iter()
+                        .any(|p| name.eq_ignore_ascii_case(p))
+                    {
+                        format!("{name}=REDACTED")
+                    } else {
+                        pair.to_string()
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join("&");
+            format!("{}?{}", uri.path(), redacted)
+        }
+    }
+}
+
+/// Renders the request headers for the span, redacting the values of any
+/// [`SENSITIVE_HEADERS`] (the session cookie, authorization tokens, and the CSRF
+/// secret) while keeping every header name for debugging.
+fn redact_headers(headers: &HeaderMap) -> String {
+    headers
+        .iter()
+        .map(|(name, value)| {
+            if SENSITIVE_HEADERS
+                .iter()
+                .any(|h| name.as_str().eq_ignore_ascii_case(h))
+            {
+                format!("{name}: REDACTED")
+            } else {
+                format!("{name}: {value:?}")
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 pub struct TracingLogger;
 
 impl<S, B> Transform<S, ServiceRequest> for TracingLogger
@@ -55,18 +127,24 @@ where
             .and_then(|h| h.to_str().ok())
             .unwrap_or("");
 
+        // Redact secrets before they reach the span: the request target can carry
+        // the OAuth/OIDC `code` and `state` query parameters, and the header dump
+        // would otherwise include the session cookie and any Authorization token.
+        let http_target = redact_target(req.uri());
+        let http_headers = redact_headers(req.headers());
+
         let span = info_span!(
             "request",
             "otel.kind" = "server",
             "otel.name" = req.match_pattern().unwrap_or_else(|| req.uri().path().to_string()),
             "net.transport" = "IP.TCP",
             "net.peer.ip" = %req.connection_info().realip_remote_addr().unwrap_or(""),
-            "http.target" = %req.uri(),
+            "http.target" = %http_target,
             "http.user_agent" = %user_agent,
             "http.status_code" = EmptyField,
             "http.method" = %req.method(),
             "http.url" = %req.match_pattern().unwrap_or_else(|| req.path().into()),
-            "http.headers" = %req.headers().iter().map(|(k, v)| format!("{k}: {v:?}")).collect::<Vec<_>>().join("\n"),
+            "http.headers" = %http_headers,
         );
 
         // Propagate OpenTelemetry parent span context information
@@ -117,5 +195,59 @@ impl<'a> Extractor for HeaderMapExtractor<'a> {
 
     fn keys(&self) -> Vec<&str> {
         self.headers.keys().map(|v| v.as_str()).collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use actix_web::http::Uri;
+    use actix_web::http::header::{HeaderName, HeaderValue};
+
+    #[test]
+    fn redact_target_redacts_oidc_code_and_state() {
+        let uri: Uri = "/api/v1/auth/callback?code=secret-code&state=secret-state"
+            .parse()
+            .unwrap();
+        assert_eq!(
+            redact_target(&uri),
+            "/api/v1/auth/callback?code=REDACTED&state=REDACTED"
+        );
+    }
+
+    #[test]
+    fn redact_target_keeps_non_sensitive_parameters() {
+        let uri: Uri = "/api/v1/kv/cache?key=oidc%3Ajwks".parse().unwrap();
+        assert_eq!(redact_target(&uri), "/api/v1/kv/cache?key=oidc%3Ajwks");
+
+        let uri: Uri = "/admin".parse().unwrap();
+        assert_eq!(redact_target(&uri), "/admin");
+
+        // A bare flag parameter (no `=`) is preserved verbatim.
+        let uri: Uri = "/?demo".parse().unwrap();
+        assert_eq!(redact_target(&uri), "/?demo");
+    }
+
+    #[test]
+    fn redact_headers_redacts_credentials_but_keeps_names() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            HeaderName::from_static("cookie"),
+            HeaderValue::from_static("automate_session=super-secret-jwt"),
+        );
+        headers.insert(
+            HeaderName::from_static("authorization"),
+            HeaderValue::from_static("Bearer super-secret"),
+        );
+        headers.insert(
+            HeaderName::from_static("x-custom"),
+            HeaderValue::from_static("visible"),
+        );
+
+        let rendered = redact_headers(&headers);
+        assert!(rendered.contains("cookie: REDACTED"));
+        assert!(rendered.contains("authorization: REDACTED"));
+        assert!(!rendered.contains("super-secret"));
+        assert!(rendered.contains("x-custom: \"visible\""));
     }
 }
