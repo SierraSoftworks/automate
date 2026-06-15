@@ -225,7 +225,7 @@ jobs:
         run: sudo chown -R "$(id -u):$(id -g)" "$HOME/.cargo" target
 
       - name: Upload GitHub Release Artifacts
-        uses: SierraSoftworks/gh-releases@v1.0.9
+        uses: SierraSoftworks/gh-releases@v1.0.10
         if: github.event_name == 'release'
         with:
           files: "target/${{ matrix.target }}/release/${{ env.APP_NAME }}${{ matrix.extension }} | ${{ env.APP_NAME }}-${{ matrix.os }}-${{ matrix.arch }}${{ matrix.extension }}"
