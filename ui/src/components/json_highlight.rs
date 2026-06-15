@@ -1,4 +1,6 @@
+use gloo_timers::callback::Timeout;
 use serde_json::Value;
+use wasm_bindgen_futures::{spawn_local, JsFuture};
 use yew::prelude::*;
 
 #[derive(Properties, PartialEq)]
@@ -8,7 +10,8 @@ pub struct JsonHighlightProps {
 }
 
 /// Renders a [`serde_json::Value`] as lightweight, syntax-highlighted JSON
-/// inside a `<pre><code>` block.
+/// inside a `<pre><code>` block, with a copy-to-clipboard control revealed on
+/// hover.
 ///
 /// Every token's text is emitted through Yew's `{}` interpolation, which
 /// HTML-escapes it, so untrusted payload data can never inject markup. This is a
@@ -17,6 +20,12 @@ pub struct JsonHighlightProps {
 /// the raw, unhighlighted text if the value cannot be serialised.
 #[function_component(JsonHighlight)]
 pub fn json_highlight(props: &JsonHighlightProps) -> Html {
+    // The pretty-printed text shared by both the highlighted view and the
+    // clipboard copy. `to_string_pretty` uses the same two-space indentation as
+    // the highlighter, so the copied text matches what is displayed.
+    let pretty = serde_json::to_string_pretty(&props.value)
+        .unwrap_or_else(|_| props.value.to_string());
+
     let body = match serde_json::to_string(&props.value) {
         Ok(_) => {
             let mut out = Vec::new();
@@ -26,8 +35,76 @@ pub fn json_highlight(props: &JsonHighlightProps) -> Html {
         Err(_) => html! { { props.value.to_string() } },
     };
 
+    // Tracks whether the payload was just copied so the button can briefly
+    // confirm with a checkmark before reverting to the copy glyph.
+    let copied = use_state(|| false);
+    let onclick = {
+        let copied = copied.clone();
+        Callback::from(move |_: MouseEvent| {
+            copy_to_clipboard(pretty.clone());
+            copied.set(true);
+            let copied = copied.clone();
+            // Revert the confirmation after a short delay.
+            Timeout::new(1_500, move || copied.set(false)).forget();
+        })
+    };
+
+    let (icon, label) = if *copied {
+        (check_icon(), "Copied")
+    } else {
+        (copy_icon(), "Copy to clipboard")
+    };
+    let button_class = classes!(
+        "json-highlight__copy",
+        copied.then_some("json-highlight__copy--copied"),
+    );
+
     html! {
-        <pre class="db-entity__payload"><code class="json">{ body }</code></pre>
+        <div class="json-highlight">
+            <button
+                type="button"
+                class={button_class}
+                title={label}
+                aria-label={label}
+                {onclick}
+            >
+                { icon }
+            </button>
+            <pre class="db-entity__payload"><code class="json">{ body }</code></pre>
+        </div>
+    }
+}
+
+/// Writes `text` to the system clipboard via the async Clipboard API, ignoring
+/// the outcome (the browser surfaces its own permission prompts on failure).
+fn copy_to_clipboard(text: String) {
+    let Some(window) = web_sys::window() else {
+        return;
+    };
+    let promise = window.navigator().clipboard().write_text(&text);
+    spawn_local(async move {
+        let _ = JsFuture::from(promise).await;
+    });
+}
+
+/// A two-overlapping-sheets glyph indicating the copy-to-clipboard action.
+fn copy_icon() -> Html {
+    html! {
+        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor"
+            stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
+            <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+        </svg>
+    }
+}
+
+/// A checkmark glyph confirming a successful copy.
+fn check_icon() -> Html {
+    html! {
+        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor"
+            stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <polyline points="20 6 9 17 4 12" />
+        </svg>
     }
 }
 
