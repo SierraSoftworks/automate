@@ -146,7 +146,7 @@ pub struct CommonAlertSchemaData {
 pub struct CommonAlertSchemaEssentials {
     #[serde(rename = "essentialsVersion")]
     pub essentials_version: String,
-    #[serde(rename = "alertContentVersion")]
+    #[serde(rename = "alertContextVersion")]
     pub alert_context_version: String,
 
     #[serde(rename = "alertId")]
@@ -158,7 +158,7 @@ pub struct CommonAlertSchemaEssentials {
     pub signal_type: String,
     #[serde(rename = "monitorCondition")]
     pub monitor_condition: CommonAlertSchemaMonitorCondition,
-    #[serde(rename = "monitorService")]
+    #[serde(rename = "monitoringService")]
     pub monitor_service: String,
     #[serde(rename = "alertTargetIDs")]
     pub alert_target_ids: Vec<String>,
@@ -218,5 +218,51 @@ impl<'a> From<&CommonAlertSchemaMonitorCondition> for FilterValue<'a> {
             CommonAlertSchemaMonitorCondition::Fired => "fired".into(),
             CommonAlertSchemaMonitorCondition::Resolved => "resolved".into(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::webhooks::WebhookEvent;
+    use std::collections::HashMap;
+
+    const RESOLVED_PAYLOAD: &str = r#"{"schemaId":"azureMonitorCommonAlertSchema","data":{"essentials":{"alertId":"/subscriptions/00000000-0000-0000-0000-000000000000/providers/Microsoft.AlertsManagement/alerts/11111111-1111-1111-1111-111111111111","alertRule":"vm availability - example-vm","targetResourceType":"microsoft.compute/virtualmachines","alertRuleID":"/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/example-rg/providers/microsoft.insights/metricAlerts/vm availability - example-vm","severity":"Sev3","signalType":"Metric","monitorCondition":"Resolved","targetResourceGroup":"example-rg","monitoringService":"Platform","alertTargetIDs":["/subscriptions/00000000-0000-0000-0000-000000000000/resourcegroups/example-rg/providers/microsoft.compute/virtualmachines/example-vm"],"configurationItems":["example-vm"],"originAlertId":"00000000-0000-0000-0000-000000000000_example-rg_microsoft.insights_metricAlerts_vm availability - example-vm_81493074","firedDateTime":"2026-06-12T01:13:01.9491785Z","resolvedDateTime":"2026-06-12T01:13:01.9491785Z","description":"","essentialsVersion":"1.0","alertContextVersion":"1.0","investigationLink":"https://portal.azure.com/"},"alertContext":{"properties":null,"conditionType":"MultipleResourceMultipleMetricCriteria","condition":{"windowSize":"PT5M","allOf":[{"metricName":"VmAvailabilityMetric","metricNamespace":"Microsoft.Compute/virtualMachines","operator":"LessThan","threshold":"1","timeAggregation":"Average","dimensions":[],"metricValue":1.0,"webTestName":null}],"staticThresholdFailingPeriods":{"numberOfEvaluationPeriods":0,"minFailingPeriodsToAlert":0},"windowStartTime":"2026-06-12T01:05:49.957Z","windowEndTime":"2026-06-12T01:10:49.957Z"}},"customProperties":null}}"#;
+
+    #[test]
+    fn test_deserialize_common_alert_schema() {
+        let event: AzureMonitorAlertEventPayload =
+            serde_json::from_str(RESOLVED_PAYLOAD).expect("payload should deserialize");
+
+        assert_eq!(event.schema_id, "azureMonitorCommonAlertSchema");
+        assert_eq!(
+            event.data.essentials.alert_rule,
+            "vm availability - example-vm"
+        );
+        assert_eq!(event.data.essentials.alert_context_version, "1.0");
+        assert!(matches!(
+            event.data.essentials.monitor_condition,
+            CommonAlertSchemaMonitorCondition::Resolved
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_azure_monitor_webhook_resolved() {
+        let services = crate::testing::mock_services().await.unwrap();
+        let webhook = AzureMonitorWebhook;
+
+        let event = WebhookEvent {
+            body: RESOLVED_PAYLOAD.to_string(),
+            query: String::new(),
+            headers: HashMap::new(),
+        };
+
+        let result = webhook
+            .handle(
+                JobContext::new(services, chrono::Utc::now(), None, None),
+                &event,
+            )
+            .await;
+        assert!(result.is_ok(), "Webhook should handle resolved alert");
     }
 }
