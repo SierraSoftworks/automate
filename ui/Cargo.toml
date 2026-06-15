@@ -26,6 +26,8 @@ web-sys = { version = "0.3", features = [
     "Location",
     "HtmlInputElement",
     "InputEvent",
+    "Navigator",
+    "Clipboard",
 ] }
 
 serde = { version = "1", features = ["derive"] }
