@@ -210,15 +210,15 @@ struct SentryIssueNotification {
 }
 
 impl Filterable for SentryIssueNotification {
-    fn get(&self, key: &str) -> crate::filter::FilterValue {
+    fn get(&self, key: &str) -> crate::filter::FilterValue<'_> {
         match key {
-            "action" => self.action.clone().into(),
-            "issue_id" => self.data.issue.id.clone().into(),
-            "issue_title" => self.data.issue.title.clone().into(),
+            "action" => self.action.as_str().into(),
+            "issue_id" => self.data.issue.id.as_str().into(),
+            "issue_title" => self.data.issue.title.as_str().into(),
             "issue_type" => format!("{}", self.data.issue._type).into(),
             "issue_level" => format!("{}", self.data.issue.level).into(),
-            "project_name" => self.data.issue.project.name.clone().into(),
-            "project_platform" => self.data.issue.project.platform.clone().into(),
+            "project_name" => self.data.issue.project.name.as_str().into(),
+            "project_platform" => self.data.issue.project.platform.as_str().into(),
             _ => crate::filter::FilterValue::Null,
         }
     }
@@ -274,12 +274,12 @@ impl SentryAlertNotification {
 }
 
 impl Filterable for SentryAlertNotification {
-    fn get(&self, key: &str) -> crate::filter::FilterValue {
+    fn get(&self, key: &str) -> crate::filter::FilterValue<'_> {
         match key {
-            "issue_id" => self.id.clone().into(),
+            "issue_id" => self.id.as_str().into(),
             "issue_title" => self.title().into(),
             "issue_level" => format!("{}", self.level).into(),
-            "project_name" => self.project_slug.clone().into(),
+            "project_name" => self.project_slug.as_str().into(),
             _ => crate::filter::FilterValue::Null,
         }
     }

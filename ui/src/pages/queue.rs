@@ -1,50 +1,30 @@
+//! Builds the queue half of the unified admin browser: the `queue`-kind
+//! partitions, their messages rendered with a schedule/availability timeline,
+//! and the pipeline icon that marks them in the partition list.
+
 use std::collections::BTreeMap;
 
 use automate_api::{QueueMessage, QueueStatus};
-use gloo_timers::callback::Interval;
-use wasm_bindgen_futures::spawn_local;
 use yew::prelude::*;
 
-use crate::api::{self, ApiError};
-use crate::app::AuthHandle;
-use crate::components::{
-    Alert, AlertKind, BrowserEntry, BrowserPartition, DbEntity, EntityMetadata, PageActions,
-    PartitionBrowser, RefreshButton,
-};
-use crate::fixtures;
+use crate::components::{BrowserEntry, BrowserPartition, DbEntity, EntityMetadata};
 use crate::util;
 
-/// Forces a re-render once per second so the timeline's relative timestamps stay
-/// current alongside the continuously-animating "now" marker. The interval is
-/// torn down when the component unmounts.
-#[hook]
-fn use_seconds_tick() {
-    let trigger = use_force_update();
-    use_effect_with((), move |_| {
-        let interval = Interval::new(1_000, move || trigger.force_update());
-        move || drop(interval)
-    });
-}
+/// The store kind reported to the browser for `kind:` filtering.
+const KIND: &str = "queue";
 
-enum Load {
-    Loading,
-    Ready(Vec<QueueMessage>),
-    Failed(ApiError),
-}
-
-/// Fetches the queue and stores the result, replacing the current page state in
-/// place. This never flips the page back to [`Load::Loading`], so when it is
-/// used to refresh an already-loaded page the [`PartitionBrowser`] stays mounted
-/// and the user's selected partition, filters, and expanded entries are
-/// preserved.
-async fn fetch_queue(state: UseStateHandle<Load>) {
-    if fixtures::is_demo() {
-        state.set(Load::Ready(fixtures::queue_messages()));
-        return;
-    }
-    match api::list_queue().await {
-        Ok(messages) => state.set(Load::Ready(messages)),
-        Err(error) => state.set(Load::Failed(error)),
+/// A pipeline glyph marking queue partitions in the sidebar.
+pub fn queue_icon() -> Html {
+    html! {
+        <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor"
+            stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <line x1="8" y1="6" x2="21" y2="6" />
+            <line x1="8" y1="12" x2="21" y2="12" />
+            <line x1="8" y1="18" x2="21" y2="18" />
+            <circle cx="3.5" cy="6" r="1" />
+            <circle cx="3.5" cy="12" r="1" />
+            <circle cx="3.5" cy="18" r="1" />
+        </svg>
     }
 }
 
@@ -76,177 +56,61 @@ fn to_display(msg: &QueueMessage) -> QueueMessageDisplay {
     }
 }
 
-#[function_component(Queue)]
-pub fn queue() -> Html {
-    let auth = use_context::<AuthHandle>().expect("AuthHandle context must be provided");
-    let state = use_state(|| Load::Loading);
-    // Tracks an in-flight in-place refresh so the toolbar button can spin without
-    // tearing the loaded view down.
-    let refreshing = use_state(|| false);
+/// Groups the queued messages into [`BrowserPartition`]s of kind `queue`,
+/// ordering messages by their idempotency key within each partition. Each
+/// message is rendered with a schedule/availability/state timeline plus trigger
+/// and delete controls.
+pub fn queue_partitions(
+    messages: &[QueueMessage],
+    on_trigger: &Callback<(String, String, serde_json::Value)>,
+    on_delete: &Callback<(String, String)>,
+) -> Vec<BrowserPartition> {
+    let mut display: Vec<QueueMessageDisplay> = messages.iter().map(to_display).collect();
+    display.sort_by(|a, b| a.key.cmp(&b.key));
 
-    // Re-render every second so relative timestamps tick in step with the
-    // timeline's animated "now" marker.
-    use_seconds_tick();
-
-    // Initial load on mount. This is the only path that leaves the page in the
-    // loading state; every subsequent fetch updates the data in place.
-    {
-        let state = state.clone();
-        use_effect_with((), move |_| {
-            spawn_local(fetch_queue(state));
-            || ()
-        });
+    // Group by partition (alphabetically), preserving the idempotency-key order
+    // within each partition.
+    let mut groups: BTreeMap<String, Vec<QueueMessageDisplay>> = BTreeMap::new();
+    for msg in display {
+        groups.entry(msg.partition.clone()).or_default().push(msg);
     }
 
-    // Re-fetches the queue without unmounting the browser, used by the toolbar
-    // refresh button and after a mutation.
-    let refresh = {
-        let state = state.clone();
-        let refreshing = refreshing.clone();
-        Callback::from(move |_: ()| {
-            let state = state.clone();
-            let refreshing = refreshing.clone();
-            refreshing.set(true);
-            spawn_local(async move {
-                fetch_queue(state).await;
-                refreshing.set(false);
-            });
-        })
-    };
-
-    let on_trigger = {
-        let refresh = refresh.clone();
-        Callback::from(move |msg: QueueMessageDisplay| {
-            if fixtures::is_demo() {
-                return;
-            }
-            let refresh = refresh.clone();
-            spawn_local(async move {
-                let _ = api::trigger_queue(&msg.partition, &msg.key, msg.payload.clone()).await;
-                refresh.emit(());
-            });
-        })
-    };
-
-    let on_delete = {
-        let state = state.clone();
-        let refresh = refresh.clone();
-        Callback::from(move |(partition, key): (String, String)| {
-            if fixtures::is_demo() {
-                if let Load::Ready(messages) = &*state {
-                    let remaining = messages
-                        .iter()
-                        .filter(|m| !(m.partition == partition && m.key == key))
-                        .cloned()
-                        .collect();
-                    state.set(Load::Ready(remaining));
-                }
-                return;
-            }
-            let refresh = refresh.clone();
-            spawn_local(async move {
-                let _ = api::delete_queue(&partition, &key).await;
-                refresh.emit(());
-            });
-        })
-    };
-
-    let retry = {
-        let state = state.clone();
-        Callback::from(move |_: MouseEvent| {
-            let state = state.clone();
-            state.set(Load::Loading);
-            spawn_local(fetch_queue(state));
-        })
-    };
-
-    // Publish a refresh button into the page title row that re-fetches the queue
-    // in place. It is cleared when the page unmounts.
-    let page_actions = use_context::<PageActions>();
-    {
-        let page_actions = page_actions.clone();
-        let refresh = refresh.clone();
-        let busy = *refreshing || matches!(&*state, Load::Loading);
-        use_effect_with(busy, move |&busy| {
-            if let Some(actions) = &page_actions {
-                let onclick = {
-                    let refresh = refresh.clone();
-                    Callback::from(move |_: MouseEvent| refresh.emit(()))
-                };
-                actions.set(html! { <RefreshButton {onclick} {busy} /> });
-            }
-            move || {
-                if let Some(actions) = page_actions {
-                    actions.clear();
-                }
-            }
-        });
-    }
-
-    match &*state {
-        Load::Loading => html! { <p class="loading-note">{ "Loading…" }</p> },
-        Load::Failed(error) => {
-            let needs_login = matches!(error, ApiError::Unauthorized);
-            html! {
-                <Alert
-                    kind={AlertKind::Error}
-                    title="Couldn't load the queue"
-                    message={error.to_string()}
-                >
-                    <button class="btn btn--small" onclick={retry}>{ "Retry" }</button>
-                    {
-                        if needs_login {
-                            let login = auth.login.clone();
-                            let onclick = Callback::from(move |_: MouseEvent| login.emit(()));
-                            html! { <button class="btn btn--small btn--primary" onclick={onclick}>{ "Sign in" }</button> }
-                        } else {
-                            html! {}
-                        }
-                    }
-                </Alert>
-            }
-        }
-        Load::Ready(messages) => {
-            let mut display: Vec<QueueMessageDisplay> = messages.iter().map(to_display).collect();
-            display.sort_by(|a, b| a.scheduled_at.cmp(&b.scheduled_at));
-
-            // Group by partition (alphabetically), preserving the schedule order
-            // within each partition.
-            let mut groups: BTreeMap<String, Vec<QueueMessageDisplay>> = BTreeMap::new();
-            for msg in display {
-                groups.entry(msg.partition.clone()).or_default().push(msg);
-            }
-
-            let partitions: Vec<BrowserPartition> = groups
+    groups
+        .into_iter()
+        .map(|(partition, messages)| {
+            let entries = messages
                 .into_iter()
-                .map(|(partition, messages)| {
-                    let entries = messages
-                        .into_iter()
-                        .map(|msg| BrowserEntry {
-                            key: msg.key.clone().into(),
-                            content: queue_entry(&msg, &on_trigger, &on_delete),
-                        })
-                        .collect();
-                    BrowserPartition {
-                        name: partition.into(),
-                        entries,
+                .map(|msg| {
+                    let search = format!(
+                        "{} {} {KIND} {:?} {} {}",
+                        msg.partition,
+                        msg.key,
+                        msg.status,
+                        msg.traceparent.clone().unwrap_or_default(),
+                        serde_json::to_string(&msg.payload).unwrap_or_default()
+                    )
+                    .to_lowercase();
+                    BrowserEntry {
+                        key: msg.key.clone().into(),
+                        search: search.into(),
+                        content: queue_entry(&msg, on_trigger, on_delete),
                     }
                 })
                 .collect();
-
-            html! {
-                <PartitionBrowser
-                    partitions={partitions}
-                    empty="No messages found in any queue."
-                />
+            BrowserPartition {
+                id: format!("{KIND}:{partition}").into(),
+                name: partition.into(),
+                kind: KIND.into(),
+                icon: queue_icon(),
+                entries,
             }
-        }
-    }
+        })
+        .collect()
 }
 
 fn queue_entry(
     msg: &QueueMessageDisplay,
-    on_trigger: &Callback<QueueMessageDisplay>,
+    on_trigger: &Callback<(String, String, serde_json::Value)>,
     on_delete: &Callback<(String, String)>,
 ) -> Html {
     // The schedule/availability/state is conveyed by the timeline; the trace
@@ -259,8 +123,10 @@ fn queue_entry(
 
     let trigger_onclick = {
         let on_trigger = on_trigger.clone();
-        let msg = msg.clone();
-        Callback::from(move |_| on_trigger.emit(msg.clone()))
+        let partition = msg.partition.clone();
+        let key = msg.key.clone();
+        let payload = msg.payload.clone();
+        Callback::from(move |_| on_trigger.emit((partition.clone(), key.clone(), payload.clone())))
     };
     let delete_onclick = {
         let on_delete = on_delete.clone();

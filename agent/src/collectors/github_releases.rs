@@ -50,12 +50,12 @@ pub struct GitHubReleaseItem {
 }
 
 impl Filterable for GitHubReleaseItem {
-    fn get(&self, key: &str) -> crate::filter::FilterValue {
+    fn get(&self, key: &str) -> crate::filter::FilterValue<'_> {
         match key {
-            "tag" => self.tag_name.clone().into(),
-            "name" => self.name.clone().into(),
+            "tag" => self.tag_name.as_str().into(),
+            "name" => self.name.as_str().into(),
             "published" => self.published_at.to_rfc3339().into(),
-            "link" => self.html_url.clone().into(),
+            "link" => self.html_url.as_str().into(),
             "draft" => self.draft.into(),
             "prerelease" => self.prerelease.into(),
             _ => crate::filter::FilterValue::Null,
@@ -101,7 +101,7 @@ impl IncrementalCollector for GitHubReleasesCollector {
     }
 
     fn key(&self) -> std::borrow::Cow<'static, str> {
-        std::borrow::Cow::Owned(self.api_url.clone())
+        std::borrow::Cow::Owned(format!("{}/repos/{}/releases", self.api_url, self.repo))
     }
 
     #[instrument(
@@ -590,19 +590,14 @@ mod tests {
             html_url: "https://github.com/example/repo/releases/tag/v1.0.0".to_string(),
         };
 
-        assert_eq!(
-            item.get("tag"),
-            crate::filter::FilterValue::String("v1.0.0".to_string())
-        );
+        assert_eq!(item.get("tag"), crate::filter::FilterValue::from("v1.0.0"));
         assert_eq!(
             item.get("name"),
-            crate::filter::FilterValue::String("Test Release".to_string())
+            crate::filter::FilterValue::from("Test Release")
         );
         assert_eq!(
             item.get("link"),
-            crate::filter::FilterValue::String(
-                "https://github.com/example/repo/releases/tag/v1.0.0".to_string()
-            )
+            crate::filter::FilterValue::from("https://github.com/example/repo/releases/tag/v1.0.0")
         );
         assert_eq!(item.get("draft"), crate::filter::FilterValue::Bool(false));
         assert_eq!(
@@ -610,5 +605,21 @@ mod tests {
             crate::filter::FilterValue::Bool(true)
         );
         assert_eq!(item.get("unknown"), crate::filter::FilterValue::Null);
+    }
+
+    #[test]
+    fn test_github_releases_key_is_scoped_per_repo() {
+        let one = GitHubReleasesCollector::new_with_url("https://api.github.com", "example/one");
+        let two = GitHubReleasesCollector::new_with_url("https://api.github.com", "example/two");
+
+        assert_eq!(
+            one.key(),
+            "https://api.github.com/repos/example/one/releases"
+        );
+        assert_ne!(
+            one.key(),
+            two.key(),
+            "Collectors for different repositories must use distinct keys so their watermarks do not collide."
+        );
     }
 }

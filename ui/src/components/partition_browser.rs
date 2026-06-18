@@ -1,11 +1,16 @@
-use web_sys::HtmlInputElement;
 use yew::prelude::*;
 
-/// A single entry within a partition. The `key` is used for searching and
-/// sorting; `content` is the pre-rendered entity (typically a [`super::DbEntity`]).
+use crate::search::{MatchContext, SearchContext, SearchFilter};
+
+/// A single entry within a partition.
 #[derive(Clone, PartialEq)]
 pub struct BrowserEntry {
+    /// The entry's key, used for `key:` filtering and as the display label.
     pub key: AttrValue,
+    /// A pre-lowercased concatenation of every searchable property, used to
+    /// evaluate free-text search terms.
+    pub search: AttrValue,
+    /// The pre-rendered entity (typically a [`super::DbEntity`]).
     pub content: Html,
 }
 
@@ -13,7 +18,17 @@ pub struct BrowserEntry {
 /// [`PartitionBrowser`].
 #[derive(Clone, PartialEq)]
 pub struct BrowserPartition {
+    /// A stable identity unique across stores (for example `kv:cron`), used to
+    /// track the active selection so partitions of different kinds that share a
+    /// name remain distinct.
+    pub id: AttrValue,
+    /// The partition's display name.
     pub name: AttrValue,
+    /// The store kind, used for `kind:` filtering (for example `kv` or `queue`).
+    pub kind: AttrValue,
+    /// An icon distinguishing the partition's store kind in the sidebar.
+    pub icon: Html,
+    /// The partition's entries, in display order.
     pub entries: Vec<BrowserEntry>,
 }
 
@@ -26,23 +41,30 @@ pub struct PartitionBrowserProps {
     pub empty: AttrValue,
 }
 
-fn input_value(event: &InputEvent) -> String {
-    event
-        .target_dyn_into::<HtmlInputElement>()
-        .map(|input| input.value())
-        .unwrap_or_default()
+/// Evaluates the filter against a single entry of a partition.
+fn entry_matches(filter: &SearchFilter, partition: &BrowserPartition, entry: &BrowserEntry) -> bool {
+    filter.matches(&MatchContext {
+        partition: &partition.name,
+        key: &entry.key,
+        kind: &partition.kind,
+        text: &entry.search,
+    })
 }
 
-/// A master/detail browser for partitioned key-value data. The left rail lists
-/// every partition (filterable by name) and the right pane shows the entries of
-/// the selected partition, with an in-partition key filter. This keeps large
-/// stores navigable: only one partition's contents are rendered at a time, and
-/// both lists can be narrowed by typing.
+/// A master/detail browser for partitioned data drawn from multiple stores. The
+/// left rail lists every partition (with a store-kind icon) and the right pane
+/// shows the entries of the selected partition. Both lists are narrowed by the
+/// shared search filter taken from [`SearchContext`], so a single query filters
+/// partitions and entries together. Only one partition's contents are rendered
+/// at a time, keeping large stores navigable.
 #[function_component(PartitionBrowser)]
 pub fn partition_browser(props: &PartitionBrowserProps) -> Html {
     let selected = use_state(|| None::<String>);
-    let partition_filter = use_state(String::new);
-    let entry_filter = use_state(String::new);
+    let search = use_context::<SearchContext>();
+    let filter = search
+        .as_ref()
+        .map(|s| s.filter.clone())
+        .unwrap_or_default();
 
     if props.partitions.is_empty() {
         return html! {
@@ -52,49 +74,48 @@ pub fn partition_browser(props: &PartitionBrowserProps) -> Html {
         };
     }
 
-    // Partitions matching the sidebar search.
-    let needle = partition_filter.to_lowercase();
-    let visible: Vec<&BrowserPartition> = props
+    // Compute, for each partition, the entries matching the active filter. A
+    // partition is visible in the sidebar only when it has at least one matching
+    // entry (or when there is no filter at all).
+    let visible: Vec<(&BrowserPartition, Vec<&BrowserEntry>)> = props
         .partitions
         .iter()
-        .filter(|p| needle.is_empty() || p.name.to_lowercase().contains(&needle))
+        .filter_map(|partition| {
+            if filter.is_empty() {
+                let entries = partition.entries.iter().collect();
+                Some((partition, entries))
+            } else {
+                let entries: Vec<&BrowserEntry> = partition
+                    .entries
+                    .iter()
+                    .filter(|entry| entry_matches(&filter, partition, entry))
+                    .collect();
+                if entries.is_empty() {
+                    None
+                } else {
+                    Some((partition, entries))
+                }
+            }
+        })
         .collect();
 
     // Resolve the active partition: keep the user's selection when it is still
     // present (and visible), otherwise fall back to the first visible one.
-    let active: Option<&BrowserPartition> = selected
+    let active: Option<&(&BrowserPartition, Vec<&BrowserEntry>)> = selected
         .as_ref()
-        .and_then(|name| visible.iter().find(|p| p.name.as_str() == name).copied())
-        .or_else(|| visible.first().copied());
-
-    let on_partition_input = {
-        let partition_filter = partition_filter.clone();
-        Callback::from(move |e: InputEvent| partition_filter.set(input_value(&e)))
-    };
+        .and_then(|id| visible.iter().find(|(p, _)| p.id.as_str() == id))
+        .or_else(|| visible.first());
 
     let sidebar = html! {
         <aside class="browser__sidebar">
-            <div class="browser__search">
-                <input
-                    type="search"
-                    class="browser__search-input"
-                    placeholder="Filter partitions…"
-                    value={(*partition_filter).clone()}
-                    oninput={on_partition_input}
-                />
-            </div>
             <ul class="browser__list">
-                { for visible.iter().map(|partition| {
-                    let name = partition.name.clone();
-                    let is_active = active.is_some_and(|a| a.name == partition.name);
+                { for visible.iter().map(|(partition, matching)| {
+                    let id = partition.id.to_string();
+                    let is_active = active.is_some_and(|(a, _)| a.id == partition.id);
                     let onclick = {
                         let selected = selected.clone();
-                        let entry_filter = entry_filter.clone();
-                        let name = name.to_string();
-                        Callback::from(move |_| {
-                            selected.set(Some(name.clone()));
-                            entry_filter.set(String::new());
-                        })
+                        let id = id.clone();
+                        Callback::from(move |_| selected.set(Some(id.clone())))
                     };
                     let mut class = classes!("browser__item");
                     if is_active {
@@ -103,14 +124,17 @@ pub fn partition_browser(props: &PartitionBrowserProps) -> Html {
                     html! {
                         <li>
                             <button class={class} onclick={onclick}>
-                                <span class="browser__item-name">{ name }</span>
-                                <span class="browser__item-count">{ partition.entries.len() }</span>
+                                <span class="browser__item-icon" title={partition.kind.clone()}>
+                                    { partition.icon.clone() }
+                                </span>
+                                <span class="browser__item-name">{ partition.name.clone() }</span>
+                                <span class="browser__item-count">{ matching.len() }</span>
                             </button>
                         </li>
                     }
                 }) }
                 { if visible.is_empty() {
-                    html! { <li class="browser__no-match">{ "No partitions match your filter." }</li> }
+                    html! { <li class="browser__no-match">{ "No partitions match your search." }</li> }
                 } else {
                     html! {}
                 } }
@@ -119,29 +143,23 @@ pub fn partition_browser(props: &PartitionBrowserProps) -> Html {
     };
 
     let detail = match active {
-        Some(partition) => {
-            let entry_needle = entry_filter.to_lowercase();
-            let entries: Vec<&BrowserEntry> = partition
-                .entries
-                .iter()
-                .filter(|e| entry_needle.is_empty() || e.key.to_lowercase().contains(&entry_needle))
-                .collect();
-
-            let on_entry_input = {
-                let entry_filter = entry_filter.clone();
-                Callback::from(move |e: InputEvent| entry_filter.set(input_value(&e)))
+        Some((partition, entries)) => {
+            let count = if entries.len() == partition.entries.len() {
+                format!("{} entries", partition.entries.len())
+            } else {
+                format!("{} of {} entries", entries.len(), partition.entries.len())
             };
 
             let list = if entries.is_empty() {
                 html! {
                     <div class="browser__detail-empty">
-                        <p>{ "No entries match your filter." }</p>
+                        <p>{ "No entries match your search." }</p>
                     </div>
                 }
             } else {
                 html! {
                     <div class="browser__entries">
-                        { for entries.into_iter().map(|entry| entry.content.clone()) }
+                        { for entries.iter().map(|entry| entry.content.clone()) }
                     </div>
                 }
             };
@@ -149,19 +167,11 @@ pub fn partition_browser(props: &PartitionBrowserProps) -> Html {
             html! {
                 <section class="browser__detail">
                     <header class="browser__detail-head">
-                        <h2 class="browser__detail-title">{ partition.name.clone() }</h2>
-                        <span class="browser__detail-count">
-                            { format!("{} entries", partition.entries.len()) }
+                        <span class="browser__detail-icon" title={partition.kind.clone()}>
+                            { partition.icon.clone() }
                         </span>
-                        <div class="browser__detail-search">
-                            <input
-                                type="search"
-                                class="browser__search-input"
-                                placeholder="Filter keys…"
-                                value={(*entry_filter).clone()}
-                                oninput={on_entry_input}
-                            />
-                        </div>
+                        <h2 class="browser__detail-title">{ partition.name.clone() }</h2>
+                        <span class="browser__detail-count">{ count }</span>
                     </header>
                     { list }
                 </section>

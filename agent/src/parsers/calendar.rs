@@ -176,10 +176,10 @@ pub struct CalendarEvent {
 }
 
 impl Filterable for CalendarEvent {
-    fn get(&self, key: &str) -> crate::filter::FilterValue {
+    fn get(&self, key: &str) -> crate::filter::FilterValue<'_> {
         match key {
-            "summary" => self.summary.clone().into(),
-            "description" => self.description.clone().into(),
+            "summary" => self.summary.as_str().into(),
+            "description" => self.description.as_deref().into(),
 
             "start" => self.start.to_rfc3339().into(),
             "end" => self.end.to_rfc3339().into(),

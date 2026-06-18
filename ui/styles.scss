@@ -407,29 +407,87 @@ pre {
     letter-spacing: -0.01em;
   }
 
-  &__nav {
+  // Unified search field hosted in the app bar.
+  &__search {
+    position: relative;
+    flex: 1;
     display: flex;
     align-items: center;
-    gap: 0.35rem;
+    max-width: 32rem;
   }
 
-  &__link {
-    padding: 0.4rem 0.8rem;
-    border-radius: $radius-sm;
-    font-size: 0.9rem;
-    font-weight: 500;
-    color: $text-regular;
-    transition: color $transition, background $transition;
+  &__search-icon {
+    position: absolute;
+    left: 0.7rem;
+    display: inline-flex;
+    align-items: center;
+    color: $text-placeholder;
+    pointer-events: none;
+  }
 
-    &:hover {
-      color: $brand;
-      background: $brand-tint;
+  &__search-input {
+    width: 100%;
+    font-family: inherit;
+    font-size: 0.88rem;
+    padding: 0.5rem 0.8rem 0.5rem 2.2rem;
+    border: 1px solid $border-base;
+    border-radius: $radius-sm;
+    color: $text-primary;
+    background: $bg-white;
+    transition: border-color $transition, box-shadow $transition;
+
+    &::placeholder {
+      color: $text-placeholder;
     }
+
+    &::-webkit-search-cancel-button {
+      cursor: pointer;
+    }
+
+    &:focus {
+      @include focus-ring;
+    }
+  }
+
+  // Autocomplete dropdown listing matching `field:` prefixes.
+  &__suggestions {
+    position: absolute;
+    top: calc(100% + 0.35rem);
+    left: 0;
+    right: 0;
+    z-index: 30;
+    margin: 0;
+    padding: 0.3rem;
+    list-style: none;
+    background: $bg-white;
+    border: 1px solid $border-base;
+    border-radius: $radius-sm;
+    box-shadow: $shadow-md;
+  }
+
+  &__suggestion {
+    display: flex;
+    align-items: baseline;
+    gap: 0.6rem;
+    padding: 0.4rem 0.6rem;
+    border-radius: $radius-sm;
+    cursor: pointer;
 
     &--active {
-      color: $brand;
       background: $brand-tint;
     }
+  }
+
+  &__suggestion-token {
+    font-family: $font-mono;
+    font-size: 0.82rem;
+    font-weight: 600;
+    color: $brand;
+  }
+
+  &__suggestion-desc {
+    font-size: 0.8rem;
+    color: $text-regular;
   }
 
   &__spacer {
@@ -680,6 +738,10 @@ footer {
 // 6. Partition browser (db / queue)
 // -----------------------------------------------------------------------------
 
+.admin__banner {
+  margin-bottom: 1.5rem;
+}
+
 .browser {
   display: grid;
   grid-template-columns: minmax(220px, 280px) 1fr;
@@ -700,35 +762,6 @@ footer {
     overflow: hidden;
     position: sticky;
     top: 84px;
-  }
-
-  &__search {
-    padding: 0.75rem;
-    border-bottom: 1px solid $border-lighter;
-  }
-
-  &__search-input {
-    width: 100%;
-    font-family: inherit;
-    font-size: 0.85rem;
-    padding: 0.5rem 0.7rem;
-    border: 1px solid $border-base;
-    border-radius: $radius-sm;
-    color: $text-primary;
-    background: $bg-white;
-    transition: border-color $transition, box-shadow $transition;
-
-    &::placeholder {
-      color: $text-placeholder;
-    }
-
-    &::-webkit-search-cancel-button {
-      cursor: pointer;
-    }
-
-    &:focus {
-      @include focus-ring;
-    }
   }
 
   &__list {
@@ -763,10 +796,22 @@ footer {
       background: $brand-tint;
       color: $brand;
 
+      .browser__item-icon {
+        color: $brand;
+      }
+
       .browser__item-count {
         background: $bg-white;
       }
     }
+  }
+
+  &__item-icon {
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    color: $text-placeholder;
   }
 
   &__item-name {
@@ -817,6 +862,13 @@ footer {
     background: $fill-lighter;
   }
 
+  &__detail-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    color: $text-secondary;
+  }
+
   &__detail-title {
     font-family: $font-mono;
     font-size: 0.95rem;
@@ -826,13 +878,9 @@ footer {
   }
 
   &__detail-count {
+    margin-left: auto;
     font-size: 0.8rem;
     color: $text-secondary;
-  }
-
-  &__detail-search {
-    margin-left: auto;
-    width: min(220px, 100%);
   }
 
   &__detail-empty {
@@ -994,6 +1042,55 @@ footer {
     .tok-punct {
       color: $text-secondary;
     }
+  }
+}
+
+// Syntax-highlighted JSON payload with a hover-revealed copy control.
+.json-highlight {
+  position: relative;
+
+  &__copy {
+    position: absolute;
+    top: 0.5rem;
+    right: 0.6rem;
+    z-index: 1;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0.3rem;
+    color: $text-secondary;
+    background: $bg-white;
+    border: 1px solid $border-light;
+    border-radius: $radius-sm;
+    cursor: pointer;
+    opacity: 0;
+    transition:
+      opacity $transition,
+      color $transition,
+      border-color $transition,
+      background $transition;
+
+    &:hover {
+      color: $brand;
+      border-color: $brand;
+    }
+
+    &:focus-visible {
+      outline: 2px solid $brand;
+      outline-offset: 2px;
+    }
+
+    &--copied {
+      color: $success;
+      border-color: $success;
+      opacity: 1;
+    }
+  }
+
+  // Reveal the control while the payload is hovered or the button is focused.
+  &:hover &__copy,
+  &__copy:focus-visible {
+    opacity: 1;
   }
 }
 

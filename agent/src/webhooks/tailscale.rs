@@ -263,11 +263,11 @@ struct TailscaleAlertEventPayload {
 }
 
 impl Filterable for TailscaleAlertEventPayload {
-    fn get(&self, key: &str) -> crate::filter::FilterValue {
+    fn get(&self, key: &str) -> crate::filter::FilterValue<'_> {
         match key {
-            "type" => self._type.clone().into(),
-            "tailnet" => self.tailnet.clone().into(),
-            "message" => self.message.clone().into(),
+            "type" => self._type.as_str().into(),
+            "tailnet" => self.tailnet.as_str().into(),
+            "message" => self.message.as_str().into(),
             _ => crate::filter::FilterValue::Null,
         }
     }

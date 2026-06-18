@@ -94,7 +94,7 @@ impl Job for RssWorkflow {
                     title: format!(
                         "[{}]({}): {}",
                         &job.name,
-                        urlencoding::encode(&item.links[0].href),
+                        &item.links[0].href,
                         item.title
                             .as_ref()
                             .map(|t| t.content.as_str())
@@ -130,7 +130,7 @@ impl Job for RssWorkflow {
 struct RssEntryFilter<'a>(&'a feed_rs::model::Entry);
 
 impl<'a> Filterable for RssEntryFilter<'a> {
-    fn get(&self, key: &str) -> crate::filter::FilterValue {
+    fn get(&self, key: &str) -> crate::filter::FilterValue<'_> {
         match key {
             "title" => self
                 .0

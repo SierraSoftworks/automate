@@ -22,6 +22,14 @@ pub fn protected(props: &ProtectedProps) -> Html {
             <p class="loading-note">{ "Loading…" }</p>
         },
         AuthStatus::NeedsLogin => html! { <Login /> },
+        AuthStatus::Forbidden => html! {
+            <Alert
+                kind={AlertKind::Error}
+                title="Access denied"
+                message="Your request was not permitted by the admin access-control policy. \
+                    If this is unexpected, check the agent's `[web.admin]` acl configuration."
+            />
+        },
         AuthStatus::Error(msg) => {
             let onclick = Callback::from(|_: MouseEvent| {
                 if let Some(window) = web_sys::window() {

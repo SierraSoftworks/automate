@@ -1,10 +1,11 @@
+use std::rc::Rc;
+
 use chrono::{Datelike, Utc};
 use yew::prelude::*;
-use yew_router::prelude::*;
 
-use crate::Route;
 use crate::components::{AppBar, PageTitle};
 use crate::pages::Protected;
+use crate::search::{SearchContext, SearchFilter, SearchVocabulary, VocabularyContext};
 
 #[derive(Properties, PartialEq)]
 pub struct AdminShellProps {
@@ -32,36 +33,43 @@ impl PageActions {
     }
 }
 
-/// Maps a route to the page title and supporting subtitle shown in the
-/// page-specific header.
-fn context_for(route: &Route) -> (&'static str, Option<&'static str>) {
-    match route {
-        Route::Db => (
-            "Key-Value Store",
-            Some("Persistent state used by collectors and publishers."),
-        ),
-        Route::Queue => (
-            "Queue",
-            Some("Pending jobs awaiting execution, grouped by partition."),
-        ),
-        _ => (
-            "Dashboard",
-            Some("Inspect the persistent state that drives Automate's workflows."),
-        ),
-    }
-}
-
-/// The shared chrome for every admin view. It renders the persistent app bar,
-/// the page-specific title, and gates the routed page behind authentication —
-/// all within a single 1280px-wide content column.
+/// The shared chrome for every admin view. It renders the persistent app bar
+/// (which hosts the unified search), the page-specific title, and gates the
+/// routed page behind authentication — all within a single 1280px-wide content
+/// column. The search query is provided here so both the app bar input and the
+/// routed page can share it.
 #[function_component(AdminShell)]
 pub fn admin_shell(props: &AdminShellProps) -> Html {
-    let route = match use_route::<Route>() {
-        Some(Route::AdminRoot) => Route::Dashboard,
-        Some(route) => route,
-        None => Route::Dashboard,
+    // The shared search query. It lives here, above both the app bar (which owns
+    // the input) and the routed page (which consumes the parsed filter), so the
+    // page's per-second re-render never disturbs the input's focus.
+    let query = use_state(String::new);
+    let set_query = {
+        let query = query.clone();
+        use_memo((), move |_| {
+            Callback::from(move |value: String| query.set(value))
+        })
     };
-    let (title, subtitle) = context_for(&route);
+    let search = SearchContext {
+        query: AttrValue::from((*query).clone()),
+        filter: Rc::new(SearchFilter::parse(&query)),
+        set: (*set_query).clone(),
+    };
+
+    // The completion vocabulary (partition names, keys, kinds) lives here too so
+    // the app bar can offer value completions for data owned by the routed page.
+    // The page publishes it via `VocabularyContext::set`.
+    let vocabulary = use_state(|| Rc::new(SearchVocabulary::default()));
+    let set_vocabulary = {
+        let vocabulary = vocabulary.clone();
+        use_memo((), move |_| {
+            Callback::from(move |value: SearchVocabulary| vocabulary.set(Rc::new(value)))
+        })
+    };
+    let vocabulary_ctx = VocabularyContext {
+        vocabulary: (*vocabulary).clone(),
+        set: (*set_vocabulary).clone(),
+    };
 
     // A title-row action slot that routed pages fill via the `PageActions`
     // context (for example with a refresh button). The setter is memoised so the
@@ -76,23 +84,30 @@ pub fn admin_shell(props: &AdminShellProps) -> Html {
     };
 
     html! {
-        <div class="app-shell">
-            <AppBar active={route} />
-            <main class="app-main">
-                <div class="app-container">
-                    <ContextProvider<PageActions> context={(*page_actions).clone()}>
-                        <Protected>
-                            <PageTitle title={title} subtitle={subtitle.map(AttrValue::from)}>
-                                { (*actions).clone() }
-                            </PageTitle>
-                            { props.children.clone() }
-                        </Protected>
-                    </ContextProvider<PageActions>>
+        <ContextProvider<SearchContext> context={search}>
+            <ContextProvider<VocabularyContext> context={vocabulary_ctx}>
+                <div class="app-shell">
+                    <AppBar />
+                    <main class="app-main">
+                        <div class="app-container">
+                            <ContextProvider<PageActions> context={(*page_actions).clone()}>
+                                <Protected>
+                                    <PageTitle
+                                        title="Admin"
+                                        subtitle="Browse the key-value store and job queues across every partition."
+                                    >
+                                        { (*actions).clone() }
+                                    </PageTitle>
+                                    { props.children.clone() }
+                                </Protected>
+                            </ContextProvider<PageActions>>
+                        </div>
+                    </main>
+                    <footer class="app-footer">
+                        <p>{ format!("Copyright © Sierra Softworks {}", Utc::now().year()) }</p>
+                    </footer>
                 </div>
-            </main>
-            <footer class="app-footer">
-                <p>{ format!("Copyright © Sierra Softworks {}", Utc::now().year()) }</p>
-            </footer>
-        </div>
+            </ContextProvider<VocabularyContext>>
+        </ContextProvider<SearchContext>>
     }
 }

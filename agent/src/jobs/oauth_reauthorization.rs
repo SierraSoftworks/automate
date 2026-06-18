@@ -147,16 +147,14 @@ mod tests {
 
     #[test]
     fn reauthorization_url_falls_back_to_relative_path() {
-        assert_eq!(
-            reauthorization_url(None, "spotify"),
-            "/oauth/spotify/"
-        );
+        assert_eq!(reauthorization_url(None, "spotify"), "/oauth/spotify/");
     }
 
     fn spotify_oauth_config() -> OAuth2Config {
         OAuth2Config {
             name: "Spotify".into(),
             jobs: Vec::new(),
+            acl: None,
             client_id: "client-id".into(),
             client_secret: "client-secret".into(),
             auth_url: "https://accounts.spotify.com/authorize".into(),

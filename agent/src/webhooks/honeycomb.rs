@@ -139,10 +139,10 @@ struct HoneycombAlertEventPayload {
 }
 
 impl Filterable for HoneycombAlertEventPayload {
-    fn get(&self, key: &str) -> crate::filter::FilterValue {
+    fn get(&self, key: &str) -> crate::filter::FilterValue<'_> {
         match key {
-            "id" => self.id.clone().into(),
-            "name" => self.name.clone().into(),
+            "id" => self.id.as_str().into(),
+            "name" => self.name.as_str().into(),
             _ => crate::filter::FilterValue::Null,
         }
     }

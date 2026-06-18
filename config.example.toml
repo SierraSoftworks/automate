@@ -17,6 +17,12 @@ api_key = "${{ env.ALPHAVANTAGE_API_KEY }}"
 [oauth2.spotify]
 name = "Spotify"
 jobs = ["spotify/yearly-playlist"]
+# The setup wizard at /oauth/spotify/ is admin-gated by default (you must sign in
+# as an admin to link the account). To let other people connect their own account,
+# set an `acl` here. It is evaluated like the admin ACL (`client_ip`, `method`,
+# `path`, `headers.*`, and, when OIDC is configured and the visitor is signed in,
+# `claims.*`). For example, `acl = 'true'` lets anyone connect without signing in.
+# acl = 'true'
 client_id = "${{ env.SPOTIFY_CLIENT_ID }}"
 client_secret = "${{ env.SPOTIFY_CLIENT_SECRET }}"
 auth_url = "https://accounts.spotify.com/authorize"

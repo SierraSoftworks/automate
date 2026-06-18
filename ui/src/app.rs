@@ -18,15 +18,11 @@ pub enum Route {
     /// The public landing page.
     #[at("/")]
     Landing,
-    /// The admin dashboard (also serves the bare `/admin/` path).
+    /// The unified admin browser (also serves the bare `/admin/` path).
     #[at("/admin")]
     AdminRoot,
     #[at("/admin/")]
-    Dashboard,
-    #[at("/admin/db")]
-    Db,
-    #[at("/admin/queue")]
-    Queue,
+    Admin,
     #[not_found]
     #[at("/404")]
     NotFound,
@@ -44,6 +40,9 @@ pub enum AuthStatus {
     SignedIn(AdminUser),
     /// Authentication is required; the browser must start the login flow.
     NeedsLogin,
+    /// Access was refused by the admin ACL. Signing in cannot change the outcome
+    /// (and, when OIDC is disabled, is not possible), so the UI must not offer it.
+    Forbidden,
     /// Resolving the authentication state failed.
     Error(String),
 }
@@ -80,6 +79,7 @@ fn use_auth() -> AuthHandle {
                     Ok(Some(user)) => status.set(AuthStatus::SignedIn(user)),
                     Ok(None) => status.set(AuthStatus::Disabled),
                     Err(ApiError::Unauthorized) => status.set(AuthStatus::NeedsLogin),
+                    Err(ApiError::Forbidden) => status.set(AuthStatus::Forbidden),
                     Err(e) => status.set(AuthStatus::Error(e.to_string())),
                 }
             });
@@ -130,11 +130,9 @@ fn app_inner() -> Html {
 fn switch(route: Route) -> Html {
     match route {
         Route::Landing => html! { <pages::Landing /> },
-        Route::AdminRoot | Route::Dashboard => html! {
-            <AdminShell><pages::Dashboard /></AdminShell>
+        Route::AdminRoot | Route::Admin => html! {
+            <AdminShell><pages::Admin /></AdminShell>
         },
-        Route::Db => html! { <AdminShell><pages::Db /></AdminShell> },
-        Route::Queue => html! { <AdminShell><pages::Queue /></AdminShell> },
         Route::NotFound => html! { <pages::NotFound /> },
     }
 }

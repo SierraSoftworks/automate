@@ -183,12 +183,21 @@ jobs:
 
       - name: Install protoc
         if: matrix.builder != 'cross'
-        uses: arduino/setup-protoc@v3
+        uses: SierraSoftworks/setup-protoc@v3.0.1
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Install Cross
+        if: matrix.builder == 'cross'
+        shell: bash
+        run: |
+          curl -L --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/cargo-bins/cargo-binstall/main/install-from-binstall-release.sh | bash
+          cargo binstall --no-confirm cross
+
       - name: Setup Cache
         uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
 
       - name: Fetch Versioned Cargo.toml
         uses: actions/download-artifact@v8
@@ -202,18 +211,21 @@ jobs:
           name: ui-dist
           path: ui/dist
 
-      - name: Install Cross
-        if: matrix.builder == 'cross'
-        shell: bash
-        run: |
-          curl -L --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/cargo-bins/cargo-binstall/main/install-from-binstall-release.sh | bash
-          cargo binstall --no-confirm cross
-
       - name: cargo build
         run: ${{ matrix.builder }} build --release --target ${{ matrix.target }} ${{ matrix.cargo-flags }}
 
+      # cross runs the compiler inside a Docker container as root, so the
+      # registry downloads and build artifacts it writes into the cached
+      # directories end up owned by root. Swatinem/rust-cache's save step runs
+      # as the unprivileged runner user and cannot prune root-owned files,
+      # which causes the cache save to fail and the cross build to never be
+      # cached. Reclaim ownership so the cache can be persisted.
+      - name: Reclaim cache ownership from cross
+        if: matrix.builder == 'cross'
+        run: sudo chown -R "$(id -u):$(id -g)" "$HOME/.cargo" target
+
       - name: Upload GitHub Release Artifacts
-        uses: SierraSoftworks/gh-releases@v1.0.9
+        uses: SierraSoftworks/gh-releases@v1.0.10
         if: github.event_name == 'release'
         with:
           files: "target/${{ matrix.target }}/release/${{ env.APP_NAME }}${{ matrix.extension }} | ${{ env.APP_NAME }}-${{ matrix.os }}-${{ matrix.arch }}${{ matrix.extension }}"
