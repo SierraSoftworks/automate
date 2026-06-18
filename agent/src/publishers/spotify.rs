@@ -182,16 +182,6 @@ impl SpotifyClient {
             "Check that Spotify's service is operational.",
         ])
     }
-
-    pub async fn renew_access_token(
-        token: &OAuth2RefreshToken,
-        services: &(impl Services + Send + Sync + 'static),
-    ) -> Result<OAuth2RefreshToken, human_errors::Error> {
-        let config = services.config().get_oauth2("spotify")?;
-        config
-            .get_access_token(token, &services.http_client())
-            .await
-    }
 }
 
 #[derive(Deserialize)]

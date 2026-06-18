@@ -597,9 +597,7 @@ mod tests {
         );
         assert_eq!(
             item.get("link"),
-            crate::filter::FilterValue::from(
-                "https://github.com/example/repo/releases/tag/v1.0.0"
-            )
+            crate::filter::FilterValue::from("https://github.com/example/repo/releases/tag/v1.0.0")
         );
         assert_eq!(item.get("draft"), crate::filter::FilterValue::Bool(false));
         assert_eq!(

@@ -30,7 +30,14 @@ impl Job for SpotifyYearlyPlaylistWorkflow {
         job: &Self::JobType,
     ) -> Result<(), human_errors::Error> {
         let services = ctx.services();
-        let token = SpotifyClient::renew_access_token(job, services).await?;
+        let token = match crate::web::refresh_or_notify("spotify", job, services).await? {
+            Some(token) => token,
+            // The refresh token has expired or been revoked: a re-authorization
+            // reminder has been raised. Completing here (rather than erroring)
+            // removes this queued message, and deliberately skipping the delayed
+            // re-enqueue below stops us from using the dead account.
+            None => return Ok(()),
+        };
 
         let client = SpotifyClient::new(token.clone(), services.http_client());
         let user = client.get_current_user().await?;

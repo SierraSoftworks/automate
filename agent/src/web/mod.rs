@@ -10,7 +10,7 @@ mod telemetry;
 mod ui;
 mod webhooks;
 
-pub use oauth::{OAuth2Config, OAuth2RefreshToken};
+pub use oauth::{OAuth2Config, OAuth2RefreshToken, refresh_or_notify};
 
 pub async fn run_web_server<S: Services + Clone + Send + Sync + 'static>(
     services: S,
