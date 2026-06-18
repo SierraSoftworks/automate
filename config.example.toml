@@ -16,7 +16,7 @@ api_key = "${{ env.ALPHAVANTAGE_API_KEY }}"
 
 [oauth2.spotify]
 name = "Spotify"
-jobs = ["workflow/spotify-yearly-playlist"]
+jobs = ["spotify/yearly-playlist"]
 client_id = "${{ env.SPOTIFY_CLIENT_ID }}"
 client_secret = "${{ env.SPOTIFY_CLIENT_SECRET }}"
 auth_url = "https://accounts.spotify.com/authorize"
@@ -26,11 +26,18 @@ scopes = [
     "playlist-modify-public",
     "playlist-modify-private"
 ]
+# When this provider's refresh token expires or is revoked, automate raises a
+# Todoist reminder (with a link to re-authorize) using the settings below, merged
+# over the global [connections.todoist]. Omit to fall back to the Inbox.
+todoist = { project = "Software", section = "Accounts" }
+
 
 [web]
 address = "127.0.0.1:8080"
-# base_url is used to construct absolute URLs (e.g. the OIDC redirect URI). When
-# omitted it is inferred from the incoming request's Host header.
+# base_url is used to construct absolute URLs (e.g. the OIDC redirect URI, and the
+# re-authorization links in OAuth expiry reminders, which are built from a
+# background job that has no incoming request to infer the host from). When
+# omitted it is inferred from the incoming request's Host header where possible.
 # base_url = 'https://automate.example.com'
 # trust_proxy controls whether the X-Forwarded-Proto/X-Forwarded-Host headers are
 # trusted when determining the request scheme and host. Only enable this when the
