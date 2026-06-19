@@ -7,7 +7,9 @@ when necessary.
 It facilitates things like calendar sync, RSS syndication, and
 the automatic management of GitHub notifications, as well as
 keeping YNAB stock accounts up to date with live market prices;
-it also handles webhooks from services like Tailscale and Honeycomb.
+it also handles webhooks from services like Tailscale, Honeycomb,
+and [Grey](https://github.com/SierraSoftworks/grey) (raising a Todoist
+task when a monitor becomes unhealthy and completing it once it recovers).
 
 ## Configuration
 

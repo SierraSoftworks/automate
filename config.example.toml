@@ -73,6 +73,12 @@ todoist = { project = "Software", section = "Outages" }
 # filter = 'true'
 todoist = { project = "Software", section = "Outages" }
 
+[webhooks.grey]
+# secret = "xxxxxx"  # Shared secret used to verify the Grey-Webhook-Signature HMAC
+# dashboard_url = "https://grey.example.com"  # Optional link back to the Grey status page
+# filter = 'state.healthy == false'  # e.g. only act on entities becoming unhealthy
+todoist = { project = "Software", section = "Outages" }
+
 [webhooks.honeycomb]
 trusted_secrets = [
     # "xxxxxx"

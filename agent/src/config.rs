@@ -200,6 +200,9 @@ pub struct WebhookConfigs {
     pub grafana: GrafanaWebhookConfig,
 
     #[serde(default)]
+    pub grey: GreyWebhookConfig,
+
+    #[serde(default)]
     pub honeycomb: HoneycombWebhookConfig,
 
     #[serde(default)]
