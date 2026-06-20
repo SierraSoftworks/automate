@@ -11,6 +11,14 @@ it also handles webhooks from services like Tailscale, Honeycomb,
 and [Grey](https://github.com/SierraSoftworks/grey) (raising a Todoist
 task when a monitor becomes unhealthy and completing it once it recovers).
 
+## Installation
+
+Install with [Homebrew](https://brew.sh):
+
+```sh
+brew install sierrasoftworks/tap/automate
+```
+
 ## Configuration
 
 Automate is configured via a `config.toml` file. An example
