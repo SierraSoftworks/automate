@@ -404,6 +404,7 @@ async fn oauth_callback<S: Services + Send + Sync + 'static>(
                     .await
                 {
                     error!("Failed to enqueue OAuth token storage task: {}", e);
+                    sentry::capture_error(&e);
                     return with_cleared_state(
                         &provider,
                         error_page(
