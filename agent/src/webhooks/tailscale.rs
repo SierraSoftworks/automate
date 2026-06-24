@@ -188,63 +188,67 @@ impl Job for TailscaleWebhook {
             debug!("No Tailscale webhook secret configured; skipping signature verification.");
         }
 
-        let event: TailscaleAlertEventPayload = job.json()?;
+        // Tailscale delivers webhook events as a JSON array, even when only a
+        // single event is included. https://tailscale.com/kb/1213/webhooks
+        let events: Vec<TailscaleAlertEventPayload> = job.json()?;
 
-        if !services
-            .config()
-            .webhooks
-            .tailscale
-            .filter
-            .matches(&event)?
-        {
-            info!(
-                "Tailscale event '{}' did not match filter; ignoring.",
-                event._type
-            );
-            return Ok(());
+        for event in events {
+            if !services
+                .config()
+                .webhooks
+                .tailscale
+                .filter
+                .matches(&event)?
+            {
+                info!(
+                    "Tailscale event '{}' did not match filter; ignoring.",
+                    event._type
+                );
+                continue;
+            }
+
+            let pretty_payload =
+                serde_json::to_string_pretty(&event.data).unwrap_or_else(|_| job.body.clone());
+
+            TodoistCreateTask::dispatch(
+                TodoistCreateTaskPayload {
+                    title: format!(
+                        "[**Tailscale**](https://login.tailscale.com/admin): {}",
+                        event.message
+                    ),
+                    description: Some(format!("```\n{pretty_payload}\n```")),
+                    due: TodoistDueDate::DateTime(event.timestamp),
+                    priority: Some(match event._type.as_str() {
+                        "exitNodeIPForwardingNotEnabled" => 4,
+                        "subnetIPForwardingNotEnabled" => 4,
+                        "nodeNeedsApproval" => 4,
+                        "nodeKeyExpired" => 4,
+                        "userNeedsApproval" => 4,
+
+                        "policyUpdate" => 3,
+                        "nodeCreated" => 3,
+                        "nodeApproved" => 3,
+                        "nodeKeyExpiringInOneDay" => 3,
+                        "userCreated" => 3,
+                        "userApproved" => 3,
+                        "userRoleUpdated" => 3,
+
+                        "nodeDeleted" => 2,
+                        "webhookUpdated" => 2,
+                        "webhookDeleted" => 2,
+
+                        "test" => 1,
+
+                        _ => 3,
+                    }),
+                    config: services.config().webhooks.tailscale.todoist.clone(),
+                    ..Default::default()
+                },
+                None,
+                services,
+            )
+            .await?;
         }
-
-        let pretty_payload =
-            serde_json::to_string_pretty(&event.data).unwrap_or_else(|_| job.body.clone());
-
-        TodoistCreateTask::dispatch(
-            TodoistCreateTaskPayload {
-                title: format!(
-                    "[**Tailscale**](https://login.tailscale.com/admin): {}",
-                    event.message
-                ),
-                description: Some(format!("```\n{pretty_payload}\n```")),
-                due: TodoistDueDate::DateTime(event.timestamp),
-                priority: Some(match event._type.as_str() {
-                    "exitNodeIPForwardingNotEnabled" => 4,
-                    "subnetIPForwardingNotEnabled" => 4,
-                    "nodeNeedsApproval" => 4,
-                    "nodeKeyExpired" => 4,
-                    "userNeedsApproval" => 4,
-
-                    "policyUpdate" => 3,
-                    "nodeCreated" => 3,
-                    "nodeApproved" => 3,
-                    "nodeKeyExpiringInOneDay" => 3,
-                    "userCreated" => 3,
-                    "userApproved" => 3,
-                    "userRoleUpdated" => 3,
-
-                    "nodeDeleted" => 2,
-                    "webhookUpdated" => 2,
-                    "webhookDeleted" => 2,
-
-                    "test" => 1,
-
-                    _ => 3,
-                }),
-                config: services.config().webhooks.tailscale.todoist.clone(),
-                ..Default::default()
-            },
-            None,
-            services,
-        )
-        .await?;
 
         Ok(())
     }
@@ -408,6 +412,20 @@ mod tests {
 
         let result = TailscaleWebhook::verify_signature(secret, body, &signature, Utc::now());
         result.expect("Empty body with valid signature should verify successfully");
+    }
+
+    #[test]
+    fn test_parse_event_array() {
+        // Tailscale delivers events as a JSON array, even for a single event.
+        let body = r#"[{"timestamp":"2026-06-19T21:12:52.923385657Z","version":1,"type":"policyUpdate","tailnet":"example.org.github","message":"Tailnet policy file updated","data":{"url":"https://login.tailscale.com/admin/acls"}}]"#;
+
+        let events: Vec<TailscaleAlertEventPayload> =
+            serde_json::from_str(body).expect("array payload should parse");
+
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0]._type, "policyUpdate");
+        assert_eq!(events[0].tailnet, "example.org.github");
+        assert_eq!(events[0].message, "Tailnet policy file updated");
     }
 
     #[test]
