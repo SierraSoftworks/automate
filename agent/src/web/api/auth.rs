@@ -86,6 +86,7 @@ pub async fn auth_login<S: Services>(
         Ok(d) => d,
         Err(e) => {
             error!("Failed to load OIDC discovery document during login: {e}");
+            sentry::capture_error(&e);
             return json_error(
                 actix_web::http::StatusCode::BAD_GATEWAY,
                 "We could not reach the configured identity provider.",
@@ -100,6 +101,7 @@ pub async fn auth_login<S: Services>(
         Ok(url) => url,
         Err(e) => {
             error!("Failed to build the OIDC authorization URL: {e}");
+            sentry::capture_error(&e);
             return json_error(
                 actix_web::http::StatusCode::BAD_GATEWAY,
                 "We could not start the sign-in with the identity provider.",
@@ -117,6 +119,7 @@ pub async fn auth_login<S: Services>(
         Ok(value) => value,
         Err(e) => {
             error!("Failed to serialize the OAuth state cookie: {e}");
+            sentry::capture_error(&e);
             return json_error(
                 actix_web::http::StatusCode::INTERNAL_SERVER_ERROR,
                 "We could not start the sign-in process.",
@@ -188,6 +191,7 @@ pub async fn auth_callback<S: Services>(
         Ok(d) => d,
         Err(e) => {
             error!("Failed to load OIDC discovery document during callback: {e}");
+            sentry::capture_error(&e);
             return clear_oauth_and_redirect("/?auth_error=provider");
         }
     };
