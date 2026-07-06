@@ -30,6 +30,10 @@ mod user;
 /// The cookie holding the signed-in administrator's OIDC ID token (the session).
 pub const SESSION_COOKIE: &str = "automate_session";
 
+/// The `HttpOnly` cookie holding the OIDC refresh token, scoped to the auth
+/// endpoints so it only travels with session-renewal (and logout) requests.
+pub const REFRESH_COOKIE: &str = "automate_refresh";
+
 /// The non-`HttpOnly` cookie holding the double-submit CSRF token.
 pub const CSRF_COOKIE: &str = "automate_csrf";
 
@@ -68,6 +72,7 @@ pub fn configure<S: Services + Clone + Send + Sync + 'static>() -> actix_web::Sc
             web::scope("/auth")
                 .route("/login", web::get().to(auth::auth_login::<S>))
                 .route("/callback", web::get().to(auth::auth_callback::<S>))
+                .route("/refresh", web::post().to(auth::auth_refresh::<S>))
                 .route("/logout", web::post().to(auth::auth_logout)),
         )
         .service(
