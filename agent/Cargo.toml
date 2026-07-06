@@ -41,7 +41,7 @@ tokio-rusqlite = "0.7.0"
 toml = "1.1.2"
 tracing = { version = "0.1.44" }
 tracing-batteries = { git = "https://github.com/sierrasoftworks/tracing-batteries-rs.git", features = [
-  "umami",
+  "analytics",
   "opentelemetry",
 ] }
 urlencoding = "2.1.3"

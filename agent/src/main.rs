@@ -52,13 +52,9 @@ async fn main() {
         .with_battery(tracing_batteries::Sentry::new(
             "https://64422db58bbf92837d6484d1b8117d5a@o219072.ingest.us.sentry.io/4506753155137536",
         ))
-        .with_battery(
-            tracing_batteries::Umami::new(
-                "https://analytics.sierrasoftworks.com",
-                "1dc61b17-a026-478d-aee9-70ef2878fd03",
-            )
-            .with_initial_page("/.app/"),
-        );
+        .with_battery(tracing_batteries::Analytics::new(
+            "https://analytics.sierrasoftworks.com",
+        ));
 
     if let Err(err) = run(args).await {
         eprintln!("{}", human_errors::pretty(&err));
