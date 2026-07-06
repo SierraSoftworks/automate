@@ -9,6 +9,7 @@ LABEL org.opencontainers.image.description="Automate various aspects of your lif
 LABEL org.opencontainers.image.licenses=MIT
 
 RUN apt-get update && apt-get install -y \
+  ca-certificates \
   openssl
 
 ADD ./automate /usr/local/bin/automate
