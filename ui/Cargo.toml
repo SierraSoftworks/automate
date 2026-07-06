@@ -18,6 +18,10 @@ gloo-net = "0.5"
 gloo-utils = "0.2"
 gloo-timers = "0.3"
 
+# Shared futures so concurrent 401-driven session refreshes coalesce onto a
+# single renewal (see `auth::refresh_session`).
+futures = "0.3"
+
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
 js-sys = "0.3"

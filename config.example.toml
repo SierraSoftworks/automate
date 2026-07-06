@@ -62,7 +62,10 @@ acl = 'client_ip in ["127.0.0.1"]'
 endpoint = 'https://auth.example.com'
 client_id = '0000000000000000000000000'
 client_secret = '11111111111111111111111111111111111111111111111111'
-scopes = ['openid', 'profile', 'email']
+# Include "offline_access" (where your provider supports/requires it) so a
+# refresh token is issued and sessions renew silently instead of ending when
+# the ID token expires.
+scopes = ['openid', 'profile', 'email', 'offline_access']
 
 [webhooks.azure_monitor]
 # filter = 'true'

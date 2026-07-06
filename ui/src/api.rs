@@ -4,8 +4,9 @@
 //! browser attaches automatically to same-origin requests — the UI never sees a
 //! token. Mutating requests additionally carry a double-submit CSRF token in the
 //! `X-CSRF-Token` header (fetched once from `/api/v1/csrf` and cached). A `401`
-//! response is surfaced as [`ApiError::Unauthorized`] so callers can redirect to
-//! login.
+//! first triggers a transparent session renewal ([`crate::auth::refresh_session`])
+//! and a single retry; only when the session truly cannot be renewed is it
+//! surfaced as [`ApiError::Unauthorized`] so callers can redirect to login.
 
 use std::cell::RefCell;
 
@@ -65,10 +66,8 @@ fn cached_csrf() -> Option<String> {
 
 /// Fetches a fresh CSRF token from the server and caches it.
 async fn fetch_csrf() -> Result<String, ApiError> {
-    let resp = Request::get(&format!("{API_BASE}/csrf"))
-        .send()
-        .await
-        .map_err(|e| ApiError::Network(e.to_string()))?;
+    let url = format!("{API_BASE}/csrf");
+    let resp = send_with_session(|| Request::get(&url).build()).await?;
     if !resp.ok() {
         return Err(error_from_response(resp).await);
     }
@@ -112,12 +111,30 @@ async fn error_from_response(resp: gloo_net::http::Response) -> ApiError {
     }
 }
 
+/// Sends a request, transparently renewing the session and retrying once when
+/// the server rejects it with a `401` (the session cookie lapsed, but the agent
+/// may hold a refresh token it can redeem). The renewal is coalesced across
+/// concurrent callers, so a page's parallel fetches failing together produce a
+/// single refresh. When renewal fails the original `401` is returned untouched.
+async fn send_with_session<F>(build: F) -> Result<gloo_net::http::Response, ApiError>
+where
+    F: Fn() -> Result<Request, gloo_net::Error>,
+{
+    let net = |e: gloo_net::Error| ApiError::Network(e.to_string());
+    let resp = build().map_err(net)?.send().await.map_err(net)?;
+    if resp.status() != 401 {
+        return Ok(resp);
+    }
+    if crate::auth::refresh_session().await.is_err() {
+        return Ok(resp);
+    }
+    build().map_err(net)?.send().await.map_err(net)
+}
+
 /// Performs a GET request and deserializes the JSON response body.
 async fn get_json<T: DeserializeOwned>(path: &str) -> Result<T, ApiError> {
-    let resp = Request::get(&format!("{API_BASE}{path}"))
-        .send()
-        .await
-        .map_err(|e| ApiError::Network(e.to_string()))?;
+    let url = format!("{API_BASE}{path}");
+    let resp = send_with_session(|| Request::get(&url).build()).await?;
 
     if !resp.ok() {
         return Err(error_from_response(resp).await);
@@ -136,13 +153,9 @@ async fn post_empty<B: Serialize>(path: &str, body: &B) -> Result<(), ApiError> 
     let mut refreshed = false;
     loop {
         let token = ensure_csrf().await?;
-        let resp = Request::post(&url)
-            .header(CSRF_HEADER, &token)
-            .json(body)
-            .map_err(|e| ApiError::Network(e.to_string()))?
-            .send()
-            .await
-            .map_err(|e| ApiError::Network(e.to_string()))?;
+        let resp =
+            send_with_session(|| Request::post(&url).header(CSRF_HEADER, &token).json(body))
+                .await?;
 
         if resp.ok() {
             return Ok(());
@@ -166,11 +179,9 @@ async fn delete(path: &str) -> Result<(), ApiError> {
     let mut refreshed = false;
     loop {
         let token = ensure_csrf().await?;
-        let resp = Request::delete(&url)
-            .header(CSRF_HEADER, &token)
-            .send()
-            .await
-            .map_err(|e| ApiError::Network(e.to_string()))?;
+        let resp =
+            send_with_session(|| Request::delete(&url).header(CSRF_HEADER, &token).build())
+                .await?;
 
         if resp.ok() {
             return Ok(());
@@ -194,10 +205,8 @@ pub async fn logout() -> Result<(), ApiError> {
 
 /// Fetches the signed-in user's identity, if any.
 pub async fn me() -> Result<Option<AdminUser>, ApiError> {
-    let resp = Request::get(&format!("{API_BASE}/me"))
-        .send()
-        .await
-        .map_err(|e| ApiError::Network(e.to_string()))?;
+    let url = format!("{API_BASE}/me");
+    let resp = send_with_session(|| Request::get(&url).build()).await?;
 
     if resp.status() == 204 {
         return Ok(None);
