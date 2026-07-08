@@ -322,16 +322,15 @@ impl JobHost {
                             item.partition,
                             item.payload
                         );
-                        sentry::capture_message(
-                            &format!(
-                                "No job handler is registered for partition '{}'; dropping the message.",
-                                item.partition
-                            ),
-                            sentry::Level::Warning,
+                        services.session().record_event(
+                            "job::missing-handler",
+                            [
+                                ("partition".to_string(), item.partition.clone()),
+                            ].into()
                         );
                         if let Err(err) = queue.complete(item.partition.clone(), item).await {
                             error!(error = %err, "Failed to drop unhandled job message: {err}");
-                            sentry::capture_error(&err);
+                            services.session().record_error(&err);
                         }
                         continue;
                     };
@@ -345,7 +344,7 @@ impl JobHost {
                 }
                 Err(err) => {
                     error!(error = %err, "An error occurred while fetching a job from the queue: {err}");
-                    sentry::capture_error(&err);
+                    services.session().record_error(&err);
                     tokio::time::sleep(std::time::Duration::from_secs(5)).await;
                 }
             }
