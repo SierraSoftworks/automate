@@ -12,7 +12,7 @@ use yew::prelude::*;
 use crate::api::{self, ApiError};
 use crate::app::AuthHandle;
 use crate::components::{
-    Alert, AlertKind, BrowserPartition, PageActions, PartitionBrowser, RefreshButton,
+    Alert, AlertKind, BrowserPartition, Integrations, PageActions, PartitionBrowser, RefreshButton,
 };
 use crate::fixtures;
 use crate::search::{SearchVocabulary, VocabularyContext};
@@ -170,16 +170,18 @@ pub fn admin() -> Html {
 
     let on_trigger_queue = {
         let refresh = refresh.clone();
-        Callback::from(move |(partition, key, payload): (String, String, serde_json::Value)| {
-            if fixtures::is_demo() {
-                return;
-            }
-            let refresh = refresh.clone();
-            spawn_local(async move {
-                let _ = api::trigger_queue(&partition, &key, payload).await;
-                refresh.emit(());
-            });
-        })
+        Callback::from(
+            move |(partition, key, payload): (String, String, serde_json::Value)| {
+                if fixtures::is_demo() {
+                    return;
+                }
+                let refresh = refresh.clone();
+                spawn_local(async move {
+                    let _ = api::trigger_queue(&partition, &key, payload).await;
+                    refresh.emit(());
+                });
+            },
+        )
     };
 
     let retry = {
@@ -199,8 +201,7 @@ pub fn admin() -> Html {
     {
         let page_actions = page_actions.clone();
         let refresh = refresh.clone();
-        let loading =
-            matches!(&*kv_state, Load::Loading) || matches!(&*queue_state, Load::Loading);
+        let loading = matches!(&*kv_state, Load::Loading) || matches!(&*queue_state, Load::Loading);
         let busy = *refreshing || loading;
         use_effect_with(busy, move |&busy| {
             if let Some(actions) = &page_actions {
@@ -335,6 +336,7 @@ pub fn admin() -> Html {
     html! {
         <>
             { banner }
+            <Integrations />
             <PartitionBrowser
                 partitions={partitions}
                 empty="No partitions found in the key-value store or job queues."

@@ -145,10 +145,11 @@ pub struct AdminConfig {
     pub acl: Filter,
 
     /// Optional OIDC configuration. When present, requests to the admin API must
-    /// carry a valid session cookie (`automate_session`) holding an ID token
-    /// issued by the configured provider. The agent drives the entire
-    /// Authorization Code + PKCE flow server-side and sets the cookie; the browser
-    /// never handles tokens.
+    /// carry a valid `Authorization: Bearer` ID token issued by the configured
+    /// provider. The admin SPA runs the Authorization Code request in a popup and
+    /// the agent performs the confidential code exchange (and refreshes) with its
+    /// `client_secret`; the resulting ID token is held by the SPA and presented as
+    /// a bearer, never as a cookie.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub oidc: Option<OidcConfig>,
 }
@@ -179,6 +180,9 @@ pub struct OidcConfig {
     pub client_secret: String,
 
     /// The scopes to request when authenticating. `openid` is always included.
+    /// Include `offline_access` (or the provider's equivalent) so the provider
+    /// issues a refresh token — without one the SPA cannot renew an expired
+    /// session transparently and must prompt for an interactive sign-in instead.
     #[serde(default)]
     pub scopes: Vec<String>,
 }

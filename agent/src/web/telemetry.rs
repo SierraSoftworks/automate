@@ -26,14 +26,13 @@ const SENSITIVE_QUERY_PARAMS: &[&str] = &[
 ];
 
 /// Request headers whose values carry credentials and must be redacted from the
-/// span's header dump. `cookie` holds the session ID token; `authorization`
-/// holds any bearer token; `x-csrf-token` is the double-submit secret.
+/// span's header dump. `authorization` holds the bearer ID token; `cookie` still
+/// carries the transient OAuth `state` cookie used by the setup wizard.
 const SENSITIVE_HEADERS: &[&str] = &[
     "authorization",
     "proxy-authorization",
     "cookie",
     "set-cookie",
-    "x-csrf-token",
 ];
 
 /// Renders the request target (path + query) for the span, redacting the values

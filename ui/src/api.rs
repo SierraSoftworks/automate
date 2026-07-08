@@ -1,32 +1,21 @@
 //! Thin client over the agent's `/api/v1` REST endpoints.
 //!
-//! Authentication relies on the agent's `HttpOnly` session cookie, which the
-//! browser attaches automatically to same-origin requests — the UI never sees a
-//! token. Mutating requests additionally carry a double-submit CSRF token in the
-//! `X-CSRF-Token` header (fetched once from `/api/v1/csrf` and cached). A `401`
-//! first triggers a transparent session renewal ([`crate::auth::refresh_session`])
-//! and a single retry; only when the session truly cannot be renewed is it
-//! surfaced as [`ApiError::Unauthorized`] so callers can redirect to login.
+//! Authenticated calls attach the stored ID token as an `Authorization: Bearer` header (see
+//! [`crate::auth`]). When the agent rejects a token as expired (HTTP 401), the client transparently
+//! renews it from the stored refresh token and retries the request once; interactive sign-in is
+//! handled separately via a popup (see [`crate::auth::begin_login`]). A `401` that survives a refresh
+//! is surfaced as [`ApiError::Unauthorized`] so callers can prompt for sign-in.
 
-use std::cell::RefCell;
-
-use automate_api::{AdminUser, CsrfToken, KeyValueEntry, QueueMessage};
-use gloo_net::http::Request;
+use automate_api::{AdminUser, KeyValueEntry, QueueMessage};
+use gloo_net::http::{Request, Response};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 
-/// The base path of the REST API. Requests are made relative to the current
-/// origin so the same bundle works behind any host.
+use crate::auth;
+
+/// The base path of the REST API. Requests are made relative to the current origin so the same
+/// bundle works behind any host.
 const API_BASE: &str = "/api/v1";
-
-/// The header carrying the double-submit CSRF token on mutating requests.
-const CSRF_HEADER: &str = "X-CSRF-Token";
-
-thread_local! {
-    /// The cached CSRF token for this document, fetched lazily on the first
-    /// mutating request and refreshed if the server rejects it.
-    static CSRF_TOKEN: RefCell<Option<String>> = const { RefCell::new(None) };
-}
 
 /// An error returned by an API call.
 #[derive(Debug, Clone, PartialEq)]
@@ -59,43 +48,73 @@ struct ServerError {
     error: String,
 }
 
-/// Reads the cached CSRF token, if one has been fetched.
-fn cached_csrf() -> Option<String> {
-    CSRF_TOKEN.with(|t| t.borrow().clone())
+/// The HTTP verbs used by the client. A small enum so a request can be rebuilt for the
+/// post-refresh retry.
+#[derive(Clone, Copy)]
+enum Verb {
+    Get,
+    Post,
+    Delete,
 }
 
-/// Fetches a fresh CSRF token from the server and caches it.
-async fn fetch_csrf() -> Result<String, ApiError> {
-    let url = format!("{API_BASE}/csrf");
-    let resp = send_with_session(|| Request::get(&url).build()).await?;
-    if !resp.ok() {
-        return Err(error_from_response(resp).await);
+/// Builds a request with the bearer token (when present) and an optional JSON body.
+fn build<B: Serialize>(
+    verb: Verb,
+    url: &str,
+    token: Option<&str>,
+    body: Option<&B>,
+) -> Result<Request, ApiError> {
+    let builder = match verb {
+        Verb::Get => Request::get(url),
+        Verb::Post => Request::post(url),
+        Verb::Delete => Request::delete(url),
+    };
+    let builder = match token {
+        Some(token) => builder.header("Authorization", &format!("Bearer {token}")),
+        None => builder,
+    };
+    match body {
+        Some(body) => builder
+            .json(body)
+            .map_err(|e| ApiError::Network(e.to_string())),
+        None => builder
+            .build()
+            .map_err(|e| ApiError::Network(e.to_string())),
     }
-    let token = resp
-        .json::<CsrfToken>()
+}
+
+/// Sends a request, attaching the stored bearer token. On a `401` (when a session is configured) the
+/// token is transparently renewed from the refresh token and the request retried once; if renewal
+/// fails the stored session is dropped and the `401` is returned.
+async fn send<B: Serialize>(
+    verb: Verb,
+    path: &str,
+    body: Option<&B>,
+) -> Result<Response, ApiError> {
+    let url = format!("{API_BASE}{path}");
+    let token = auth::stored_token();
+    let response = build(verb, &url, token.as_deref(), body)?
+        .send()
         .await
-        .map_err(|e| ApiError::Network(e.to_string()))?
-        .token;
-    CSRF_TOKEN.with(|t| *t.borrow_mut() = Some(token.clone()));
-    Ok(token)
-}
+        .map_err(|e| ApiError::Network(e.to_string()))?;
 
-/// Returns a usable CSRF token, fetching one if it is not already cached.
-async fn ensure_csrf() -> Result<String, ApiError> {
-    match cached_csrf() {
-        Some(token) => Ok(token),
-        None => fetch_csrf().await,
+    if response.status() != 401 {
+        return Ok(response);
     }
+
+    if let Ok(fresh) = auth::refresh_session().await {
+        return build(verb, &url, Some(&fresh), body)?
+            .send()
+            .await
+            .map_err(|e| ApiError::Network(e.to_string()));
+    }
+
+    auth::clear_token();
+    Ok(response)
 }
 
-/// Clears the cached CSRF token so the next mutating request fetches a fresh one.
-fn invalidate_csrf() {
-    CSRF_TOKEN.with(|t| *t.borrow_mut() = None);
-}
-
-/// Converts a non-success response into an [`ApiError`], reading the JSON error
-/// body when available.
-async fn error_from_response(resp: gloo_net::http::Response) -> ApiError {
+/// Converts a non-success response into an [`ApiError`], reading the JSON error body when available.
+async fn error_from_response(resp: Response) -> ApiError {
     let status = resp.status();
     if status == 401 {
         return ApiError::Unauthorized;
@@ -111,103 +130,40 @@ async fn error_from_response(resp: gloo_net::http::Response) -> ApiError {
     }
 }
 
-/// Sends a request, transparently renewing the session and retrying once when
-/// the server rejects it with a `401` (the session cookie lapsed, but the agent
-/// may hold a refresh token it can redeem). The renewal is coalesced across
-/// concurrent callers, so a page's parallel fetches failing together produce a
-/// single refresh. When renewal fails the original `401` is returned untouched.
-async fn send_with_session<F>(build: F) -> Result<gloo_net::http::Response, ApiError>
-where
-    F: Fn() -> Result<Request, gloo_net::Error>,
-{
-    let net = |e: gloo_net::Error| ApiError::Network(e.to_string());
-    let resp = build().map_err(net)?.send().await.map_err(net)?;
-    if resp.status() != 401 {
-        return Ok(resp);
-    }
-    if crate::auth::refresh_session().await.is_err() {
-        return Ok(resp);
-    }
-    build().map_err(net)?.send().await.map_err(net)
-}
-
 /// Performs a GET request and deserializes the JSON response body.
 async fn get_json<T: DeserializeOwned>(path: &str) -> Result<T, ApiError> {
-    let url = format!("{API_BASE}{path}");
-    let resp = send_with_session(|| Request::get(&url).build()).await?;
-
+    let resp = send::<()>(Verb::Get, path, None).await?;
     if !resp.ok() {
         return Err(error_from_response(resp).await);
     }
-
     resp.json::<T>()
         .await
         .map_err(|e| ApiError::Network(e.to_string()))
 }
 
-/// Performs a POST request with a JSON body, attaching the CSRF token. On a
-/// `403` (a stale CSRF token) the token is refreshed and the request retried
-/// once.
+/// Performs a POST request with a JSON body, expecting an empty success response.
 async fn post_empty<B: Serialize>(path: &str, body: &B) -> Result<(), ApiError> {
-    let url = format!("{API_BASE}{path}");
-    let mut refreshed = false;
-    loop {
-        let token = ensure_csrf().await?;
-        let resp =
-            send_with_session(|| Request::post(&url).header(CSRF_HEADER, &token).json(body))
-                .await?;
-
-        if resp.ok() {
-            return Ok(());
-        }
-
-        if resp.status() == 403 && !refreshed {
-            invalidate_csrf();
-            fetch_csrf().await?;
-            refreshed = true;
-            continue;
-        }
-
-        return Err(error_from_response(resp).await);
+    let resp = send(Verb::Post, path, Some(body)).await?;
+    if resp.ok() {
+        Ok(())
+    } else {
+        Err(error_from_response(resp).await)
     }
 }
 
-/// Performs a DELETE request, attaching the CSRF token. On a `403` (a stale CSRF
-/// token) the token is refreshed and the request retried once.
+/// Performs a DELETE request, expecting an empty success response.
 async fn delete(path: &str) -> Result<(), ApiError> {
-    let url = format!("{API_BASE}{path}");
-    let mut refreshed = false;
-    loop {
-        let token = ensure_csrf().await?;
-        let resp =
-            send_with_session(|| Request::delete(&url).header(CSRF_HEADER, &token).build())
-                .await?;
-
-        if resp.ok() {
-            return Ok(());
-        }
-
-        if resp.status() == 403 && !refreshed {
-            invalidate_csrf();
-            fetch_csrf().await?;
-            refreshed = true;
-            continue;
-        }
-
-        return Err(error_from_response(resp).await);
+    let resp = send::<()>(Verb::Delete, path, None).await?;
+    if resp.ok() {
+        Ok(())
+    } else {
+        Err(error_from_response(resp).await)
     }
-}
-
-/// Clears the server-side session.
-pub async fn logout() -> Result<(), ApiError> {
-    post_empty("/auth/logout", &serde_json::Value::Null).await
 }
 
 /// Fetches the signed-in user's identity, if any.
 pub async fn me() -> Result<Option<AdminUser>, ApiError> {
-    let url = format!("{API_BASE}/me");
-    let resp = send_with_session(|| Request::get(&url).build()).await?;
-
+    let resp = send::<()>(Verb::Get, "/me", None).await?;
     if resp.status() == 204 {
         return Ok(None);
     }
@@ -271,6 +227,41 @@ pub async fn delete_queue(partition: &str, key: &str) -> Result<(), ApiError> {
         urlencode(key)
     ))
     .await
+}
+
+/// A configured integration provider the admin may connect.
+#[derive(Debug, Clone, PartialEq, serde::Deserialize)]
+pub struct OAuthProvider {
+    pub provider: String,
+    pub name: String,
+}
+
+/// Lists the configured integration providers.
+pub async fn list_oauth_providers() -> Result<Vec<OAuthProvider>, ApiError> {
+    get_json("/oauth").await
+}
+
+#[derive(serde::Deserialize)]
+struct StartResponse {
+    authorize_url: String,
+}
+
+/// Begins connecting an integration provider, returning the provider authorization URL to open in a
+/// popup. The agent has already set the transient state cookie the callback verifies.
+pub async fn start_oauth(provider: &str) -> Result<String, ApiError> {
+    let resp = send(
+        Verb::Post,
+        &format!("/oauth/{}/start", urlencode(provider)),
+        Some(&serde_json::Value::Null),
+    )
+    .await?;
+    if !resp.ok() {
+        return Err(error_from_response(resp).await);
+    }
+    resp.json::<StartResponse>()
+        .await
+        .map(|r| r.authorize_url)
+        .map_err(|e| ApiError::Network(e.to_string()))
 }
 
 /// Percent-encodes a path/query component.

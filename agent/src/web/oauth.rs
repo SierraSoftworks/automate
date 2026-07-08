@@ -1,16 +1,13 @@
 use crate::prelude::*;
-use actix_web::body::BoxBody;
 use actix_web::cookie::time::Duration as CookieDuration;
 use actix_web::cookie::{Cookie, SameSite};
-use actix_web::dev::{ServiceRequest, ServiceResponse};
-use actix_web::middleware::{Next, from_fn};
 use actix_web::{HttpRequest, HttpResponse, dev::HttpServiceFactory, web};
 use oauth2::{CsrfToken, Scope, TokenResponse};
 use reqwest::Url;
 use serde::Deserialize;
 
 use crate::prelude::Services;
-use crate::web::helpers::oidc::{AdminRequestFilter, filterable_claims, validate_token};
+use crate::web::helpers::oidc::AdminRequestFilter;
 use crate::web::helpers::request::client_ip;
 
 /// The transient cookie that carries the OAuth setup wizard's CSRF `state` across
@@ -111,140 +108,161 @@ fn state_matches(expected: Option<&str>, provided: Option<&str>) -> bool {
     matches!((expected, provided), (Some(a), Some(b)) if !a.is_empty() && a == b)
 }
 
-/// The outcome of evaluating wizard access for a request.
-enum WizardOutcome {
-    /// The visitor may proceed.
-    Authorized,
-    /// The visitor isn't signed in and signing in could grant access.
-    NeedsLogin,
-    /// The visitor is denied and signing in would not help.
-    Forbidden,
+/// An HTML page shown when a visitor is not permitted to use a provider's
+/// self-service wizard.
+fn access_denied_page() -> HttpResponse {
+    error_page(
+        403,
+        "Access denied",
+        "You are not permitted to set up this integration.",
+    )
 }
 
-/// Determines whether a request may use a provider's setup wizard.
+/// An HTML page shown when an admin-gated wizard is opened directly (a top-level
+/// navigation that cannot carry the admin bearer token). These wizards are
+/// launched from the Automate admin area instead.
+fn admin_only_page() -> HttpResponse {
+    error_page(
+        403,
+        "Sign in required",
+        "This integration is set up from the Automate admin area. Open the admin UI and start the connection from there.",
+    )
+}
+
+/// The outcome of evaluating a request against a provider's *public* (top-level
+/// navigation) wizard path.
+enum PublicWizardOutcome {
+    /// The visitor may proceed with the flow.
+    Allowed,
+    /// The visitor is not permitted by the applicable ACL.
+    Denied,
+    /// The provider is admin-gated and OIDC is configured, so it cannot be
+    /// authorised on a top-level navigation (which carries no bearer token). It
+    /// must be launched from the admin SPA via [`start`] instead.
+    AdminOnly,
+}
+
+/// Decides whether a top-level navigation may use a provider's wizard.
 ///
-/// A provider that defines its own `acl` opts into self-service access: the ACL
-/// is evaluated directly (a session is consulted when present but never required,
-/// so `acl = 'true'` lets anyone connect). A provider without an `acl` is
-/// admin-gated and behaves exactly like the admin API — when OIDC is configured a
-/// valid session is required before the admin ACL is consulted.
-async fn authorize_wizard<S: Services>(
+/// A provider that defines its own `acl` is self-service: the ACL is evaluated
+/// against request metadata (no `claims.*`, since a top-level navigation carries
+/// no bearer). A provider without its own `acl` is admin-gated: when OIDC is
+/// disabled the admin ACL is evaluated against request metadata exactly as before
+/// (e.g. an IP allow-list still grants access); when OIDC is enabled the bearer
+/// cannot ride a top-level navigation, so the flow must be started from the admin
+/// SPA and this path reports [`PublicWizardOutcome::AdminOnly`].
+fn public_wizard_outcome<S: Services>(
     services: &S,
     req: &HttpRequest,
-    provider_config: Option<&OAuth2Config>,
-) -> WizardOutcome {
+    provider_config: &OAuth2Config,
+) -> PublicWizardOutcome {
     let config = services.config();
     let admin = &config.web.admin;
 
-    let (acl, require_session) = match provider_config.and_then(|c| c.acl.as_ref()) {
-        Some(acl) => (acl, false),
-        None => (&admin.acl, true),
+    let acl = match provider_config.acl.as_ref() {
+        Some(acl) => acl,
+        None => {
+            if admin.oidc.is_some() {
+                return PublicWizardOutcome::AdminOnly;
+            }
+            &admin.acl
+        }
     };
 
-    // Validate the session cookie when OIDC is configured and one is present; an
-    // absent or invalid cookie simply means "not signed in".
-    let claims = match (admin.oidc.as_ref(), req.cookie(super::api::SESSION_COOKIE)) {
-        (Some(oidc), Some(cookie)) => validate_token(services, oidc, cookie.value()).await.ok(),
-        _ => None,
-    };
-
-    // Admin-gated wizards require a valid session before the ACL is consulted,
-    // exactly as the admin API does.
-    if require_session && admin.oidc.is_some() && claims.is_none() {
-        return WizardOutcome::NeedsLogin;
-    }
-
-    let filterable = claims.as_ref().map(filterable_claims);
     let filter = AdminRequestFilter {
         method: req.method().as_str(),
         path: req.path(),
         client_ip: client_ip(config.web.trust_proxy, req.headers(), req.peer_addr()),
         headers: req.headers(),
-        claims: filterable.as_ref(),
+        claims: None,
     };
 
     if acl.matches(&filter).unwrap_or(false) {
-        WizardOutcome::Authorized
-    } else if admin.oidc.is_some() && claims.is_none() {
-        // Not signed in, and signing in might supply claims that satisfy the ACL.
-        WizardOutcome::NeedsLogin
+        PublicWizardOutcome::Allowed
     } else {
-        WizardOutcome::Forbidden
+        PublicWizardOutcome::Denied
     }
 }
 
-/// An HTML interstitial prompting the visitor to sign in, returning to the
-/// current wizard URL afterwards. Only shown when OIDC is configured.
-fn sign_in_page(req: &HttpRequest) -> HttpResponse {
-    let return_to = req.uri().to_string();
-    let login = format!(
-        "/api/v1/auth/login?return_to={}",
-        urlencoding::encode(&return_to)
-    );
-    html_action_page(
-        "Sign in | Automate",
-        "Sign in required",
-        "You need to sign in before you can set up this integration.",
-        &login,
-        "Sign in",
-    )
+/// `GET /api/v1/oauth` — lists the configured integration providers so the admin
+/// SPA can offer a "connect" action for each. Admin-gated by `api_auth`.
+pub async fn list_providers<S: Services>(services: web::Data<S>) -> HttpResponse {
+    let providers: Vec<serde_json::Value> = services
+        .config()
+        .oauth2
+        .iter()
+        .map(|(key, cfg)| serde_json::json!({ "provider": key, "name": cfg.name }))
+        .collect();
+
+    HttpResponse::Ok().json(providers)
 }
 
-/// An HTML page shown when the visitor is authenticated (or no sign-in is
-/// possible) but not permitted to use the wizard.
-fn access_denied_page() -> HttpResponse {
-    error_page(
-        403,
-        "Access denied",
-        "Your account is not permitted to set up this integration.",
-    )
+#[derive(Deserialize)]
+pub struct StartRequest {
+    /// Where the popup should return to once the connection completes. Optional;
+    /// purely informational for the SPA.
+    #[serde(default)]
+    #[allow(dead_code)]
+    return_to: Option<String>,
 }
 
-/// Authentication/authorization gate for the OAuth setup wizard.
-///
-/// Unlike the JSON admin API this renders HTML: an unauthenticated visitor is
-/// offered a sign-in link (rather than a bare `401`), and a denied visitor gets a
-/// readable page. Per-provider `acl`s are honoured via [`authorize_wizard`].
-async fn oauth_wizard_auth<S: Services + Send + Sync + 'static>(
-    req: ServiceRequest,
-    next: Next<BoxBody>,
-) -> Result<ServiceResponse<BoxBody>, actix_web::Error> {
-    let Some(services) = req.app_data::<web::Data<S>>().cloned() else {
-        return Ok(req.into_response(error_page(
-            500,
-            "Internal Server Error",
-            "Service context unavailable.",
-        )));
+/// `POST /api/v1/oauth/{provider}/start` — mints a provider authorization URL for
+/// the admin SPA to open in a popup, and sets the transient state cookie the
+/// top-level `/oauth/{provider}/callback` later verifies. Admin-gated by
+/// `api_auth`, so the caller is already an authorised administrator.
+pub async fn start<S: Services + Send + Sync + 'static>(
+    provider: web::Path<String>,
+    services: web::Data<S>,
+    req: HttpRequest,
+    _body: Option<web::Json<StartRequest>>,
+) -> HttpResponse {
+    let Some(base_url) =
+        super::helpers::request::base_url(services.as_ref(), req.headers(), req.uri().scheme_str())
+    else {
+        return super::api::json_error(
+            actix_web::http::StatusCode::BAD_REQUEST,
+            "Could not determine the public base URL for the connection redirect.",
+        );
     };
 
-    // The scope is `/oauth/{provider}`; read the provider straight from the path
-    // so we don't depend on route-level match extraction in the middleware.
-    let provider = req
-        .path()
-        .strip_prefix("/oauth/")
-        .and_then(|rest| rest.split('/').next())
-        .unwrap_or("");
-    let provider_config = services.config().oauth2.get(provider).cloned();
+    let Some(cfg) = services.config().oauth2.get(&*provider).cloned() else {
+        return super::api::json_error(
+            actix_web::http::StatusCode::NOT_FOUND,
+            "No such integration provider is configured.",
+        );
+    };
 
-    match authorize_wizard(services.as_ref(), req.request(), provider_config.as_ref()).await {
-        WizardOutcome::Authorized => next.call(req).await,
-        WizardOutcome::NeedsLogin => {
-            let response = sign_in_page(req.request());
-            Ok(req.into_response(response))
+    match cfg.get_login_url(format!("{base_url}/oauth/{provider}/callback")) {
+        Ok((url, state)) => {
+            let secure = super::helpers::request::is_https(
+                services.config().web.trust_proxy,
+                req.headers(),
+                req.uri().scheme_str(),
+            );
+            HttpResponse::Ok()
+                .cookie(oauth_state_cookie(&provider, state, secure))
+                .json(serde_json::json!({ "authorize_url": url.to_string() }))
         }
-        WizardOutcome::Forbidden => Ok(req.into_response(access_denied_page())),
+        Err(e) => {
+            error!("Failed to build OAuth login URL: {}", e);
+            sentry::capture_error(&e);
+            super::api::json_error(
+                actix_web::http::StatusCode::INTERNAL_SERVER_ERROR,
+                "Failed to start the integration setup.",
+            )
+        }
     }
 }
 
 pub fn configure<S: Services + Send + Sync + 'static>() -> impl HttpServiceFactory {
+    // The public wizard scope serves two things: self-service providers (which
+    // opt in via their own `acl`) running the whole flow as top-level
+    // navigations, and the OAuth `callback` that every flow — including the
+    // admin SPA's popup, started via `/api/v1/oauth/{provider}/start` — is
+    // redirected to by the provider. The callback is protected by the transient
+    // state cookie rather than the admin gate, so it is reachable without a
+    // bearer (which a cross-site top-level redirect could not carry anyway).
     web::scope("/oauth/{provider}")
-        // The setup wizard performs privileged actions (linking external accounts
-        // the agent then acts on), so gate it behind an authentication/ACL check.
-        // By default that is the admin gate, but a provider may set its own `acl`
-        // to allow self-service sign-up. The flow is browser-driven via top-level
-        // GET navigations, so any session cookie is carried even on the provider's
-        // cross-site redirect back to `/callback`.
-        .wrap(from_fn(oauth_wizard_auth::<S>))
         .route("/", web::get().to(oauth_home::<S>))
         .route("/authorize", web::get().to(oauth_authorize::<S>))
         .route("/callback", web::get().to(oauth_callback::<S>))
@@ -253,9 +271,16 @@ pub fn configure<S: Services + Send + Sync + 'static>() -> impl HttpServiceFacto
 async fn oauth_home<S: Services + Send + Sync + 'static>(
     provider: web::Path<String>,
     services: web::Data<S>,
+    req: HttpRequest,
 ) -> actix_web::HttpResponse {
-    if let Some(config) = services.config().oauth2.get(&*provider).cloned() {
-        html_action_page(
+    let Some(config) = services.config().oauth2.get(&*provider).cloned() else {
+        return not_found();
+    };
+
+    match public_wizard_outcome(services.as_ref(), &req, &config) {
+        PublicWizardOutcome::AdminOnly => admin_only_page(),
+        PublicWizardOutcome::Denied => access_denied_page(),
+        PublicWizardOutcome::Allowed => html_action_page(
             &format!("{} | Automate", config.name),
             &format!("Login with {}", config.name),
             &format!(
@@ -264,9 +289,7 @@ async fn oauth_home<S: Services + Send + Sync + 'static>(
             ),
             &format!("/oauth/{}/authorize", &*provider),
             "Login",
-        )
-    } else {
-        not_found()
+        ),
     }
 }
 
@@ -285,6 +308,16 @@ async fn oauth_authorize<S: Services + Send + Sync + 'static>(
     {
         match services.config().oauth2.get(&*provider).cloned() {
             Some(cfg) => {
+                // This is a public, top-level navigation. Self-service providers
+                // (with their own `acl`) are evaluated here; admin-gated providers
+                // are reachable only when OIDC is off (via the admin ACL), and
+                // otherwise must be launched from the admin SPA.
+                match public_wizard_outcome(services.as_ref(), &req, &cfg) {
+                    PublicWizardOutcome::AdminOnly => return admin_only_page(),
+                    PublicWizardOutcome::Denied => return access_denied_page(),
+                    PublicWizardOutcome::Allowed => {}
+                }
+
                 info!("Initiating OAuth2 login flow for provider '{}'", &*provider);
 
                 match cfg.get_login_url(format!("{base_url}/oauth/{provider}/callback")) {
@@ -824,6 +857,40 @@ mod tests {
         actix_test::call_service(&app, req).await.status()
     }
 
+    /// Like [`service_with_provider`] but with admin OIDC configured (a
+    /// syntactically valid endpoint that the public wizard gate never contacts —
+    /// it only checks whether OIDC is present).
+    async fn service_with_provider_and_oidc(
+        admin_acl: &str,
+        provider_acl: Option<&str>,
+    ) -> ServicesContainer<SqliteDatabase> {
+        let db = SqliteDatabase::open_in_memory().await.unwrap();
+        let mut config = Config::default();
+        config.web.admin.acl = Filter::new(admin_acl).unwrap();
+        config.web.base_url = Some("http://localhost:8080".to_string());
+        config.web.admin.oidc = Some(crate::config::OidcConfig {
+            endpoint: "https://auth.example.com".to_string(),
+            client_id: "client".to_string(),
+            client_secret: "secret".to_string(),
+            scopes: vec![],
+        });
+        config.oauth2.insert(
+            "spotify".to_string(),
+            OAuth2Config {
+                name: "Spotify".to_string(),
+                jobs: vec![],
+                acl: provider_acl.map(|a| Filter::new(a).unwrap()),
+                client_id: "client".to_string(),
+                client_secret: "secret".to_string(),
+                auth_url: "https://accounts.spotify.com/authorize".to_string(),
+                token_url: "https://accounts.spotify.com/api/token".to_string(),
+                scopes: vec![],
+                todoist: Default::default(),
+            },
+        );
+        ServicesContainer::new(config, db)
+    }
+
     #[actix_web::test]
     async fn setup_wizard_requires_admin_auth_by_default() {
         // No provider ACL, deny-all admin ACL, OIDC off ⇒ access denied (403).
@@ -831,6 +898,26 @@ mod tests {
             wizard_home_status(service_with_provider("false", None).await).await,
             StatusCode::FORBIDDEN
         );
+    }
+
+    #[actix_web::test]
+    async fn setup_wizard_admin_gated_without_oidc_uses_admin_acl() {
+        // No provider ACL and OIDC off ⇒ the admin ACL is evaluated on request
+        // metadata exactly as before, so a permissive admin ACL grants access via
+        // the public path.
+        assert_eq!(
+            wizard_home_status(service_with_provider("true", None).await).await,
+            StatusCode::OK
+        );
+    }
+
+    #[actix_web::test]
+    async fn setup_wizard_admin_gated_with_oidc_is_admin_only() {
+        // No provider ACL and OIDC on ⇒ a top-level navigation can't carry the
+        // bearer, so the public path reports it must be launched from the admin
+        // SPA (403) regardless of how permissive the admin ACL is.
+        let services = service_with_provider_and_oidc("true", None).await;
+        assert_eq!(wizard_home_status(services).await, StatusCode::FORBIDDEN);
     }
 
     #[actix_web::test]
@@ -862,8 +949,9 @@ mod tests {
         )
         .await;
 
-        // Auth passes, but with no state cookie the CSRF check must reject the
-        // callback before any authorization-code exchange is attempted.
+        // The callback is public (the provider redirects to it on a top-level
+        // navigation), protected solely by the transient state cookie: with no
+        // cookie the CSRF check must reject it before any code exchange.
         let req = actix_test::TestRequest::get()
             .uri("/oauth/spotify/callback?code=abc&state=xyz")
             .to_request();

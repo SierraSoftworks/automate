@@ -5,12 +5,10 @@
 //! (native) and the `automate-ui` crate (WebAssembly). It defines the JSON
 //! contract exchanged over the `/api/v1` endpoints.
 
-mod auth;
 mod kv;
 mod queue;
 mod user;
 
-pub use auth::CsrfToken;
 pub use kv::KeyValueEntry;
 pub use queue::{QueueMessage, QueueStatus};
 pub use user::AdminUser;
