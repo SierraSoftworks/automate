@@ -166,14 +166,12 @@ mod tests {
 
     #[tokio::test]
     async fn handle_enqueues_an_upsert_reminder_with_the_authorize_link() {
-        let database = crate::db::SqliteDatabase::open_in_memory().await.unwrap();
-        let mut config = crate::config::Config::default();
-        config
-            .oauth2
-            .insert("spotify".into(), spotify_oauth_config());
-        config.web.base_url = Some("https://automate.example.com".into());
-
-        let services = crate::services::ServicesContainer::new(config, database);
+        let services = crate::services::ServicesContainer::new_custom_mock(|config, _| {
+            config
+                .oauth2
+                .insert("spotify".into(), spotify_oauth_config());
+            config.web.base_url = Some("https://automate.example.com".into());
+        }).await.unwrap();
 
         let ctx = JobContext::new(services.clone(), chrono::Utc::now(), None, None);
         OAuth2ReauthorizationRequiredWorkflow
@@ -211,13 +209,11 @@ mod tests {
         // The Todoist configuration attached to the reminder (sourced from the
         // provider's `[oauth2.*].todoist`) must be passed through to the upsert
         // task so it lands in the configured project/section.
-        let database = crate::db::SqliteDatabase::open_in_memory().await.unwrap();
-        let mut config = crate::config::Config::default();
-        config
-            .oauth2
-            .insert("spotify".into(), spotify_oauth_config());
-
-        let services = crate::services::ServicesContainer::new(config, database);
+        let services = crate::services::ServicesContainer::new_custom_mock(|config, _| {
+            config
+                .oauth2
+                .insert("spotify".into(), spotify_oauth_config());
+        }).await.unwrap();
 
         let ctx = JobContext::new(services.clone(), chrono::Utc::now(), None, None);
         OAuth2ReauthorizationRequiredWorkflow

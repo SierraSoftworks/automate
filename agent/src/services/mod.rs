@@ -5,6 +5,7 @@ use crate::config::Config;
 mod alphavantage;
 
 pub use alphavantage::AlphaVantageClient;
+use tracing_batteries::Session;
 
 /// The concrete [`Services`] implementation used by the running application and
 /// the job consumer.
@@ -24,6 +25,15 @@ where
 {
     fn config(&self) -> Arc<crate::config::Config>;
 
+    /// The shared telemetry [`Session`].
+    ///
+    /// Both [`Session::record_event`] and [`Session::record_error`] operate
+    /// through a shared reference, so this accessor is all a handler needs to
+    /// emit events or record exceptions from anywhere it can reach the
+    /// [`Services`].
+    #[allow(dead_code)]
+    fn session(&self) -> &Session;
+
     fn kv(&self) -> impl crate::db::KeyValueStore + Clone + Send + Sync + 'static;
     fn queue(&self) -> impl crate::db::Queue + Clone + Send + Sync + 'static;
     fn cache(&self) -> impl crate::db::Cache + Clone + Send + Sync + 'static;
@@ -40,6 +50,7 @@ pub struct ServicesContainer<D: crate::db::KeyValueStore + crate::db::Queue + cr
     pub config: Arc<Config>,
     pub database: D,
     pub http_client: reqwest::Client,
+    pub session: Arc<Session>,
 }
 
 impl<D: crate::db::KeyValueStore + crate::db::Queue + crate::db::Cache + Clone> Clone
@@ -50,6 +61,7 @@ impl<D: crate::db::KeyValueStore + crate::db::Queue + crate::db::Cache + Clone> 
             config: self.config.clone(),
             database: self.database.clone(),
             http_client: self.http_client.clone(),
+            session: self.session.clone(),
         }
     }
 }
@@ -58,7 +70,7 @@ impl<D> ServicesContainer<D>
 where
     D: crate::db::KeyValueStore + crate::db::Queue + crate::db::Cache,
 {
-    pub fn new(config: crate::config::Config, database: D) -> Self {
+    pub fn new(config: crate::config::Config, database: D, session: Arc<Session>) -> Self {
         let http_client = reqwest::Client::builder()
             .user_agent(HTTP_USER_AGENT)
             .build()
@@ -68,6 +80,7 @@ where
             config: Arc::new(config),
             database,
             http_client,
+            session,
         }
     }
 }
@@ -77,7 +90,16 @@ impl ServicesContainer<crate::db::SqliteDatabase> {
     pub async fn new_mock() -> Result<Self, human_errors::Error> {
         let database = crate::db::SqliteDatabase::open_in_memory().await?;
         let config = Config::default();
-        Ok(Self::new(config, database))
+        let session = Arc::new(Session::new("automate", "0.0.0-test").with_battery(tracing_batteries::Testing));
+        Ok(Self::new(config, database, session))
+    }
+
+    pub async fn new_custom_mock(f: impl Sized + FnOnce(&mut Config, &crate::db::SqliteDatabase)) -> Result<Self, human_errors::Error> {
+        let database = crate::db::SqliteDatabase::open_in_memory().await?;
+        let mut config = Config::default();
+        f(&mut config, &database);
+        let session = Arc::new(Session::new("automate", "0.0.0-test").with_battery(tracing_batteries::Testing));
+        Ok(Self::new(config, database, session))
     }
 }
 
@@ -93,6 +115,10 @@ where
 {
     fn config(&self) -> Arc<crate::config::Config> {
         self.config.clone()
+    }
+
+    fn session(&self) -> &Session {
+        &self.session
     }
 
     fn kv(&self) -> impl crate::db::KeyValueStore + Clone + Send + Sync + 'static {

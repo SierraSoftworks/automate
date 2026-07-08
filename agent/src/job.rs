@@ -300,7 +300,19 @@ impl JobHost {
         let queue = services.queue();
         let root_span = tracing::Span::current();
 
+        // Track spawned job tasks so their lifetimes are bounded by the job
+        // host rather than being detached. When the host is dropped (for
+        // example because the web server shut down first), the set is dropped
+        // and any in-flight jobs are aborted, releasing the `Services` clones
+        // - and with them the `Arc<Session>` clones - they were holding. This
+        // is what lets `main` reclaim sole ownership of the session to flush
+        // telemetry on the way out.
+        let mut tasks = tokio::task::JoinSet::new();
+
         loop {
+            // Reap completed job tasks so the set does not grow without bound.
+            while tasks.try_join_next().is_some() {}
+
             match queue.dequeue_any(reserve_for).await {
                 Ok(item) => {
                     let Some(&handler) = registry.get(item.partition.as_str()) else {
@@ -324,7 +336,7 @@ impl JobHost {
                         continue;
                     };
 
-                    tokio::spawn(Self::process(
+                    tasks.spawn(Self::process(
                         handler,
                         item,
                         services.clone(),

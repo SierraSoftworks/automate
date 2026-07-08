@@ -786,15 +786,16 @@ mod tests {
             .mount(&server)
             .await;
 
-        let db = crate::db::SqliteDatabase::open_in_memory().await.unwrap();
-        let mut config = crate::config::Config::default();
-        config.web.admin.oidc = Some(crate::config::OidcConfig {
-            endpoint: server.uri(),
-            client_id: "client".to_string(),
-            client_secret: "secret".to_string(),
-            scopes: vec![],
-        });
-        let services = crate::services::ServicesContainer::new(config, db);
+        let services = crate::services::ServicesContainer::new_custom_mock(|c, _| {
+            c.web.admin.oidc = Some(crate::config::OidcConfig {
+                endpoint: server.uri(),
+                client_id: "client".to_string(),
+                client_secret: "secret".to_string(),
+                scopes: vec![],
+            })
+        })
+        .await
+        .unwrap();
         let oidc = services.config().web.admin.oidc.clone().unwrap();
 
         let token = rs256_token_with_kid("rotated");

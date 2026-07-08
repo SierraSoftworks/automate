@@ -43,6 +43,7 @@ tracing = { version = "0.1.44" }
 tracing-batteries = { git = "https://github.com/sierrasoftworks/tracing-batteries-rs.git", features = [
   "analytics",
   "opentelemetry",
+  "testing",
 ] }
 urlencoding = "2.1.3"
 uuid = { version = "1.23.3", features = ["serde", "v4"] }
