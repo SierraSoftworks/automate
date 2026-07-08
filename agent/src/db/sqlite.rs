@@ -689,12 +689,15 @@ mod tests {
     async fn test_queue_basic() {
         let db = SqliteDatabase::open_in_memory().await.unwrap();
 
-        let session = tracing_batteries::Session::new("automate", "0.0.1-test")
-            .with_battery(tracing_batteries::OpenTelemetry::new("localhost:4317"));
+        let _session = tracing_batteries::Session::new("automate", "0.0.1-test")
+            .with_battery(tracing_batteries::Testing);
 
         let span = tracing::error_span!("test_queue_basic").entered();
         assert!(!span.context().is_telemetry_suppressed());
         assert!(!Span::current().context().is_telemetry_suppressed());
+        // The span must carry a valid, sampled trace context for it to be
+        // propagated through the queue as a `traceparent`.
+        assert!(span.context().span().span_context().is_valid());
 
         db.enqueue("test_queue", "job1", None, None).await.unwrap();
 
@@ -732,8 +735,6 @@ mod tests {
             })
             .await
             .unwrap();
-
-        session.shutdown();
     }
 
     #[tokio::test]
