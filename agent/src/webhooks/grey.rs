@@ -27,7 +27,7 @@
 
 use chrono::{DateTime, Utc};
 use hmac::{Hmac, KeyInit, Mac};
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use sha2::Sha256;
 
 use crate::{
@@ -35,6 +35,7 @@ use crate::{
     publishers::{
         TodoistDueDate, TodoistUpsertTask, TodoistUpsertTaskPayload, TodoistUpsertTaskState,
     },
+    services::debounce::{DebounceConfig, Debouncer, HealthyAction, UnhealthyAction},
 };
 
 type HmacSha256 = Hmac<Sha256>;
@@ -55,25 +56,9 @@ const RECOVERY_WINDOW: chrono::Duration = chrono::Duration::hours(1);
 /// incident resolves.
 const RECOVERING_PRIORITY: i32 = 2;
 
-/// The key/value partition tracking the failure and recovery state of each Grey monitor, keyed by
-/// [`GreyWebhookEvent::unique_key`].
+/// The key/value partition holding each Grey monitor's debounce state
+/// ([`crate::services::debounce::DebounceState`]), keyed by [`GreyWebhookEvent::unique_key`].
 const GREY_FAILURES_PARTITION: &str = "grey/failures";
-
-/// Persisted failure/recovery state for a single Grey monitor, stored in
-/// [`GREY_FAILURES_PARTITION`].
-#[derive(Clone, Serialize, Deserialize)]
-struct GreyFailureRecord {
-    /// The time of the *first* unhealthy report in the current incident, so the total impact time is
-    /// measured from the first sign of failure rather than the most recent flap. It is preserved
-    /// across relapses inside the recovery window and only reset once a genuinely new incident
-    /// begins (see [`GreyWebhookEvent`] handling).
-    first_unhealthy_at: DateTime<Utc>,
-
-    /// When the monitor entered the *recovering* state — the time of the healthy event that began
-    /// the current recovery window — or `None` when the monitor is not currently recovering.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    recovering_since: Option<DateTime<Utc>>,
-}
 
 /// Formats a duration as a compact, human-readable string (e.g. `1h 5m`, `12m`, `45s`, `0s`).
 /// Sub-minute components are only shown when the duration is under an hour, keeping longer spans
@@ -305,200 +290,160 @@ impl Job for GreyWebhook {
         // The state machine reasons in terms of the event's own timestamp (Grey's clock) so that
         // durations stay internally consistent and webhook retries remain idempotent.
         let now = event.timestamp;
-        let record = services
-            .kv()
-            .get::<GreyFailureRecord>(GREY_FAILURES_PARTITION, unique_key.clone())
-            .await?;
+
+        // The debounce/recovery bookkeeping lives in the reusable `services::debounce` module; this
+        // handler only performs the Todoist actions each decision calls for.
+        let debouncer = Debouncer::new(
+            services.kv(),
+            GREY_FAILURES_PARTITION,
+            DebounceConfig {
+                alert_delay: ALERT_DELAY,
+                recovery_window: RECOVERY_WINDOW,
+            },
+        );
 
         if event.state.healthy {
-            // === RECOVERY ===
-            // Cancel any still-pending alert. If the monitor recovered before its alert delay
-            // elapsed, this suppresses the task entirely so a brief blip never surfaces.
+            // Cancel any still-pending alert up front. If the monitor recovered before its alert
+            // delay elapsed this suppresses the task entirely; once the alert has surfaced it is a
+            // no-op.
             services
                 .queue()
                 .purge(TodoistUpsertTask::partition(), unique_key.clone())
                 .await?;
 
-            // Only walk the recovery path if a task actually surfaced. If the alert was still
-            // pending (and we just purged it) there is nothing to recover, so we forget the incident.
+            // Whether an alert actually reached an operator is tracked by the Todoist task's
+            // existence, which the debouncer uses to tell a genuine recovery from a blip that never
+            // surfaced.
             let task_exists = services
                 .kv()
                 .get::<TodoistUpsertTaskState>("todoist/task", unique_key.clone())
                 .await?
                 .is_some();
 
-            if !task_exists {
-                info!(
-                    "Grey {} '{}' recovered before its alert surfaced; suppressing the task.",
-                    event.entity.entity_type, event.entity.name
-                );
-                services
-                    .kv()
-                    .remove(GREY_FAILURES_PARTITION, unique_key.clone())
-                    .await?;
-                return Ok(());
-            }
-
-            // Total impact time runs from the *first* sign of failure in this incident to the
-            // recovery, so a flapping incident is measured end-to-end rather than from its last
-            // relapse.
-            let first_unhealthy_at = record.as_ref().map(|r| r.first_unhealthy_at).unwrap_or(now);
-            let impact = (now - first_unhealthy_at).max(chrono::Duration::zero());
-
-            info!(
-                "Grey {} '{}' recovered ({} -> {}); marking task as recovering (impact {}).",
-                event.entity.entity_type,
-                event.entity.name,
-                event.state.previous,
-                event.state.current,
-                format_duration(impact),
-            );
-
-            // Immediately flip the existing task to "recovering" at a reduced priority.
-            TodoistUpsertTask::dispatch(
-                TodoistUpsertTaskPayload {
-                    unique_key: unique_key.clone(),
-                    title: event.recovering_title(dashboard_url.as_deref()),
-                    description: Some(event.recovering_description()),
-                    due: TodoistDueDate::DateTime(now),
-                    priority: Some(RECOVERING_PRIORITY),
-                    config: config.clone(),
-                    ..Default::default()
-                },
-                Some(unique_key.clone().into()),
-                services,
-            )
-            .await?;
-
-            // Defer the "recovered" confirmation. A failure within the window purges this before it
-            // fires; otherwise it stamps the task with the total impact time.
-            TodoistUpsertTask::dispatch_delayed(
-                TodoistUpsertTaskPayload {
-                    unique_key: unique_key.clone(),
-                    title: event.recovered_title(dashboard_url.as_deref(), impact),
-                    description: Some(event.recovered_description(impact)),
-                    due: TodoistDueDate::DateTime(now),
-                    priority: Some(RECOVERING_PRIORITY),
-                    config,
-                    ..Default::default()
-                },
-                Some(recovered_key.into()),
-                RECOVERY_WINDOW,
-                services,
-            )
-            .await?;
-
-            // Remember that we are recovering as of this event so a fresh failure within the window
-            // re-escalates immediately rather than debouncing as a new incident.
-            services
-                .kv()
-                .set(
-                    GREY_FAILURES_PARTITION,
-                    unique_key.clone(),
-                    GreyFailureRecord {
-                        first_unhealthy_at,
-                        recovering_since: Some(now),
-                    },
-                )
-                .await?;
-        } else {
-            // === UNHEALTHY ===
-            let in_recovery_window = record
-                .as_ref()
-                .and_then(|r| r.recovering_since)
-                .is_some_and(|since| now - since < RECOVERY_WINDOW);
-
-            // Preserve the first-failure time across relapses inside the recovery window (and across
-            // a continuing, not-yet-recovered failure) so impact is measured from the first sign of
-            // failure. Only reset it when a genuinely new incident begins: there is no prior record,
-            // or the previous incident fully recovered because its recovery window has elapsed.
-            let first_unhealthy_at = match &record {
-                Some(prev) if in_recovery_window || prev.recovering_since.is_none() => {
-                    prev.first_unhealthy_at
+            match debouncer.on_healthy(&unique_key, now, task_exists).await? {
+                HealthyAction::Suppress => {
+                    info!(
+                        "Grey {} '{}' recovered before its alert surfaced; suppressing the task.",
+                        event.entity.entity_type, event.entity.name
+                    );
                 }
-                _ => now,
-            };
+                HealthyAction::Recover { impact } => {
+                    info!(
+                        "Grey {} '{}' recovered ({} -> {}); marking task as recovering (impact {}).",
+                        event.entity.entity_type,
+                        event.entity.name,
+                        event.state.previous,
+                        event.state.current,
+                        format_duration(impact),
+                    );
 
-            if in_recovery_window {
-                // The monitor failed again while we were showing it as recovering. Cancel the
-                // pending "recovered" confirmation and re-escalate the task immediately, since an
-                // operator is already watching it.
-                info!(
-                    "Grey {} '{}' failed again during recovery ({} -> {}); re-escalating immediately.",
-                    event.entity.entity_type,
-                    event.entity.name,
-                    event.state.previous,
-                    event.state.current
-                );
-
-                services
-                    .queue()
-                    .purge(TodoistUpsertTask::partition(), recovered_key)
+                    // Immediately flip the existing task to "recovering" at a reduced priority.
+                    TodoistUpsertTask::dispatch(
+                        TodoistUpsertTaskPayload {
+                            unique_key: unique_key.clone(),
+                            title: event.recovering_title(dashboard_url.as_deref()),
+                            description: Some(event.recovering_description()),
+                            due: TodoistDueDate::DateTime(now),
+                            priority: Some(RECOVERING_PRIORITY),
+                            config: config.clone(),
+                            ..Default::default()
+                        },
+                        Some(unique_key.clone().into()),
+                        services,
+                    )
                     .await?;
 
-                TodoistUpsertTask::dispatch(
-                    TodoistUpsertTaskPayload {
-                        unique_key: unique_key.clone(),
-                        title: event.task_title(dashboard_url.as_deref()),
-                        description: Some(event.task_description()),
-                        due: event
-                            .state
-                            .since
-                            .map(TodoistDueDate::DateTime)
-                            .unwrap_or(TodoistDueDate::DateTime(now)),
-                        priority: Some(event.priority()),
-                        config,
-                        ..Default::default()
-                    },
-                    Some(unique_key.clone().into()),
-                    services,
-                )
-                .await?;
-            } else {
-                // A fresh (or continuing) failure. Delay surfacing the task so a brief blip has time
-                // to settle; a recovery received within the delay purges it before it is created.
-                info!(
-                    "Grey {} '{}' is unhealthy ({} -> {}); scheduling delayed alert in {}.",
-                    event.entity.entity_type,
-                    event.entity.name,
-                    event.state.previous,
-                    event.state.current,
-                    format_duration(ALERT_DELAY),
-                );
-
-                TodoistUpsertTask::dispatch_delayed(
-                    TodoistUpsertTaskPayload {
-                        unique_key: unique_key.clone(),
-                        title: event.task_title(dashboard_url.as_deref()),
-                        description: Some(event.task_description()),
-                        due: event
-                            .state
-                            .since
-                            .map(TodoistDueDate::DateTime)
-                            .unwrap_or(TodoistDueDate::DateTime(now)),
-                        priority: Some(event.priority()),
-                        config,
-                        ..Default::default()
-                    },
-                    Some(unique_key.clone().into()),
-                    ALERT_DELAY,
-                    services,
-                )
-                .await?;
+                    // Defer the "recovered" confirmation. A failure within the window purges this
+                    // before it fires; otherwise it stamps the task with the total impact time.
+                    TodoistUpsertTask::dispatch_delayed(
+                        TodoistUpsertTaskPayload {
+                            unique_key: unique_key.clone(),
+                            title: event.recovered_title(dashboard_url.as_deref(), impact),
+                            description: Some(event.recovered_description(impact)),
+                            due: TodoistDueDate::DateTime(now),
+                            priority: Some(RECOVERING_PRIORITY),
+                            config,
+                            ..Default::default()
+                        },
+                        Some(recovered_key.into()),
+                        RECOVERY_WINDOW,
+                        services,
+                    )
+                    .await?;
+                }
             }
+        } else {
+            match debouncer.on_unhealthy(&unique_key, now).await? {
+                UnhealthyAction::Escalate => {
+                    // The monitor failed again while we were showing it as recovering. Cancel the
+                    // pending "recovered" confirmation and re-escalate the task immediately, since an
+                    // operator is already watching it.
+                    info!(
+                        "Grey {} '{}' failed again during recovery ({} -> {}); re-escalating immediately.",
+                        event.entity.entity_type,
+                        event.entity.name,
+                        event.state.previous,
+                        event.state.current
+                    );
 
-            // Persist the incident's first-failure time and clear any recovering state.
-            services
-                .kv()
-                .set(
-                    GREY_FAILURES_PARTITION,
-                    unique_key.clone(),
-                    GreyFailureRecord {
-                        first_unhealthy_at,
-                        recovering_since: None,
-                    },
-                )
-                .await?;
+                    services
+                        .queue()
+                        .purge(TodoistUpsertTask::partition(), recovered_key)
+                        .await?;
+
+                    TodoistUpsertTask::dispatch(
+                        TodoistUpsertTaskPayload {
+                            unique_key: unique_key.clone(),
+                            title: event.task_title(dashboard_url.as_deref()),
+                            description: Some(event.task_description()),
+                            due: event
+                                .state
+                                .since
+                                .map(TodoistDueDate::DateTime)
+                                .unwrap_or(TodoistDueDate::DateTime(now)),
+                            priority: Some(event.priority()),
+                            config,
+                            ..Default::default()
+                        },
+                        Some(unique_key.clone().into()),
+                        services,
+                    )
+                    .await?;
+                }
+                UnhealthyAction::Schedule { delay } => {
+                    // A fresh (or continuing) failure. Delay surfacing the task so a brief blip has
+                    // time to settle; a recovery received within the delay purges it before it is
+                    // created.
+                    info!(
+                        "Grey {} '{}' is unhealthy ({} -> {}); scheduling delayed alert in {}.",
+                        event.entity.entity_type,
+                        event.entity.name,
+                        event.state.previous,
+                        event.state.current,
+                        format_duration(delay),
+                    );
+
+                    TodoistUpsertTask::dispatch_delayed(
+                        TodoistUpsertTaskPayload {
+                            unique_key: unique_key.clone(),
+                            title: event.task_title(dashboard_url.as_deref()),
+                            description: Some(event.task_description()),
+                            due: event
+                                .state
+                                .since
+                                .map(TodoistDueDate::DateTime)
+                                .unwrap_or(TodoistDueDate::DateTime(now)),
+                            priority: Some(event.priority()),
+                            config,
+                            ..Default::default()
+                        },
+                        Some(unique_key.clone().into()),
+                        delay,
+                        services,
+                    )
+                    .await?;
+                }
+            }
         }
 
         Ok(())
@@ -791,6 +736,7 @@ impl Filterable for GreyWebhookEvent {
 mod tests {
     use super::*;
     use crate::db::PeekedMessage;
+    use crate::services::debounce::DebounceState;
     use crate::webhooks::WebhookEvent;
     use std::collections::HashMap;
 
@@ -868,14 +814,11 @@ mod tests {
             .unwrap()
     }
 
-    /// Fetches the persisted failure/recovery record for a monitor, if any.
-    async fn failure_record<S: Services>(
-        services: &S,
-        unique_key: &str,
-    ) -> Option<GreyFailureRecord> {
+    /// Fetches the persisted debounce state for a monitor, if any.
+    async fn failure_record<S: Services>(services: &S, unique_key: &str) -> Option<DebounceState> {
         services
             .kv()
-            .get::<GreyFailureRecord>(GREY_FAILURES_PARTITION, unique_key.to_string())
+            .get::<DebounceState>(GREY_FAILURES_PARTITION, unique_key.to_string())
             .await
             .unwrap()
     }
@@ -1188,7 +1131,7 @@ mod tests {
             .set(
                 GREY_FAILURES_PARTITION,
                 unique_key.to_string(),
-                GreyFailureRecord {
+                DebounceState {
                     first_unhealthy_at: dt("2026-06-19T11:45:00Z"),
                     recovering_since: None,
                 },
@@ -1263,7 +1206,7 @@ mod tests {
             .set(
                 GREY_FAILURES_PARTITION,
                 unique_key.to_string(),
-                GreyFailureRecord {
+                DebounceState {
                     first_unhealthy_at: dt("2026-06-19T11:30:00Z"),
                     recovering_since: Some(dt("2026-06-19T11:45:00Z")),
                 },

@@ -3,6 +3,7 @@ use std::sync::Arc;
 use crate::config::Config;
 
 mod alphavantage;
+pub mod debounce;
 
 pub use alphavantage::AlphaVantageClient;
 use tracing_batteries::Session;
