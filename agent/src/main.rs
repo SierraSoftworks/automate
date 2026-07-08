@@ -56,7 +56,7 @@ async fn main() {
         ))
         .with_battery(tracing_batteries::Analytics::new(
             "https://analytics.sierrasoftworks.com",
-        ).without_initial_page()));
+        )));
 
     let result = run(args, session.clone()).await;
 

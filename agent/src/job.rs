@@ -361,6 +361,7 @@ impl JobHost {
         let queue = services.queue();
         let name = handler.partition();
         let delay = Utc::now() - item.scheduled_at;
+        let session = services.session();
 
         // Narrow the generous dequeue reservation down to this job's own timeout.
         // The reservation window doubles as the retry backoff: if the job fails
@@ -377,7 +378,7 @@ impl JobHost {
             .await
         {
             warn!(error = %err, "Failed to set the reservation window for job '{name}': {err}");
-            sentry::capture_error(&err);
+            session.record_error(&err);
         }
 
         let span = info_span!(
@@ -409,7 +410,7 @@ impl JobHost {
         debug!("Processing job '{name}' (traceparent: {traceparent}).");
 
         let ctx = JobContext::new(
-            services,
+            services.clone(),
             item.scheduled_at,
             item.traceparent.clone(),
             item.tracestate.clone(),
@@ -424,12 +425,12 @@ impl JobHost {
                 info!("Job '{name}' completed successfully (traceparent: {traceparent}).");
                 if let Err(err) = queue.complete(name.to_string(), item).await {
                     error!(error = %err, "Failed to mark job '{name}' as completed (traceparent: {traceparent}): {err}");
-                    sentry::capture_error(&err);
+                    session.record_error(&err);
                 }
             }
             Err(err) => {
                 if err.is(human_errors::Kind::System) {
-                    sentry::capture_error(&err);
+                    session.record_error(&err);
                 }
 
                 // Record the failure against the job's own span (rather than the
