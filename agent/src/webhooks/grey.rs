@@ -327,10 +327,7 @@ impl Job for GreyWebhook {
                         event.entity.entity_type, event.entity.name
                     );
                 }
-                HealthyAction::Recover {
-                    impact,
-                    recovered_after,
-                } => {
+                HealthyAction::Recover { impact } => {
                     info!(
                         "Grey {} '{}' recovered ({} -> {}); marking task as recovering (impact {}, confirming in {}).",
                         event.entity.entity_type,
@@ -338,7 +335,7 @@ impl Job for GreyWebhook {
                         event.state.previous,
                         event.state.current,
                         format_duration(impact),
-                        format_duration(recovered_after),
+                        format_duration(RECOVERY_WINDOW),
                     );
 
                     // Immediately flip the existing task to "recovering" at a reduced priority.
@@ -357,9 +354,10 @@ impl Job for GreyWebhook {
                     )
                     .await?;
 
-                    // Defer the "recovered" confirmation to a full recovery window after the last
-                    // failure. A failure within the window purges this before it fires; otherwise it
-                    // stamps the task with the total impact time.
+                    // Defer the "recovered" confirmation to a full recovery window after this
+                    // recovery. Any subsequent failure purges it before it fires (see the unhealthy
+                    // branch), so the recovery is only ever confirmed while it remains newer than the
+                    // last failure.
                     TodoistUpsertTask::dispatch_delayed(
                         TodoistUpsertTaskPayload {
                             unique_key: unique_key.clone(),
@@ -371,18 +369,25 @@ impl Job for GreyWebhook {
                             ..Default::default()
                         },
                         Some(recovered_key.into()),
-                        recovered_after,
+                        RECOVERY_WINDOW,
                         services,
                     )
                     .await?;
                 }
             }
         } else {
+            // Any failure supersedes a prior recovery, so cancel a pending "recovered" confirmation
+            // up front (a no-op when there isn't one). This is what guarantees the recovery is only
+            // ever confirmed while it remains newer than the last failure.
+            services
+                .queue()
+                .purge(TodoistUpsertTask::partition(), recovered_key)
+                .await?;
+
             match debouncer.on_unhealthy(&unique_key, now).await? {
                 UnhealthyAction::Escalate => {
-                    // The monitor failed again while we were showing it as recovering. Cancel the
-                    // pending "recovered" confirmation and re-escalate the task immediately, since an
-                    // operator is already watching it.
+                    // The monitor failed again while we were showing it as recovering; re-escalate
+                    // the task immediately, since an operator is already watching it.
                     info!(
                         "Grey {} '{}' failed again during recovery ({} -> {}); re-escalating immediately.",
                         event.entity.entity_type,
@@ -390,11 +395,6 @@ impl Job for GreyWebhook {
                         event.state.previous,
                         event.state.current
                     );
-
-                    services
-                        .queue()
-                        .purge(TodoistUpsertTask::partition(), recovered_key)
-                        .await?;
 
                     TodoistUpsertTask::dispatch(
                         TodoistUpsertTaskPayload {
@@ -617,7 +617,7 @@ impl GreyWebhookEvent {
             ),
             String::new(),
             format!(
-                "It will be confirmed as recovered once it has stayed healthy for {} since its last failure.",
+                "It will be confirmed as recovered in {} if it stays healthy.",
                 format_duration(RECOVERY_WINDOW)
             ),
             String::new(),
@@ -1183,13 +1183,10 @@ mod tests {
             recovered.payload.title.contains("has recovered after 15m"),
             "the recovered update should carry the total impact time"
         );
-        // Confirmation is deferred to a window after the last failure (11:50 + 1h = 12:50), i.e.
-        // ~50 minutes after the recovery at 12:00.
-        let confirm_at = recovered.hidden_until;
+        // Confirmation is deferred a full recovery window after this recovery (~1h from 12:00).
         assert!(
-            confirm_at > Utc::now() + chrono::Duration::minutes(45)
-                && confirm_at < Utc::now() + chrono::Duration::minutes(55),
-            "the recovered update should be deferred ~50m (a window after the last failure)"
+            recovered.hidden_until > Utc::now() + chrono::Duration::minutes(55),
+            "the recovered update should be deferred by roughly the recovery window"
         );
 
         // We now track that we are recovering as of the healthy event, retaining the first- and
@@ -1279,6 +1276,80 @@ mod tests {
         assert!(
             record.recovering_since.is_none(),
             "recovery state should be cleared on re-failure"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_new_incident_failure_purges_pending_recovery_confirmation() {
+        let services = crate::services::ServicesContainer::new_mock()
+            .await
+            .unwrap();
+        let webhook = GreyWebhook;
+        let unique_key = "grey/probe/web.prod";
+        let recovered_key = format!("{unique_key}/recovered");
+
+        // A previous incident recovered at 10:45 (last failure 10:30) and left a pending "recovered"
+        // confirmation queued.
+        seed_task(&services, unique_key).await;
+        services
+            .kv()
+            .set(
+                GREY_FAILURES_PARTITION,
+                unique_key.to_string(),
+                DebounceState {
+                    first_unhealthy_at: dt("2026-06-19T10:00:00Z"),
+                    last_unhealthy_at: dt("2026-06-19T10:30:00Z"),
+                    recovering_since: Some(dt("2026-06-19T10:45:00Z")),
+                },
+            )
+            .await
+            .unwrap();
+        services
+            .queue()
+            .enqueue(
+                TodoistUpsertTask::partition(),
+                TodoistUpsertTaskPayload {
+                    unique_key: unique_key.to_string(),
+                    ..Default::default()
+                },
+                Some(recovered_key.clone().into()),
+                Some(RECOVERY_WINDOW),
+            )
+            .await
+            .unwrap();
+
+        // A failure at 12:00 — 90 minutes after the last failure, so a brand-new incident, not a
+        // relapse — must still cancel the stale confirmation so it can never mark the task recovered
+        // while the monitor is unhealthy.
+        webhook
+            .handle(
+                JobContext::new(services.clone(), Utc::now(), None, None),
+                &webhook_event(probe_event("web.prod", false)),
+            )
+            .await
+            .unwrap();
+
+        let upserts = peek_upserts(&services).await;
+        assert!(
+            upserts.iter().all(|m| m.key != recovered_key),
+            "the stale recovered confirmation should be purged even for a new incident"
+        );
+        // It is a new incident: the alert is delayed (not an immediate escalation) and the
+        // first-failure time is reset.
+        let alert = upserts
+            .iter()
+            .find(|m| m.key == unique_key)
+            .expect("a delayed alert");
+        assert!(
+            alert.hidden_until > Utc::now() + chrono::Duration::minutes(4),
+            "a new incident should be debounced, not escalated immediately"
+        );
+        assert_eq!(
+            failure_record(&services, unique_key)
+                .await
+                .unwrap()
+                .first_unhealthy_at,
+            dt("2026-06-19T12:00:00Z")
         );
     }
 

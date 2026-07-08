@@ -14,19 +14,20 @@
 //!   never surfaces.
 //! * **Healthy (alert surfaced)** — a genuine recovery. The caller is told to
 //!   [`Recover`](HealthyAction::Recover), with the total `impact` measured from the *first* failure
-//!   so a flapping incident is reported end to end, and a `recovered_after` delay after which the
-//!   recovery should be confirmed.
+//!   so a flapping incident is reported end to end. The caller shows the entity as recovering and
+//!   confirms the recovery a full [`DebounceConfig::recovery_window`] later — but only while the
+//!   recovery remains newer than the last failure, so any failure in the meantime cancels the
+//!   confirmation.
 //! * **Healthy (nothing surfaced)** — the incident never reached an operator, so it is
 //!   [`Suppress`](HealthyAction::Suppress)ed and forgotten.
 //! * **Unhealthy again within the recovery window** — a relapse of the same incident; the caller is
 //!   told to [`Escalate`](UnhealthyAction::Escalate) immediately. The first-failure time is
 //!   preserved across the relapse so impact still counts from the original outage.
 //!
-//! The recovery window is anchored on the **last unhealthy report**, not on the recovery signal, so
-//! an incident keeps its identity as long as failures keep arriving within a window of one another,
-//! and the recovery is only confirmed once a full window has passed since the last failure. This
-//! stops an intervening recovery blip — or the debounce built into the signal source — from timing
-//! the window out prematurely while the entity is really still flapping.
+//! The incident-identity cutoff (same incident vs. a brand-new one) is anchored on the **last
+//! unhealthy report**, not on the recovery signal, so an incident keeps its identity as long as
+//! failures keep arriving within a window of one another — an intervening recovery blip does not
+//! time it out prematurely.
 //!
 //! The debouncer only owns the state and the decision; performing the resulting actions (scheduling
 //! work, cancelling it, notifying an operator) and reporting whether an alert has surfaced are left
@@ -64,13 +65,13 @@ pub struct DebounceState {
     /// begins.
     pub first_unhealthy_at: DateTime<Utc>,
 
-    /// The most recent unhealthy report for this entity. It anchors the recovery window: the
-    /// incident stays "alive" until a full window passes with no further unhealthy report, and the
-    /// recovery is confirmed a window after this instant.
+    /// The most recent unhealthy report for this entity. It anchors the incident-identity cutoff:
+    /// the incident stays "alive" until a full window passes with no further unhealthy report.
     pub last_unhealthy_at: DateTime<Utc>,
 
     /// When the entity entered the *recovering* state — the time of the healthy signal that began
-    /// the current recovery — or `None` when it is not currently recovering.
+    /// the current recovery — or `None` when it is not currently recovering. A recovery is only
+    /// genuine while this is newer than [`Self::last_unhealthy_at`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub recovering_since: Option<DateTime<Utc>>,
 }
@@ -83,7 +84,7 @@ pub enum UnhealthyAction {
     Schedule { delay: Duration },
 
     /// A relapse inside the recovery window: an operator is already watching, so surface (or
-    /// refresh) the alert immediately and cancel any pending recovery confirmation.
+    /// refresh) the alert immediately.
     Escalate,
 }
 
@@ -91,11 +92,9 @@ pub enum UnhealthyAction {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum HealthyAction {
     /// A genuine recovery of a surfaced alert. Show the entity as recovering now and confirm it as
-    /// recovered after `recovered_after`; `impact` spans the first failure to now.
-    Recover {
-        impact: Duration,
-        recovered_after: Duration,
-    },
+    /// recovered a [`DebounceConfig::recovery_window`] later (cancelling that confirmation on any
+    /// further failure); `impact` spans the first failure to now.
+    Recover { impact: Duration },
 
     /// The entity recovered before any alert surfaced (or nothing was being tracked): there is
     /// nothing to show, so the incident is forgotten.
@@ -125,6 +124,10 @@ impl<K: KeyValueStore> Debouncer<K> {
 
     /// Records an unhealthy signal for `key` observed at `now`, updates the persisted state, and
     /// returns the [`UnhealthyAction`] the caller should take.
+    ///
+    /// Recording an unhealthy signal makes the last failure newer than any prior recovery, so the
+    /// caller should also cancel any pending recovery confirmation — a recovery is only ever
+    /// confirmed while it remains newer than the last failure.
     pub async fn on_unhealthy(
         &self,
         key: &str,
@@ -132,9 +135,9 @@ impl<K: KeyValueStore> Debouncer<K> {
     ) -> Result<UnhealthyAction, human_errors::Error> {
         let state = self.load(key).await?;
 
-        // The recovery window runs from the last unhealthy report, so an incident keeps its identity
-        // (and its first-failure time) as long as failures keep arriving within a window of one
-        // another, rather than being reset off the back of an intervening recovery signal.
+        // The incident-identity cutoff runs from the last unhealthy report, so an incident keeps its
+        // identity (and its first-failure time) as long as failures keep arriving within a window of
+        // one another, rather than being reset off the back of an intervening recovery signal.
         let within_window = state
             .as_ref()
             .is_some_and(|s| now - s.last_unhealthy_at < self.config.recovery_window);
@@ -144,10 +147,8 @@ impl<K: KeyValueStore> Debouncer<K> {
             _ => now,
         };
 
-        // Escalate immediately only when we are showing the entity as recovering and that recovery
-        // has not yet been confirmed (still within the window) — that is exactly the case where a
-        // pending "recovered" confirmation needs cancelling. Anything else is a fresh or continuing
-        // failure to debounce.
+        // Escalate immediately when we are showing the entity as recovering and it relapses inside
+        // the window; otherwise this is a fresh or continuing failure to debounce.
         let recovering = state.as_ref().is_some_and(|s| s.recovering_since.is_some());
         let action = if within_window && recovering {
             UnhealthyAction::Escalate
@@ -196,12 +197,9 @@ impl<K: KeyValueStore> Debouncer<K> {
         let last_unhealthy_at = state.as_ref().map(|s| s.last_unhealthy_at).unwrap_or(now);
 
         let impact = (now - first_unhealthy_at).max(Duration::zero());
-        // Confirm the recovery a full window after the last failure rather than after this recovery
-        // signal, so the confirmation is not cut short when the entity was failing right up until it
-        // recovered.
-        let recovered_after =
-            (last_unhealthy_at + self.config.recovery_window - now).max(Duration::zero());
 
+        // Record the recovery. It is newer than the last failure, so it is a genuine recovery until
+        // (and unless) a subsequent unhealthy signal supersedes it.
         self.store(
             key,
             DebounceState {
@@ -212,10 +210,7 @@ impl<K: KeyValueStore> Debouncer<K> {
         )
         .await?;
 
-        Ok(HealthyAction::Recover {
-            impact,
-            recovered_after,
-        })
+        Ok(HealthyAction::Recover { impact })
     }
 
     async fn load(&self, key: &str) -> Result<Option<DebounceState>, human_errors::Error> {
@@ -292,7 +287,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn recovery_after_surfaced_alert_reports_impact_and_confirmation_delay() {
+    async fn recovery_after_surfaced_alert_reports_impact_from_first_failure() {
         let d = debouncer().await;
         let t0 = dt("2026-01-01T00:00:00Z");
         let t1 = dt("2026-01-01T00:15:00Z");
@@ -300,13 +295,11 @@ mod tests {
         d.on_unhealthy("probe", t0).await.unwrap();
         let action = d.on_healthy("probe", t1, true).await.unwrap();
 
-        // Impact is first -> recovery (15m); the recovery is confirmed a full window after the last
-        // failure (t0 + 1h), i.e. 45m from the recovery at t1.
+        // Impact is first -> recovery (15m); the recovery is recorded as newer than the last failure.
         assert_eq!(
             action,
             HealthyAction::Recover {
                 impact: Duration::minutes(15),
-                recovered_after: Duration::minutes(45),
             }
         );
         let s = state(&d, "probe").await.unwrap();
@@ -346,6 +339,7 @@ mod tests {
         let s = state(&d, "probe").await.unwrap();
         assert_eq!(s.first_unhealthy_at, t0); // preserved across the relapse
         assert_eq!(s.last_unhealthy_at, t2);
+        // The last failure is now newer than the recovery, so any pending confirmation is void.
         assert!(s.recovering_since.is_none());
     }
 
@@ -362,13 +356,11 @@ mod tests {
         d.on_unhealthy("probe", t2).await.unwrap();
         let action = d.on_healthy("probe", t3, true).await.unwrap();
 
-        // Impact runs t0 -> t3 (55m), and the confirmation is a window after the last failure t2
-        // (t2 + 1h = t0 + 1h45m), i.e. 50m from the recovery at t3.
+        // Impact runs t0 -> t3 (55m), not t2 -> t3.
         assert_eq!(
             action,
             HealthyAction::Recover {
                 impact: Duration::minutes(55),
-                recovered_after: Duration::minutes(50),
             }
         );
     }
@@ -409,13 +401,31 @@ mod tests {
         let t = dt("2026-01-01T00:00:00Z");
 
         // A healthy signal for a surfaced alert we have no record of (e.g. one created before the
-        // debouncer existed) yields a zero-impact recovery confirmed a full window out.
+        // debouncer existed) yields a zero-impact recovery.
         assert_eq!(
             d.on_healthy("probe", t, true).await.unwrap(),
             HealthyAction::Recover {
                 impact: Duration::zero(),
-                recovered_after: Duration::hours(1),
             }
         );
+    }
+
+    #[tokio::test]
+    async fn a_failure_supersedes_a_recovery_so_its_confirmation_is_void() {
+        let d = debouncer().await;
+        let t0 = dt("2026-01-01T00:00:00Z");
+        let t1 = dt("2026-01-01T00:15:00Z"); // recover
+        let t2 = dt("2026-01-01T00:30:00Z"); // relapse
+
+        d.on_unhealthy("probe", t0).await.unwrap();
+        d.on_healthy("probe", t1, true).await.unwrap();
+        assert_eq!(state(&d, "probe").await.unwrap().recovering_since, Some(t1));
+
+        // Once a failure lands after the recovery, the recovery is cleared — it is no longer newer
+        // than the last failure, so the caller must not go on to confirm it.
+        d.on_unhealthy("probe", t2).await.unwrap();
+        let s = state(&d, "probe").await.unwrap();
+        assert!(s.recovering_since.is_none());
+        assert_eq!(s.last_unhealthy_at, t2);
     }
 }
