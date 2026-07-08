@@ -1,17 +1,18 @@
 //! The JSON REST API consumed by the single-page admin UI.
 //!
 //! All endpoints live under `/api/v1`. The `auth` sub-scope is public so that an
-//! unauthenticated browser can drive the server-side OIDC login flow; every
-//! other endpoint is gated by [`api_auth`], which authenticates the session
-//! cookie (when OIDC is configured), evaluates the admin ACL, and enforces a
-//! double-submit CSRF check on mutating requests.
+//! unauthenticated browser can run the OIDC popup login (fetch metadata, exchange
+//! a code, refresh a session); every other endpoint is gated by [`api_auth`],
+//! which authenticates the `Authorization: Bearer` ID token (when OIDC is
+//! configured) and evaluates the admin ACL. Because the credential is a bearer
+//! header — never an automatically-attached cookie — there is no CSRF surface and
+//! no double-submit token to verify.
 
 use actix_web::{
     HttpResponse,
     body::BoxBody,
-    cookie::Cookie,
     dev::{ServiceRequest, ServiceResponse},
-    http::Method,
+    http::header::AUTHORIZATION,
     middleware::{Next, from_fn},
     web,
 };
@@ -27,28 +28,25 @@ mod kv;
 mod queue;
 mod user;
 
-/// The cookie holding the signed-in administrator's OIDC ID token (the session).
-pub const SESSION_COOKIE: &str = "automate_session";
-
-/// The `HttpOnly` cookie holding the OIDC refresh token, scoped to the auth
-/// endpoints so it only travels with session-renewal (and logout) requests.
-pub const REFRESH_COOKIE: &str = "automate_refresh";
-
-/// The non-`HttpOnly` cookie holding the double-submit CSRF token.
-pub const CSRF_COOKIE: &str = "automate_csrf";
-
-/// The short-lived cookie holding in-flight OAuth state during the login
-/// redirect.
-pub const OAUTH_COOKIE: &str = "automate_oauth";
-
-/// The header the browser must echo the CSRF token back in on mutating requests.
-const CSRF_HEADER: &str = "x-csrf-token";
-
 /// The validated identity attached to a request after successful authentication,
 /// made available to handlers via the request extensions.
 #[derive(Clone)]
 pub struct Authenticated {
     pub user: Option<automate_api::AdminUser>,
+}
+
+/// Extracts a bearer token from the `Authorization` header, accepting either
+/// capitalisation of the `Bearer` scheme.
+pub(crate) fn bearer_token(headers: &actix_web::http::header::HeaderMap) -> Option<String> {
+    headers
+        .get(AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| {
+            value
+                .strip_prefix("Bearer ")
+                .or_else(|| value.strip_prefix("bearer "))
+        })
+        .map(|token| token.trim().to_string())
 }
 
 /// Builds a JSON error response with the given status code and message.
@@ -70,15 +68,13 @@ pub fn configure<S: Services + Clone + Send + Sync + 'static>() -> actix_web::Sc
     web::scope("/api/v1")
         .service(
             web::scope("/auth")
-                .route("/login", web::get().to(auth::auth_login::<S>))
-                .route("/callback", web::get().to(auth::auth_callback::<S>))
-                .route("/refresh", web::post().to(auth::auth_refresh::<S>))
-                .route("/logout", web::post().to(auth::auth_logout)),
+                .route("/metadata", web::get().to(auth::metadata::<S>))
+                .route("/token", web::post().to(auth::auth_token::<S>))
+                .route("/refresh", web::post().to(auth::auth_refresh::<S>)),
         )
         .service(
             web::scope("")
                 .wrap(from_fn(api_auth::<S>))
-                .route("/csrf", web::get().to(auth::csrf_token::<S>))
                 .route("/me", web::get().to(user::me))
                 .route("/kv", web::get().to(kv::list::<S>))
                 .route("/kv/{partition}", web::delete().to(kv::delete::<S>))
@@ -87,30 +83,32 @@ pub fn configure<S: Services + Clone + Send + Sync + 'static>() -> actix_web::Sc
                     "/queue/{partition}/trigger",
                     web::post().to(queue::trigger::<S>),
                 )
-                .route("/queue/{partition}", web::delete().to(queue::delete::<S>)),
+                .route("/queue/{partition}", web::delete().to(queue::delete::<S>))
+                // The setup wizard is launched from the admin SPA: list the
+                // configured providers and mint a popup authorization URL. Both
+                // are admin-gated by `api_auth`.
+                .route(
+                    "/oauth",
+                    web::get().to(crate::web::oauth::list_providers::<S>),
+                )
+                .route(
+                    "/oauth/{provider}/start",
+                    web::post().to(crate::web::oauth::start::<S>),
+                ),
         )
-}
-
-/// Returns `true` for HTTP methods that mutate state and therefore require a
-/// valid CSRF token.
-fn is_mutating(method: &Method) -> bool {
-    matches!(
-        *method,
-        Method::POST | Method::PUT | Method::PATCH | Method::DELETE
-    )
 }
 
 /// Authentication and authorisation middleware for the protected API endpoints.
 ///
-/// When OIDC is configured, a valid `automate_session` cookie (an ID token
-/// issued by the server-side login flow) is required. The validated claims
-/// (along with request metadata) are then evaluated against the admin ACL. When
-/// OIDC is not configured, the ACL is evaluated against request metadata alone
-/// (for example to restrict access by client IP).
+/// When OIDC is configured, a valid `Authorization: Bearer` ID token (issued by
+/// the popup login flow) is required. The validated claims (along with request
+/// metadata) are then evaluated against the admin ACL. When OIDC is not
+/// configured, the ACL is evaluated against request metadata alone (for example
+/// to restrict access by client IP).
 ///
-/// Mutating requests (POST/PUT/PATCH/DELETE) must additionally present a
-/// matching `X-CSRF-Token` header and `automate_csrf` cookie (the double-submit
-/// pattern).
+/// Because the credential is a bearer header rather than an automatically
+/// attached cookie, a cross-site page cannot forge an authenticated request, so
+/// no CSRF defence is required.
 pub async fn api_auth<S: Services + Send + Sync + 'static>(
     req: ServiceRequest,
     next: Next<BoxBody>,
@@ -127,20 +125,9 @@ pub async fn api_auth<S: Services + Send + Sync + 'static>(
     let config = services.config();
     let admin = &config.web.admin;
 
-    // Enforce the double-submit CSRF check before doing any other work on
-    // mutating requests so a forged cross-site request is rejected early.
-    if is_mutating(req.method()) && !csrf_ok(&req) {
-        return Ok(req.into_response(json_error(
-            actix_web::http::StatusCode::FORBIDDEN,
-            "The request could not be verified. Please refresh the page and try again.",
-        )));
-    }
-
-    // Authenticate via the session cookie when OIDC is configured.
+    // Authenticate via the bearer token when OIDC is configured.
     let claims = if let Some(oidc) = &admin.oidc {
-        let token = req.cookie(SESSION_COOKIE).map(|c| c.value().to_string());
-
-        let Some(token) = token else {
+        let Some(token) = bearer_token(req.headers()) else {
             return Ok(req.into_response(json_error(
                 actix_web::http::StatusCode::UNAUTHORIZED,
                 "Authentication is required to access this resource.",
@@ -150,7 +137,7 @@ pub async fn api_auth<S: Services + Send + Sync + 'static>(
         match validate_token(services.as_ref(), oidc, &token).await {
             Ok(claims) => Some(claims),
             Err(e) => {
-                info!("Rejected API request with an invalid session cookie: {e}");
+                info!("Rejected API request with an invalid bearer token: {e}");
                 return Ok(req.into_response(json_error(
                     actix_web::http::StatusCode::UNAUTHORIZED,
                     "Your session is invalid or has expired. Please sign in again.",
@@ -192,39 +179,11 @@ pub async fn api_auth<S: Services + Send + Sync + 'static>(
     next.call(req).await
 }
 
-/// Compares the two halves of a double-submit CSRF token: they must both be
-/// present, non-empty, and equal.
-fn csrf_tokens_match(header: Option<&str>, cookie: Option<&str>) -> bool {
-    matches!((header, cookie), (Some(h), Some(c)) if !h.is_empty() && h == c)
-}
-
-/// Validates the double-submit CSRF token on a [`ServiceRequest`]: the
-/// `X-CSRF-Token` header must equal the `automate_csrf` cookie. Used by the
-/// [`api_auth`] middleware.
-fn csrf_ok(req: &ServiceRequest) -> bool {
-    let cookie = req.cookie(CSRF_COOKIE);
-    csrf_tokens_match(
-        req.headers().get(CSRF_HEADER).and_then(|v| v.to_str().ok()),
-        cookie.as_ref().map(|c: &Cookie| c.value()),
-    )
-}
-
-/// Validates the double-submit CSRF token on an [`actix_web::HttpRequest`]. Used
-/// by the public logout handler, which sits outside the [`api_auth`] middleware
-/// and so must perform the check itself.
-pub(crate) fn csrf_ok_request(req: &actix_web::HttpRequest) -> bool {
-    let cookie = req.cookie(CSRF_COOKIE);
-    csrf_tokens_match(
-        req.headers().get(CSRF_HEADER).and_then(|v| v.to_str().ok()),
-        cookie.as_ref().map(|c: &Cookie| c.value()),
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use actix_web::http::StatusCode;
-    use actix_web::{App, cookie::Cookie as TestCookie, test, web};
+    use actix_web::{App, test, web};
 
     use crate::config::Config;
     use crate::db::SqliteDatabase;
@@ -273,7 +232,10 @@ mod tests {
     }
 
     #[actix_web::test]
-    async fn mutating_request_without_csrf_is_rejected() {
+    async fn mutating_request_without_oidc_is_allowed_by_a_permissive_acl() {
+        // With OIDC disabled there is no bearer to present; access is governed by
+        // the ACL alone, and a bearer-only model has no CSRF token to reject a
+        // mutating request on.
         let app = test::init_service(
             App::new()
                 .app_data(web::Data::new(service_with_acl("true").await))
@@ -286,32 +248,29 @@ mod tests {
             .to_request();
         let resp = test::call_service(&app, req).await;
 
-        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+        // Reaches the handler (the ACL allows it); the key simply doesn't exist.
+        assert_ne!(resp.status(), StatusCode::FORBIDDEN);
+        assert_ne!(resp.status(), StatusCode::UNAUTHORIZED);
     }
 
     #[actix_web::test]
-    async fn logout_requires_a_matching_csrf_token() {
-        let app = test::init_service(
-            App::new()
-                .app_data(web::Data::new(service_with_acl("true").await))
-                .service(configure::<ServicesContainer<SqliteDatabase>>()),
-        )
-        .await;
+    async fn bearer_extraction_accepts_either_capitalisation() {
+        use actix_web::http::header::{HeaderMap, HeaderName, HeaderValue};
 
-        // No CSRF token: rejected, so a cross-site POST cannot force a logout.
-        let req = test::TestRequest::post()
-            .uri("/api/v1/auth/logout")
-            .to_request();
-        let resp = test::call_service(&app, req).await;
-        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            HeaderName::from_static("authorization"),
+            HeaderValue::from_static("Bearer abc.def.ghi"),
+        );
+        assert_eq!(bearer_token(&headers).as_deref(), Some("abc.def.ghi"));
 
-        // A matching double-submit header and cookie: accepted.
-        let req = test::TestRequest::post()
-            .uri("/api/v1/auth/logout")
-            .cookie(TestCookie::new(CSRF_COOKIE, "tok"))
-            .insert_header((CSRF_HEADER, "tok"))
-            .to_request();
-        let resp = test::call_service(&app, req).await;
-        assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            HeaderName::from_static("authorization"),
+            HeaderValue::from_static("bearer abc.def.ghi"),
+        );
+        assert_eq!(bearer_token(&headers).as_deref(), Some("abc.def.ghi"));
+
+        assert_eq!(bearer_token(&HeaderMap::new()), None);
     }
 }

@@ -1,17 +1,18 @@
 //! OpenID Connect (OIDC) machinery shared by the admin authentication endpoints.
 //!
-//! This module holds the reusable parts of the server-driven OIDC flow used by
-//! the admin login: discovery and JWKS fetching/caching, ID token validation,
-//! the authorization-URL builder, the confidential token exchange, and claim
-//! filtering. The HTTP endpoints and middleware that drive this machinery live
-//! in [`crate::web::api`].
+//! This module holds the reusable parts of the OIDC flow used by the admin
+//! login: discovery and JWKS fetching/caching, ID token validation, the
+//! confidential token exchange and refresh, and claim filtering. The HTTP
+//! endpoints and middleware that drive this machinery live in
+//! [`crate::web::api`].
 //!
-//! Unlike a browser-driven flow, the agent performs the entire Authorization
-//! Code + PKCE exchange itself: it generates the PKCE verifier, redirects the
-//! browser to the provider, receives the authorization code on its own callback
-//! endpoint, and exchanges it using the confidential client credentials. The
-//! resulting ID token is stored in an `HttpOnly` session cookie rather than ever
-//! being exposed to JavaScript.
+//! The browser runs the Authorization Code request itself (in a popup) and POSTs
+//! the resulting `code` to the agent, which performs the confidential exchange
+//! with its server-held `client_secret` and returns the ID token (the bearer the
+//! SPA then presents on every API request) alongside a refresh token. PKCE is not
+//! used — the agent is a confidential client, so the secret already binds the
+//! exchange. The ID token is never set as a cookie; the SPA holds it in
+//! `sessionStorage` and sends it as `Authorization: Bearer`.
 //!
 //! The provider's discovery document is cached for an hour via
 //! [`crate::db::Cache`] to avoid hitting the provider on every request. The
@@ -20,8 +21,6 @@
 //! presents an unrecognised `kid`.
 
 use actix_web::http::header::HeaderMap;
-use base64::Engine;
-use sha2::{Digest, Sha256};
 
 use crate::config::OidcConfig;
 use crate::filter::FilterValue;
@@ -68,87 +67,22 @@ pub struct OidcDiscovery {
     pub jwks_uri: String,
 }
 
-/// The token endpoint response from the provider.
+/// The token endpoint response from the provider. The `id_token` is the bearer
+/// the agent validates; `refresh_token` (when issued) lets the SPA renew the
+/// session without re-authenticating.
 #[derive(serde::Deserialize)]
 struct ProviderTokenResponse {
     id_token: String,
+    #[serde(default)]
     refresh_token: Option<String>,
 }
 
-/// Tokens issued by the provider's token endpoint. `id_token` becomes the session
-/// cookie; `refresh_token` (when the provider issues one) lets the agent renew the
-/// session without another interactive login.
+/// Tokens issued by the OIDC token endpoint. `id_token` is the bearer presented
+/// to the API; `refresh_token` (when present) renews the session.
+#[derive(Clone)]
 pub struct TokenSet {
     pub id_token: String,
     pub refresh_token: Option<String>,
-}
-
-/// A PKCE code verifier and its derived S256 challenge.
-pub struct PkcePair {
-    pub verifier: String,
-    pub challenge: String,
-}
-
-/// Encodes bytes using URL-safe base64 without padding (per RFC 7636).
-fn base64url(data: &[u8]) -> String {
-    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(data)
-}
-
-/// Generates a PKCE verifier (high-entropy, URL-safe) and its S256 challenge.
-pub fn generate_pkce() -> PkcePair {
-    let verifier = format!(
-        "{}{}",
-        uuid::Uuid::new_v4().simple(),
-        uuid::Uuid::new_v4().simple()
-    );
-    let challenge = base64url(Sha256::digest(verifier.as_bytes()).as_slice());
-    PkcePair {
-        verifier,
-        challenge,
-    }
-}
-
-/// Generates an opaque, high-entropy random token suitable for use as an OAuth
-/// `state` value or a CSRF token.
-pub fn random_token() -> String {
-    format!(
-        "{}{}",
-        uuid::Uuid::new_v4().simple(),
-        uuid::Uuid::new_v4().simple()
-    )
-}
-
-/// Builds the provider's authorization endpoint URL for the Authorization Code +
-/// PKCE flow.
-pub fn authorize_url(
-    oidc: &OidcConfig,
-    discovery: &OidcDiscovery,
-    redirect_uri: &str,
-    state: &str,
-    code_challenge: &str,
-) -> Result<String, human_errors::Error> {
-    let mut scopes = vec!["openid".to_string()];
-    for scope in &oidc.scopes {
-        if scope != "openid" {
-            scopes.push(scope.clone());
-        }
-    }
-    let scope = scopes.join(" ");
-
-    let mut url = reqwest::Url::parse(&discovery.authorization_endpoint).wrap_system_err(
-        "The OIDC provider advertised an invalid authorization endpoint.",
-        ADVICE_PROVIDER,
-    )?;
-    url.query_pairs_mut()
-        .append_pair("response_type", "code")
-        .append_pair("client_id", &oidc.client_id)
-        .append_pair("redirect_uri", redirect_uri)
-        .append_pair("scope", &scope)
-        .append_pair("state", state)
-        .append_pair("code_challenge", code_challenge)
-        .append_pair("code_challenge_method", "S256");
-
-    Ok(url.to_string())
 }
 
 /// A [`Filterable`] view over an admin request, exposing request metadata and
@@ -402,22 +336,21 @@ fn verify_token(
     Ok(data.claims)
 }
 
-/// Exchanges an authorization code (plus its PKCE verifier) for tokens at the
-/// provider's token endpoint and returns the issued token set. The confidential
-/// client credentials are supplied from configuration so the secret never
-/// leaves the server.
+/// Exchanges an authorization code for tokens at the provider's token endpoint.
+/// The browser sends only the code; the confidential client credentials are
+/// supplied from configuration so the secret never leaves the server. Returns the
+/// `id_token` (used as the admin bearer) alongside the provider's `refresh_token`,
+/// when one was issued.
 pub async fn exchange_code(
     oidc: &OidcConfig,
     discovery: &OidcDiscovery,
     code: &str,
-    code_verifier: &str,
     redirect_uri: &str,
     http_client: &reqwest::Client,
 ) -> Result<TokenSet, human_errors::Error> {
     let params = [
         ("grant_type", "authorization_code"),
         ("code", code),
-        ("code_verifier", code_verifier),
         ("redirect_uri", redirect_uri),
         ("client_id", oidc.client_id.as_str()),
         ("client_secret", oidc.client_secret.as_str()),
@@ -739,7 +672,6 @@ mod tests {
             &test_oidc_config(&server.uri()),
             &mock_discovery(&server.uri()),
             "auth-code",
-            "verifier",
             "http://localhost/api/v1/auth/callback",
             &http,
         )

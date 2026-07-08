@@ -36,23 +36,27 @@ entire `[web.admin]` section) every request is rejected, so you must opt
 in explicitly.
 
 To require single sign-on, add a `[web.admin.oidc]` section pointing at
-an OpenID Connect provider. When configured, the agent drives the entire
-Authorization Code flow with PKCE server-side: `GET /api/v1/auth/login`
-redirects the browser to the provider, the provider returns to
-`GET /api/v1/auth/callback`, and the agent performs the confidential
-token exchange and stores the resulting ID token in an `HttpOnly` session
-cookie. The browser never handles tokens or the client secret. The
-token's `aud`, `iss`, `exp`, and `nbf` claims are validated, and the
-remaining claims (e.g. `email`, `groups`) are exposed to the `acl` filter
-under the `claims.` prefix, so you can write rules such as
-`claims.email == "me@example.com"` or `"admins" in claims.groups`. The
-provider's `redirect_uri` must point at the agent's
-`/api/v1/auth/callback` route.
-
-Mutating requests (`POST`/`PUT`/`PATCH`/`DELETE`) additionally require a
-double-submit CSRF token: the UI fetches one from `GET /api/v1/csrf`
-(which sets a matching cookie) and echoes it back in the `X-CSRF-Token`
-header. `POST /api/v1/auth/logout` clears the session cookie.
+an OpenID Connect provider. When configured, the admin SPA runs the
+Authorization Code request in a **popup**: it reads the provider's
+authorization endpoint, client id, and scopes from
+`GET /api/v1/auth/metadata`, opens the provider in a popup, and the popup
+POSTs the returned `code` to `POST /api/v1/auth/token`. The agent performs
+the confidential token exchange with its `client_secret` and returns the
+ID token (and a refresh token, if issued) to the SPA. The browser never
+holds the client secret. The SPA stores the ID token in `sessionStorage`
+and sends it as an `Authorization: Bearer` header on every API request;
+when the token expires (HTTP 401) it transparently renews it via
+`POST /api/v1/auth/refresh` and retries once, so an active session is
+restored without prompting. The token's `aud`, `iss`, `exp`, and `nbf`
+claims are validated, and the remaining claims (e.g. `email`, `groups`)
+are exposed to the `acl` filter under the `claims.` prefix, so you can
+write rules such as `claims.email == "me@example.com"` or
+`"admins" in claims.groups`. Register `{origin}/auth/callback` as the
+provider's `redirect_uri`. Because the credential is a bearer header
+rather than an automatically-attached cookie, there is no CSRF surface
+and no CSRF token to manage; signing out simply discards the stored
+token. Include `offline_access` (or your provider's equivalent) in
+`scopes` so a refresh token is issued and sessions can renew silently.
 
 
 If you run behind a reverse proxy and want absolute URLs to honour the
@@ -64,15 +68,24 @@ governs whether `X-Forwarded-For` is trusted when the admin `acl` evaluates
 ### OAuth setup wizard
 
 Some workflows act on third-party accounts (for example Spotify) that you link
-by walking through an OAuth flow at `/oauth/<provider>/`. The agent drives the
-flow server-side and stores the resulting refresh token. The wizard is protected
-like the admin area: by default it requires you to be signed in as an admin, and
-renders an HTML sign-in prompt (rather than a bare error) if you are not. A
-provider can instead opt into self-service access by setting its own `acl` under
+by walking through an OAuth flow. The agent drives the confidential exchange
+server-side and stores the resulting refresh token.
+
+Admin-gated providers (the default) are launched from the **Integrations** panel
+in the admin area: the SPA calls the bearer-authenticated
+`POST /api/v1/oauth/<provider>/start`, which returns a provider authorization
+URL the SPA opens in a popup. The provider redirects back to the agent's
+server-rendered `/oauth/<provider>/callback`, which stores the token. A provider
+can instead opt into self-service access by setting its own `acl` under
 `[oauth2.<provider>]`, evaluated just like the admin ACL — for example
-`acl = 'true'` lets anyone connect their own account without signing in. Each
-flow is bound to the browser that began it by a single-use `state` value to
-prevent login CSRF.
+`acl = 'true'` lets anyone connect their own account without signing in. A
+self-service provider can also be linked directly at `/oauth/<provider>/` as a
+top-level navigation (no admin bearer required); an admin-gated provider opened
+that way is directed to the admin area instead, except when OIDC is disabled, in
+which case the admin ACL is evaluated on the request directly as before. Each
+flow is bound to the browser that began it by a single-use `state` value (held
+in a transient cookie scoped to the provider's callback path) to prevent login
+CSRF.
 
 ## Project layout
 

@@ -1,7 +1,6 @@
 use yew::prelude::*;
 
 use crate::app::{AuthHandle, AuthStatus};
-use crate::auth;
 use crate::components::Layout;
 use crate::util;
 
@@ -11,16 +10,17 @@ use crate::util;
 pub fn landing() -> Html {
     let auth = use_context::<AuthHandle>();
 
-    // When authentication is required, send the visitor straight into the OIDC
-    // login flow (returning them to the admin area afterwards) instead of
-    // routing them to an intermediate sign-in screen that needs a second click.
-    // In every other state a plain link to the admin area is enough.
-    let action = match auth.as_ref().map(|a| &a.status) {
-        Some(AuthStatus::NeedsLogin) => {
-            let onclick = Callback::from(|_: MouseEvent| auth::begin_login_to("/admin"));
+    // When authentication is required, open the sign-in popup straight away
+    // (the visitor can then click through to the admin area once signed in)
+    // instead of routing them to an intermediate sign-in screen. In every other
+    // state a plain link to the admin area is enough.
+    let action = match auth.as_ref() {
+        Some(handle) if handle.status == AuthStatus::NeedsLogin => {
+            let login = handle.login.clone();
+            let onclick = Callback::from(move |_: MouseEvent| login.emit(()));
             html! {
                 <button class="btn btn--primary btn--lg" {onclick}>
-                    { "Open the admin area" }
+                    { "Sign in to open the admin area" }
                 </button>
             }
         }

@@ -18,6 +18,11 @@ pub enum Route {
     /// The public landing page.
     #[at("/")]
     Landing,
+    /// The OIDC login callback. The provider redirects the popup (or a
+    /// direct-navigation fallback) here with `?code&state`; the exchange is
+    /// completed by [`use_auth`] on mount.
+    #[at("/auth/callback")]
+    AuthCallback,
     /// The unified admin browser (also serves the bare `/admin/` path).
     #[at("/admin")]
     AdminRoot,
@@ -56,6 +61,22 @@ pub struct AuthHandle {
     pub signout: Callback<()>,
 }
 
+/// Probes the protected API to resolve the current authentication state. A
+/// signed-in user comes back as the identity, an unauthenticated request as `401`
+/// (which means the login flow is required), and a request that needs no sign-in
+/// (OIDC disabled) as `204`. The bearer-aware client transparently renews an
+/// expired session before this resolves, so a stale-but-renewable token still
+/// reports `SignedIn`.
+async fn resolve_status(status: &UseStateHandle<AuthStatus>) {
+    match api::me().await {
+        Ok(Some(user)) => status.set(AuthStatus::SignedIn(user)),
+        Ok(None) => status.set(AuthStatus::Disabled),
+        Err(ApiError::Unauthorized) => status.set(AuthStatus::NeedsLogin),
+        Err(ApiError::Forbidden) => status.set(AuthStatus::Forbidden),
+        Err(e) => status.set(AuthStatus::Error(e.to_string())),
+    }
+}
+
 /// Resolves the authentication state once on mount and exposes login/sign-out
 /// actions.
 #[hook]
@@ -71,29 +92,39 @@ fn use_auth() -> AuthHandle {
                     return;
                 }
 
-                // Probe the protected API: a signed-in user comes back as the
-                // identity, an unauthenticated request as `401` (which starts the
-                // login flow), and a request that needs no sign-in (OIDC
-                // disabled) as `204`.
-                match api::me().await {
-                    Ok(Some(user)) => status.set(AuthStatus::SignedIn(user)),
-                    Ok(None) => status.set(AuthStatus::Disabled),
-                    Err(ApiError::Unauthorized) => status.set(AuthStatus::NeedsLogin),
-                    Err(ApiError::Forbidden) => status.set(AuthStatus::Forbidden),
-                    Err(e) => status.set(AuthStatus::Error(e.to_string())),
-                }
+                // Finish any in-flight OIDC callback (a popup hands its tokens back
+                // to the opener and closes here; a direct-navigation fallback stores
+                // them) before resolving the session.
+                let _ = auth::complete_callback().await;
+                resolve_status(&status).await;
             });
             || ()
         });
     }
 
-    let login = Callback::from(move |_| auth::begin_login());
+    let login = {
+        let status = status.clone();
+        Callback::from(move |_| {
+            let status = status.clone();
+            spawn_local(async move {
+                match auth::begin_login().await {
+                    // A session was established; resolve the signed-in identity.
+                    Ok(Some(_)) => resolve_status(&status).await,
+                    // The popup was dismissed without completing; leave the state.
+                    Ok(None) => {}
+                    Err(e) => status.set(AuthStatus::Error(e)),
+                }
+            });
+        })
+    };
 
-    let signout = Callback::from(move |_| {
-        spawn_local(async move {
-            auth::logout().await;
-        });
-    });
+    let signout = {
+        let status = status.clone();
+        Callback::from(move |_| {
+            auth::logout();
+            status.set(AuthStatus::NeedsLogin);
+        })
+    };
 
     let user = match &*status {
         AuthStatus::SignedIn(user) => Some(user.clone()),
@@ -130,6 +161,7 @@ fn app_inner() -> Html {
 fn switch(route: Route) -> Html {
     match route {
         Route::Landing => html! { <pages::Landing /> },
+        Route::AuthCallback => html! { <pages::AuthCallback /> },
         Route::AdminRoot | Route::Admin => html! {
             <AdminShell><pages::Admin /></AdminShell>
         },
