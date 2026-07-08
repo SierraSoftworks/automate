@@ -3,7 +3,7 @@ use std::{
     task::{Context, Poll},
 };
 
-use actix_web::dev::*;
+use actix_web::{dev::*, web};
 use actix_web::{Error, http::header::HeaderMap};
 use futures::{
     Future, FutureExt,
@@ -11,6 +11,8 @@ use futures::{
 };
 use opentelemetry::propagation::Extractor;
 use tracing_batteries::prelude::*;
+
+use crate::services::Services;
 
 /// Query-string parameters whose values carry credentials or single-use secrets
 /// and must never be written to a span. The most important here are the OAuth /
@@ -83,33 +85,43 @@ fn redact_headers(headers: &HeaderMap) -> String {
         .join("\n")
 }
 
-pub struct TracingLogger;
+pub struct TracingLogger<S: Services + Clone + Send + Sync + 'static> {
+    _services: std::marker::PhantomData<S>,
+}
 
-impl<S, B> Transform<S, ServiceRequest> for TracingLogger
+impl<S: Services + Clone + Send + Sync + 'static> TracingLogger<S> {
+    pub fn new() -> Self {
+        TracingLogger { _services: std::marker::PhantomData }
+    }
+}
+
+impl<S, A, B> Transform<A, ServiceRequest> for TracingLogger<S>
 where
-    S: Service<ServiceRequest, Response = ServiceResponse<B>, Error = Error>,
-    S::Future: 'static,
+    A: Service<ServiceRequest, Response = ServiceResponse<B>, Error = Error>,
+    A::Future: 'static,
+    S: Services + Clone + Send + Sync + 'static,
 {
     type Response = ServiceResponse<B>;
     type Error = Error;
-    type Transform = TracingLoggerMiddleware<S>;
+    type Transform = TracingLoggerMiddleware<S, A>;
     type InitError = ();
     type Future = Ready<Result<Self::Transform, Self::InitError>>;
 
-    fn new_transform(&self, service: S) -> Self::Future {
-        ok(TracingLoggerMiddleware { service })
+    fn new_transform(&self, service: A) -> Self::Future {
+        ok(TracingLoggerMiddleware { service, _services: std::marker::PhantomData })
     }
 }
 
 #[doc(hidden)]
-pub struct TracingLoggerMiddleware<S> {
-    service: S,
+pub struct TracingLoggerMiddleware<S: Services + Clone + Send + Sync + 'static, A> {
+    service: A,
+    _services: std::marker::PhantomData<S>,
 }
 
-impl<S, B> Service<ServiceRequest> for TracingLoggerMiddleware<S>
+impl<S: Services + Clone + Send + Sync + 'static, A, B> Service<ServiceRequest> for TracingLoggerMiddleware<S, A>
 where
-    S: Service<ServiceRequest, Response = ServiceResponse<B>, Error = Error>,
-    S::Future: 'static,
+    A: Service<ServiceRequest, Response = ServiceResponse<B>, Error = Error>,
+    A::Future: 'static,
 {
     type Response = ServiceResponse<B>;
     type Error = Error;
@@ -153,6 +165,8 @@ where
 
         let _ = span.set_parent(context);
 
+        let services = req.app_data::<web::Data<S>>().cloned();
+
         let fut = self
             .service
             .call(req)
@@ -163,7 +177,13 @@ where
                     outcome
                 }
                 Err(error) => {
-                    sentry::capture_error(&error);
+                    if let Some(services) = services {
+                        let err = tracing_batteries::ErrorInfo::new(&error)
+                            .with_metadata("http.target", http_target)
+                            .with_metadata("http.status_code", error.as_response_error().status_code().as_u16().to_string());
+                        services.session().record_custom_error(err);
+                    }
+
                     Span::current().record(
                         "http.status_code",
                         display(error.as_response_error().status_code()),

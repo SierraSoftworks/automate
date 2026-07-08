@@ -28,7 +28,7 @@ pub async fn run_web_server<S: Services + Clone + Send + Sync + 'static>(
         let server = HttpServer::new(move || {
             App::new()
                 .app_data(web::Data::new(services.clone()))
-                .wrap(telemetry::TracingLogger)
+                .wrap(telemetry::TracingLogger::<S>::new())
                 .service(api::configure::<S>())
                 .service(oauth::configure::<S>())
                 .route("/webhooks/{kind:.*}", web::post().to(webhooks::handle::<S>))
