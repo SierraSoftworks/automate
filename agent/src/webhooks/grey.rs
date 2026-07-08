@@ -9,7 +9,8 @@
 //! following transitions, all correlated by a stable `grey/<type>/<name>` key:
 //!
 //! * **Unhealthy** — we schedule the operator's Todoist task [`ALERT_DELAY`] into the future rather
-//!   than creating it immediately, and record the time of the report. If the monitor recovers
+//!   than creating it immediately, and record when the incident first went unhealthy (preserved
+//!   across relapses so impact is measured from the first sign of failure). If the monitor recovers
 //!   before the delay elapses the pending task is purged, so a brief blip never surfaces an alert.
 //! * **Healthy** — if a task actually surfaced we immediately flip it to *recovering* at a reduced
 //!   priority and schedule a deferred *recovered* update [`RECOVERY_WINDOW`] out, which stamps the
@@ -62,9 +63,11 @@ const GREY_FAILURES_PARTITION: &str = "grey/failures";
 /// [`GREY_FAILURES_PARTITION`].
 #[derive(Clone, Serialize, Deserialize)]
 struct GreyFailureRecord {
-    /// The time of the most recent unhealthy report for this monitor. Used both to drive the
-    /// delayed alert and to compute the total impact time once the monitor recovers.
-    last_unhealthy_at: DateTime<Utc>,
+    /// The time of the *first* unhealthy report in the current incident, so the total impact time is
+    /// measured from the first sign of failure rather than the most recent flap. It is preserved
+    /// across relapses inside the recovery window and only reset once a genuinely new incident
+    /// begins (see [`GreyWebhookEvent`] handling).
+    first_unhealthy_at: DateTime<Utc>,
 
     /// When the monitor entered the *recovering* state — the time of the healthy event that began
     /// the current recovery window — or `None` when the monitor is not currently recovering.
@@ -336,9 +339,11 @@ impl Job for GreyWebhook {
                 return Ok(());
             }
 
-            // Total impact time runs from the most recent unhealthy report to this recovery.
-            let last_unhealthy_at = record.as_ref().map(|r| r.last_unhealthy_at).unwrap_or(now);
-            let impact = (now - last_unhealthy_at).max(chrono::Duration::zero());
+            // Total impact time runs from the *first* sign of failure in this incident to the
+            // recovery, so a flapping incident is measured end-to-end rather than from its last
+            // relapse.
+            let first_unhealthy_at = record.as_ref().map(|r| r.first_unhealthy_at).unwrap_or(now);
+            let impact = (now - first_unhealthy_at).max(chrono::Duration::zero());
 
             info!(
                 "Grey {} '{}' recovered ({} -> {}); marking task as recovering (impact {}).",
@@ -391,7 +396,7 @@ impl Job for GreyWebhook {
                     GREY_FAILURES_PARTITION,
                     unique_key.clone(),
                     GreyFailureRecord {
-                        last_unhealthy_at,
+                        first_unhealthy_at,
                         recovering_since: Some(now),
                     },
                 )
@@ -402,6 +407,17 @@ impl Job for GreyWebhook {
                 .as_ref()
                 .and_then(|r| r.recovering_since)
                 .is_some_and(|since| now - since < RECOVERY_WINDOW);
+
+            // Preserve the first-failure time across relapses inside the recovery window (and across
+            // a continuing, not-yet-recovered failure) so impact is measured from the first sign of
+            // failure. Only reset it when a genuinely new incident begins: there is no prior record,
+            // or the previous incident fully recovered because its recovery window has elapsed.
+            let first_unhealthy_at = match &record {
+                Some(prev) if in_recovery_window || prev.recovering_since.is_none() => {
+                    prev.first_unhealthy_at
+                }
+                _ => now,
+            };
 
             if in_recovery_window {
                 // The monitor failed again while we were showing it as recovering. Cancel the
@@ -471,14 +487,14 @@ impl Job for GreyWebhook {
                 .await?;
             }
 
-            // Record this as the most recent unhealthy report and clear any recovering state.
+            // Persist the incident's first-failure time and clear any recovering state.
             services
                 .kv()
                 .set(
                     GREY_FAILURES_PARTITION,
                     unique_key.clone(),
                     GreyFailureRecord {
-                        last_unhealthy_at: now,
+                        first_unhealthy_at,
                         recovering_since: None,
                     },
                 )
@@ -1112,10 +1128,11 @@ mod tests {
         );
         assert!(alert.hidden_until < Utc::now() + chrono::Duration::minutes(6));
 
-        // The failure is recorded, and we are not (yet) recovering.
+        // The first-failure time is recorded, and we are not (yet) recovering.
         let record = failure_record(&services, unique_key)
             .await
             .expect("a failure record should be written");
+        assert_eq!(record.first_unhealthy_at, dt("2026-06-19T12:00:00Z"));
         assert!(record.recovering_since.is_none());
     }
 
@@ -1164,7 +1181,7 @@ mod tests {
         let webhook = GreyWebhook;
         let unique_key = "grey/probe/web.prod";
 
-        // Pretend the alert already surfaced and the monitor has been unhealthy for 15 minutes.
+        // Pretend the alert already surfaced and the incident first went unhealthy 15 minutes ago.
         seed_task(&services, unique_key).await;
         services
             .kv()
@@ -1172,7 +1189,7 @@ mod tests {
                 GREY_FAILURES_PARTITION,
                 unique_key.to_string(),
                 GreyFailureRecord {
-                    last_unhealthy_at: dt("2026-06-19T11:45:00Z"),
+                    first_unhealthy_at: dt("2026-06-19T11:45:00Z"),
                     recovering_since: None,
                 },
             )
@@ -1220,12 +1237,13 @@ mod tests {
             "the recovered update should be deferred by roughly the recovery window"
         );
 
-        // We now track that we are recovering as of the healthy event, retaining the failure time.
+        // We now track that we are recovering as of the healthy event, retaining the first-failure
+        // time so a later relapse still measures impact from the original outage.
         let record = failure_record(&services, unique_key)
             .await
             .expect("a recovery record");
         assert_eq!(record.recovering_since, Some(dt("2026-06-19T12:00:00Z")));
-        assert_eq!(record.last_unhealthy_at, dt("2026-06-19T11:45:00Z"));
+        assert_eq!(record.first_unhealthy_at, dt("2026-06-19T11:45:00Z"));
     }
 
     #[tokio::test]
@@ -1237,8 +1255,8 @@ mod tests {
         let unique_key = "grey/probe/web.prod";
         let recovered_key = format!("{unique_key}/recovered");
 
-        // The monitor surfaced a task and is currently recovering (since 11:45), with a pending
-        // "recovered" confirmation queued for the end of the recovery window.
+        // The monitor first failed at 11:30 and is currently recovering (since 11:45), with a
+        // pending "recovered" confirmation queued for the end of the recovery window.
         seed_task(&services, unique_key).await;
         services
             .kv()
@@ -1246,7 +1264,7 @@ mod tests {
                 GREY_FAILURES_PARTITION,
                 unique_key.to_string(),
                 GreyFailureRecord {
-                    last_unhealthy_at: dt("2026-06-19T11:30:00Z"),
+                    first_unhealthy_at: dt("2026-06-19T11:30:00Z"),
                     recovering_since: Some(dt("2026-06-19T11:45:00Z")),
                 },
             )
@@ -1293,11 +1311,12 @@ mod tests {
             "the re-escalation should fire immediately"
         );
 
-        // The record is updated to the new failure time and recovery state is cleared.
+        // The first-failure time is preserved (the relapse is part of the same incident) and the
+        // recovery state is cleared.
         let record = failure_record(&services, unique_key)
             .await
             .expect("an updated record");
-        assert_eq!(record.last_unhealthy_at, dt("2026-06-19T12:00:00Z"));
+        assert_eq!(record.first_unhealthy_at, dt("2026-06-19T11:30:00Z"));
         assert!(
             record.recovering_since.is_none(),
             "recovery state should be cleared on re-failure"
