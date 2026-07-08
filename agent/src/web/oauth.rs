@@ -245,7 +245,7 @@ pub async fn start<S: Services + Send + Sync + 'static>(
         }
         Err(e) => {
             error!("Failed to build OAuth login URL: {}", e);
-            sentry::capture_error(&e);
+            services.session().record_error(&e);
             super::api::json_error(
                 actix_web::http::StatusCode::INTERNAL_SERVER_ERROR,
                 "Failed to start the integration setup.",
@@ -336,7 +336,7 @@ async fn oauth_authorize<S: Services + Send + Sync + 'static>(
                     }
                     Err(e) => {
                         error!("Failed to get OAuth login URL: {}", e);
-                        sentry::capture_error(&e);
+                        services.session().record_error(&e);
                         error_page(
                             500,
                             "Internal Server Error",
@@ -437,7 +437,7 @@ async fn oauth_callback<S: Services + Send + Sync + 'static>(
                     .await
                 {
                     error!("Failed to enqueue OAuth token storage task: {}", e);
-                    sentry::capture_error(&e);
+                    services.session().record_error(&e);
                     return with_cleared_state(
                         &provider,
                         error_page(
@@ -464,7 +464,7 @@ async fn oauth_callback<S: Services + Send + Sync + 'static>(
         }
         Err(e) => {
             error!("OAuth callback handling failed: {}", e);
-            sentry::capture_error(&e);
+            services.session().record_error(&e);
             with_cleared_state(
                 &provider,
                 error_page(
@@ -822,26 +822,25 @@ mod tests {
         admin_acl: &str,
         provider_acl: Option<&str>,
     ) -> ServicesContainer<SqliteDatabase> {
-        let db = SqliteDatabase::open_in_memory().await.unwrap();
-        let mut config = Config::default();
-        config.web.admin.acl = Filter::new(admin_acl).unwrap();
-        // A fixed base URL so the callback doesn't depend on a Host header.
-        config.web.base_url = Some("http://localhost:8080".to_string());
-        config.oauth2.insert(
-            "spotify".to_string(),
-            OAuth2Config {
-                name: "Spotify".to_string(),
-                jobs: vec![],
-                acl: provider_acl.map(|a| Filter::new(a).unwrap()),
-                client_id: "client".to_string(),
-                client_secret: "secret".to_string(),
-                auth_url: "https://accounts.spotify.com/authorize".to_string(),
-                token_url: "https://accounts.spotify.com/api/token".to_string(),
-                scopes: vec![],
-                todoist: Default::default(),
-            },
-        );
-        ServicesContainer::new(config, db)
+        ServicesContainer::new_custom_mock(|config, _| {
+            config.web.admin.acl = Filter::new(admin_acl).unwrap();
+            // A fixed base URL so the callback doesn't depend on a Host header.
+            config.web.base_url = Some("http://localhost:8080".to_string());
+            config.oauth2.insert(
+                "spotify".to_string(),
+                OAuth2Config {
+                    name: "Spotify".to_string(),
+                    jobs: vec![],
+                    acl: provider_acl.map(|a| Filter::new(a).unwrap()),
+                    client_id: "client".to_string(),
+                    client_secret: "secret".to_string(),
+                    auth_url: "https://accounts.spotify.com/authorize".to_string(),
+                    token_url: "https://accounts.spotify.com/api/token".to_string(),
+                    scopes: vec![],
+                    todoist: Default::default(),
+                },
+            );
+        }).await.unwrap()
     }
 
     async fn wizard_home_status(services: ServicesContainer<SqliteDatabase>) -> StatusCode {
@@ -864,31 +863,32 @@ mod tests {
         admin_acl: &str,
         provider_acl: Option<&str>,
     ) -> ServicesContainer<SqliteDatabase> {
-        let db = SqliteDatabase::open_in_memory().await.unwrap();
-        let mut config = Config::default();
-        config.web.admin.acl = Filter::new(admin_acl).unwrap();
-        config.web.base_url = Some("http://localhost:8080".to_string());
-        config.web.admin.oidc = Some(crate::config::OidcConfig {
-            endpoint: "https://auth.example.com".to_string(),
-            client_id: "client".to_string(),
-            client_secret: "secret".to_string(),
-            scopes: vec![],
-        });
-        config.oauth2.insert(
-            "spotify".to_string(),
-            OAuth2Config {
-                name: "Spotify".to_string(),
-                jobs: vec![],
-                acl: provider_acl.map(|a| Filter::new(a).unwrap()),
+        ServicesContainer::new_custom_mock(|config, _| {
+            config.web.admin.acl = Filter::new(admin_acl).unwrap();
+            config.web.base_url = Some("http://localhost:8080".to_string());
+            config.web.admin.oidc = Some(crate::config::OidcConfig {
+                endpoint: "https://auth.example.com".to_string(),
                 client_id: "client".to_string(),
                 client_secret: "secret".to_string(),
-                auth_url: "https://accounts.spotify.com/authorize".to_string(),
-                token_url: "https://accounts.spotify.com/api/token".to_string(),
                 scopes: vec![],
-                todoist: Default::default(),
-            },
-        );
-        ServicesContainer::new(config, db)
+            });
+            config.oauth2.insert(
+                "spotify".to_string(),
+                OAuth2Config {
+                    name: "Spotify".to_string(),
+                    jobs: vec![],
+                    acl: provider_acl.map(|a| Filter::new(a).unwrap()),
+                    client_id: "client".to_string(),
+                    client_secret: "secret".to_string(),
+                    auth_url: "https://accounts.spotify.com/authorize".to_string(),
+                    token_url: "https://accounts.spotify.com/api/token".to_string(),
+                    scopes: vec![],
+                    todoist: Default::default(),
+                },
+            );
+        })
+        .await
+        .unwrap()
     }
 
     #[actix_web::test]

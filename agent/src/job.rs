@@ -300,7 +300,19 @@ impl JobHost {
         let queue = services.queue();
         let root_span = tracing::Span::current();
 
+        // Track spawned job tasks so their lifetimes are bounded by the job
+        // host rather than being detached. When the host is dropped (for
+        // example because the web server shut down first), the set is dropped
+        // and any in-flight jobs are aborted, releasing the `Services` clones
+        // - and with them the `Arc<Session>` clones - they were holding. This
+        // is what lets `main` reclaim sole ownership of the session to flush
+        // telemetry on the way out.
+        let mut tasks = tokio::task::JoinSet::new();
+
         loop {
+            // Reap completed job tasks so the set does not grow without bound.
+            while tasks.try_join_next().is_some() {}
+
             match queue.dequeue_any(reserve_for).await {
                 Ok(item) => {
                     let Some(&handler) = registry.get(item.partition.as_str()) else {
@@ -310,21 +322,20 @@ impl JobHost {
                             item.partition,
                             item.payload
                         );
-                        sentry::capture_message(
-                            &format!(
-                                "No job handler is registered for partition '{}'; dropping the message.",
-                                item.partition
-                            ),
-                            sentry::Level::Warning,
+                        services.session().record_event(
+                            "job::missing-handler",
+                            [
+                                ("partition".to_string(), item.partition.clone()),
+                            ].into()
                         );
                         if let Err(err) = queue.complete(item.partition.clone(), item).await {
                             error!(error = %err, "Failed to drop unhandled job message: {err}");
-                            sentry::capture_error(&err);
+                            services.session().record_error(&err);
                         }
                         continue;
                     };
 
-                    tokio::spawn(Self::process(
+                    tasks.spawn(Self::process(
                         handler,
                         item,
                         services.clone(),
@@ -333,7 +344,7 @@ impl JobHost {
                 }
                 Err(err) => {
                     error!(error = %err, "An error occurred while fetching a job from the queue: {err}");
-                    sentry::capture_error(&err);
+                    services.session().record_error(&err);
                     tokio::time::sleep(std::time::Duration::from_secs(5)).await;
                 }
             }
@@ -349,6 +360,7 @@ impl JobHost {
         let queue = services.queue();
         let name = handler.partition();
         let delay = Utc::now() - item.scheduled_at;
+        let session = services.session();
 
         // Narrow the generous dequeue reservation down to this job's own timeout.
         // The reservation window doubles as the retry backoff: if the job fails
@@ -365,7 +377,7 @@ impl JobHost {
             .await
         {
             warn!(error = %err, "Failed to set the reservation window for job '{name}': {err}");
-            sentry::capture_error(&err);
+            session.record_error(&err);
         }
 
         let span = info_span!(
@@ -397,7 +409,7 @@ impl JobHost {
         debug!("Processing job '{name}' (traceparent: {traceparent}).");
 
         let ctx = JobContext::new(
-            services,
+            services.clone(),
             item.scheduled_at,
             item.traceparent.clone(),
             item.tracestate.clone(),
@@ -412,12 +424,12 @@ impl JobHost {
                 info!("Job '{name}' completed successfully (traceparent: {traceparent}).");
                 if let Err(err) = queue.complete(name.to_string(), item).await {
                     error!(error = %err, "Failed to mark job '{name}' as completed (traceparent: {traceparent}): {err}");
-                    sentry::capture_error(&err);
+                    session.record_error(&err);
                 }
             }
             Err(err) => {
                 if err.is(human_errors::Kind::System) {
-                    sentry::capture_error(&err);
+                    session.record_error(&err);
                 }
 
                 // Record the failure against the job's own span (rather than the
