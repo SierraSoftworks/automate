@@ -2,20 +2,20 @@
 //!
 //! Alerting integrations frequently receive a stream of *triggered* (unhealthy) / *recovered*
 //! (healthy) notifications for the same entity and want to avoid churning an operator on transient
-//! blips. [`Debouncer`] is a small tri-state detector over that stream: it tracks per-entity state
-//! and classifies each observation as one of the [`Detection`] variants, leaving the caller to
-//! perform the resulting actions.
+//! blips. [`Debouncer`] is a small detector over that stream: it tracks per-entity state and
+//! classifies each observation as one of the [`Detection`] variants, leaving the caller to perform
+//! the resulting actions.
 //!
-//! The three detections:
+//! The two detections:
 //!
-//! * [`NewTriggered`](Detection::NewTriggered) — the entity has newly triggered, the start of a
-//!   fresh incident. The caller should debounce for [`DebounceConfig::alert_delay`] before surfacing
-//!   an alert; a recovery within that window suppresses it, so a brief blip never surfaces.
+//! * [`Triggered`](Detection::Triggered) — the entity is unhealthy. Carries the time the ongoing
+//!   incident *first* triggered. When that equals the observation time the incident is brand new and
+//!   the caller should debounce for [`DebounceConfig::alert_delay`] before surfacing an alert (a
+//!   recovery within that window suppresses it, so a brief blip never surfaces); when it is earlier
+//!   the entity has flapped back to unhealthy while recovering, so the caller can re-alert
+//!   immediately with the original context rather than treating it as a brand-new incident.
 //! * [`Recovering`](Detection::Recovering) — the entity has recovered after being triggered. Carries
 //!   how long it was triggered (first trigger → recovery), i.e. the incident's total impact.
-//! * [`FlappingTriggered`](Detection::FlappingTriggered) — the entity triggered again while it was
-//!   recovering. Carries the time the ongoing incident *first* triggered, so the caller can re-alert
-//!   immediately with the original context rather than treating it as a brand-new incident.
 //!
 //! Incident identity is anchored on the **last trigger**, not on the recovery signal, so an incident
 //! keeps its identity (and its first-trigger time, for the impact measurement) as long as triggers
@@ -69,24 +69,21 @@ pub struct DebounceState {
     pub recovering_since: Option<DateTime<Utc>>,
 }
 
-/// The tri-state classification the debouncer assigns to an observation (see [`Debouncer`]).
+/// The classification the debouncer assigns to an observation (see [`Debouncer`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Detection {
-    /// The entity has newly triggered — the start of a fresh incident. Debounce before surfacing an
-    /// alert (a recovery within [`DebounceConfig::alert_delay`] cancels it).
-    NewTriggered,
+    /// The entity is unhealthy. `first_triggered_at` is the time the ongoing incident first
+    /// triggered: it equals the observation time for a brand-new incident, and is earlier when the
+    /// entity has flapped back to unhealthy while recovering, letting the caller re-alert immediately
+    /// with the original context rather than treating it as brand new.
+    Triggered { first_triggered_at: DateTime<Utc> },
 
     /// The entity has recovered after being triggered. Carries how long it was triggered (first
     /// trigger → this recovery) — the incident's total impact.
     Recovering { triggered_for: Duration },
-
-    /// The entity triggered again while it was recovering — it is flapping. Carries the time the
-    /// ongoing incident first triggered, so the caller can re-alert immediately with the original
-    /// context.
-    FlappingTriggered { first_triggered_at: DateTime<Utc> },
 }
 
-/// A reusable tri-state debounce detector for flapping health signals, backed by a key/value store.
+/// A reusable debounce detector for flapping health signals, backed by a key/value store.
 ///
 /// See the [module documentation](self) for the detections. Construct one per integration with its
 /// own partition and [`DebounceConfig`]; a debouncer is cheap to create and holds only the store
@@ -107,8 +104,10 @@ impl<K: KeyValueStore> Debouncer<K> {
         }
     }
 
-    /// Records a trigger for `key` observed at `now`, updates the persisted state, and classifies it
-    /// as either [`Detection::NewTriggered`] or [`Detection::FlappingTriggered`].
+    /// Records a trigger for `key` observed at `now`, updates the persisted state, and returns a
+    /// [`Detection::Triggered`] whose `first_triggered_at` equals `now` for a brand-new incident and
+    /// is the ongoing incident's original trigger time when the entity has flapped back to unhealthy
+    /// while recovering.
     ///
     /// A trigger always makes the last trigger newer than any prior recovery, so the caller should
     /// also cancel any pending recovery follow-up — a recovery is only ever settled while it remains
@@ -136,9 +135,11 @@ impl<K: KeyValueStore> Debouncer<K> {
         // incident; anything else opens (or continues) a fresh alert.
         let recovering = state.as_ref().is_some_and(|s| s.recovering_since.is_some());
         let detection = if within_window && recovering {
-            Detection::FlappingTriggered { first_triggered_at }
+            Detection::Triggered { first_triggered_at }
         } else {
-            Detection::NewTriggered
+            Detection::Triggered {
+                first_triggered_at: now,
+            }
         };
 
         self.store(
@@ -243,7 +244,9 @@ mod tests {
 
         assert_eq!(
             d.on_triggered("probe", t0).await.unwrap(),
-            Detection::NewTriggered
+            Detection::Triggered {
+                first_triggered_at: t0
+            }
         );
 
         let s = state(&d, "probe").await.unwrap();
@@ -259,11 +262,14 @@ mod tests {
         let t1 = dt("2026-01-01T00:02:00Z");
 
         d.on_triggered("probe", t0).await.unwrap();
-        // A second trigger while not recovering is still classified new, but it is the same incident
-        // so the first-trigger time is preserved and the last advances.
+        // A second trigger while not recovering reports `first_triggered_at: now` (a fresh alert,
+        // not a flap), even though the incident's first-trigger time is preserved in the stored
+        // state so the last trigger can advance.
         assert_eq!(
             d.on_triggered("probe", t1).await.unwrap(),
-            Detection::NewTriggered
+            Detection::Triggered {
+                first_triggered_at: t1
+            }
         );
 
         let s = state(&d, "probe").await.unwrap();
@@ -316,7 +322,7 @@ mod tests {
         d.on_recovered("probe", t1, true).await.unwrap();
         assert_eq!(
             d.on_triggered("probe", t2).await.unwrap(),
-            Detection::FlappingTriggered {
+            Detection::Triggered {
                 first_triggered_at: t0
             }
         );
@@ -363,7 +369,9 @@ mod tests {
         // only 20m after the recovery signal.
         assert_eq!(
             d.on_triggered("probe", t2).await.unwrap(),
-            Detection::NewTriggered
+            Detection::Triggered {
+                first_triggered_at: t2
+            }
         );
         assert_eq!(state(&d, "probe").await.unwrap().first_triggered_at, t2);
     }
@@ -381,7 +389,9 @@ mod tests {
         // new incident.
         assert_eq!(
             d.on_triggered("probe", t2).await.unwrap(),
-            Detection::NewTriggered
+            Detection::Triggered {
+                first_triggered_at: t2
+            }
         );
         assert_eq!(state(&d, "probe").await.unwrap().first_triggered_at, t2);
     }

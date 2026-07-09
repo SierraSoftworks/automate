@@ -2,22 +2,23 @@
 //!
 //! Grey delivers a signed JSON document whenever a probe or cron changes state. Rather than
 //! surfacing every transition immediately, we classify each event through the reusable
-//! [`crate::services::debounce`] tri-state detector — keyed by a stable `grey/<type>/<name>` key and
+//! [`crate::services::debounce`] detector — keyed by a stable `grey/<type>/<name>` key and
 //! backed by the [`GREY_FAILURES_PARTITION`] table — and map its [`Detection`] onto Todoist actions
 //! so a single task tells a coherent story from unhealthy, through recovering, to recovered:
 //!
-//! * [`NewTriggered`](Detection::NewTriggered) — a fresh incident. We schedule the operator's
-//!   Todoist task [`ALERT_DELAY`] into the future rather than creating it immediately. If the monitor
+//! * [`Triggered`](Detection::Triggered) — the monitor is unhealthy. For a brand-new incident (the
+//!   detection's `first_triggered_at` is the observation time) we schedule the operator's Todoist
+//!   task [`ALERT_DELAY`] into the future rather than creating it immediately; if the monitor
 //!   recovers before the delay elapses the pending task is purged, so a brief blip never surfaces.
+//!   When `first_triggered_at` is earlier the monitor has flapped back to unhealthy while recovering,
+//!   so we re-escalate the task immediately (dated to the incident's first trigger) since an operator
+//!   is already watching it.
 //! * [`Recovering`](Detection::Recovering) — the monitor recovered and a task had surfaced. We
 //!   immediately flip it to *recovering* at a reduced priority and defer a *recovered* update
 //!   [`RECOVERY_WINDOW`] out, stamped with the total triggered duration. (Grey already debounces
 //!   recovery internally for 5m, so a healthy report is a strong signal.) Any later trigger cancels
 //!   that deferred update, so the recovery is only confirmed while it stays newer than the last
 //!   trigger. If no task ever surfaced we simply forget the incident.
-//! * [`FlappingTriggered`](Detection::FlappingTriggered) — the monitor triggered again while
-//!   recovering. We re-escalate the task immediately (dated to the incident's first trigger), since
-//!   an operator is already watching it.
 //!
 //! Signatures are verified exactly as for [`super::tailscale`]: HMAC-SHA256 over
 //! `"<timestamp>.<body>"`, carried in the `Grey-Webhook-Signature: t=<unix-seconds>,v1=<hex>`
@@ -382,7 +383,7 @@ impl Job for GreyWebhook {
                 .await?;
 
             match debouncer.on_triggered(&unique_key, now).await? {
-                Detection::FlappingTriggered { first_triggered_at } => {
+                Detection::Triggered { first_triggered_at } if first_triggered_at < now => {
                     // The monitor triggered again while we were showing it as recovering; re-alert
                     // immediately, dated to when the ongoing incident first triggered, since an
                     // operator is already watching it.
@@ -411,7 +412,7 @@ impl Job for GreyWebhook {
                     .await?;
                 }
                 _ => {
-                    // A fresh incident (`Detection::NewTriggered`). Delay surfacing the task so a
+                    // A fresh incident. Delay surfacing the task so a
                     // brief blip has time to settle; a recovery received within the delay purges it
                     // before it is created.
                     info!(
