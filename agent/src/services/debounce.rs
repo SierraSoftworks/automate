@@ -37,14 +37,10 @@ use crate::db::KeyValueStore;
 /// Timing configuration for a [`Debouncer`].
 #[derive(Clone, Copy, Debug)]
 pub struct DebounceConfig {
-    /// How long a fresh trigger is held before the caller should surface an alert. A recovery
-    /// received within this window cancels it, so a brief blip never surfaces.
-    pub alert_delay: Duration,
-
     /// How long the entity must go without a trigger before its recovery is settled and a subsequent
     /// trigger counts as a brand-new incident. A trigger inside this window (measured from the last
     /// trigger) is treated as flapping and re-escalates the existing incident.
-    pub recovery_window: Duration,
+    pub window: Duration,
 }
 
 /// Persisted per-entity debounce state.
@@ -117,42 +113,34 @@ impl<K: KeyValueStore> Debouncer<K> {
         key: &str,
         now: DateTime<Utc>,
     ) -> Result<Detection, human_errors::Error> {
-        let state = self.load(key).await?;
-
-        // The incident-identity cutoff runs from the last trigger, so an incident keeps its identity
-        // (and its first-trigger time) as long as triggers keep arriving within a window of one
-        // another, rather than being reset off the back of an intervening recovery signal.
-        let within_window = state
-            .as_ref()
-            .is_some_and(|s| now - s.last_triggered_at < self.config.recovery_window);
-
-        let first_triggered_at = match &state {
-            Some(prev) if within_window => prev.first_triggered_at,
-            _ => now,
-        };
-
-        // A trigger that lands while we are recovering, inside the window, is a flap of the ongoing
-        // incident; anything else opens (or continues) a fresh alert.
-        let recovering = state.as_ref().is_some_and(|s| s.recovering_since.is_some());
-        let detection = if within_window && recovering {
-            Detection::Triggered { first_triggered_at }
+        let new_state = if let Some(state) = self.load(key).await? {
+            if now - state.last_triggered_at < self.config.window {
+                DebounceState {
+                    last_triggered_at: now,
+                    recovering_since: None,
+                    ..state
+                }
+            } else {
+                DebounceState {
+                    first_triggered_at: now,
+                    last_triggered_at: now,
+                    recovering_since: None,
+                }
+            }
         } else {
-            Detection::Triggered {
+            DebounceState {
                 first_triggered_at: now,
+                last_triggered_at: now,
+                recovering_since: None,
             }
         };
 
-        self.store(
-            key,
-            DebounceState {
-                first_triggered_at,
-                last_triggered_at: now,
-                recovering_since: None,
-            },
-        )
-        .await?;
+        let first_triggered = new_state.first_triggered_at;
+        self.store(key, new_state).await?;
 
-        Ok(detection)
+        Ok(Detection::Triggered {
+            first_triggered_at: first_triggered,
+        })
     }
 
     /// Records a recovery for `key` observed at `now`.
@@ -166,35 +154,32 @@ impl<K: KeyValueStore> Debouncer<K> {
         &self,
         key: &str,
         now: DateTime<Utc>,
-        alert_surfaced: bool,
     ) -> Result<Option<Detection>, human_errors::Error> {
-        let state = self.load(key).await?;
+        if let Some(state) = self.load(key).await? {
+            let triggered_for = if let Some(recovering) = state.recovering_since &&
+                recovering > state.last_triggered_at
+            {
+                // The entity is already recovering, so the caller has already been notified and the
+                // recovery duration has already been reported. Don't adjust the
+                // recovery timestamp.
+                return Ok(Some(Detection::Recovering { triggered_for: (recovering - state.first_triggered_at).max(Duration::zero()) }));
+            } else {
+                (now - state.first_triggered_at).max(Duration::zero())
+            };
 
-        if !alert_surfaced {
-            self.kv
-                .remove(self.partition.clone(), key.to_string())
-                .await?;
-            return Ok(None);
+            self.store(
+                key,
+                DebounceState {
+                    recovering_since: Some(now),
+                    ..state
+                },
+            )
+            .await?;
+
+            Ok(Some(Detection::Recovering { triggered_for }))
+        } else {
+            Ok(None)
         }
-
-        let first_triggered_at = state.as_ref().map(|s| s.first_triggered_at).unwrap_or(now);
-        let last_triggered_at = state.as_ref().map(|s| s.last_triggered_at).unwrap_or(now);
-
-        let triggered_for = (now - first_triggered_at).max(Duration::zero());
-
-        // Record the recovery. It is newer than the last trigger, so it is genuine until (and unless)
-        // a subsequent trigger supersedes it.
-        self.store(
-            key,
-            DebounceState {
-                first_triggered_at,
-                last_triggered_at,
-                recovering_since: Some(now),
-            },
-        )
-        .await?;
-
-        Ok(Some(Detection::Recovering { triggered_for }))
     }
 
     async fn load(&self, key: &str) -> Result<Option<DebounceState>, human_errors::Error> {
@@ -217,8 +202,7 @@ mod tests {
 
     fn config() -> DebounceConfig {
         DebounceConfig {
-            alert_delay: Duration::minutes(5),
-            recovery_window: Duration::hours(1),
+            window: Duration::hours(1),
         }
     }
 
@@ -262,13 +246,12 @@ mod tests {
         let t1 = dt("2026-01-01T00:02:00Z");
 
         d.on_triggered("probe", t0).await.unwrap();
-        // A second trigger while not recovering reports `first_triggered_at: now` (a fresh alert,
-        // not a flap), even though the incident's first-trigger time is preserved in the stored
-        // state so the last trigger can advance.
+        // A second trigger within the window belongs to the same ongoing incident, so it reports the
+        // incident's original first-trigger time (not `now`) while advancing the last trigger.
         assert_eq!(
             d.on_triggered("probe", t1).await.unwrap(),
             Detection::Triggered {
-                first_triggered_at: t1
+                first_triggered_at: t0
             }
         );
 
@@ -284,7 +267,7 @@ mod tests {
         let t1 = dt("2026-01-01T00:15:00Z");
 
         d.on_triggered("probe", t0).await.unwrap();
-        let detection = d.on_recovered("probe", t1, true).await.unwrap();
+        let detection = d.on_recovered("probe", t1).await.unwrap();
 
         // Triggered for first -> recovery (15m); the recovery is recorded as newer than the last
         // trigger.
@@ -301,14 +284,29 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn recovery_without_surfaced_alert_is_forgotten() {
+    async fn repeated_recovery_is_idempotent() {
         let d = debouncer().await;
         let t0 = dt("2026-01-01T00:00:00Z");
-        let t1 = dt("2026-01-01T00:01:00Z");
+        let t1 = dt("2026-01-01T00:15:00Z"); // recover
+        let t2 = dt("2026-01-01T00:20:00Z"); // a second recovery signal
 
         d.on_triggered("probe", t0).await.unwrap();
-        assert_eq!(d.on_recovered("probe", t1, false).await.unwrap(), None);
-        assert!(state(&d, "probe").await.is_none());
+        assert_eq!(
+            d.on_recovered("probe", t1).await.unwrap(),
+            Some(Detection::Recovering {
+                triggered_for: Duration::minutes(15)
+            })
+        );
+
+        // A second recovery while already recovering re-reports the same impact and does not move the
+        // recovery timestamp forward — recovery began at t1, not t2.
+        assert_eq!(
+            d.on_recovered("probe", t2).await.unwrap(),
+            Some(Detection::Recovering {
+                triggered_for: Duration::minutes(15)
+            })
+        );
+        assert_eq!(state(&d, "probe").await.unwrap().recovering_since, Some(t1));
     }
 
     #[tokio::test]
@@ -319,7 +317,7 @@ mod tests {
         let t2 = dt("2026-01-01T00:45:00Z"); // flap, 45m after the last trigger (t0)
 
         d.on_triggered("probe", t0).await.unwrap();
-        d.on_recovered("probe", t1, true).await.unwrap();
+        d.on_recovered("probe", t1).await.unwrap();
         assert_eq!(
             d.on_triggered("probe", t2).await.unwrap(),
             Detection::Triggered {
@@ -343,9 +341,9 @@ mod tests {
         let t3 = dt("2026-01-01T00:55:00Z"); // recover again
 
         d.on_triggered("probe", t0).await.unwrap();
-        d.on_recovered("probe", t1, true).await.unwrap();
+        d.on_recovered("probe", t1).await.unwrap();
         d.on_triggered("probe", t2).await.unwrap();
-        let detection = d.on_recovered("probe", t3, true).await.unwrap();
+        let detection = d.on_recovered("probe", t3).await.unwrap();
 
         // Triggered for t0 -> t3 (55m), not t2 -> t3.
         assert_eq!(
@@ -364,7 +362,7 @@ mod tests {
         let t2 = dt("2026-01-01T01:10:00Z"); // trigger again: 20m after recovery, but 70m after t0
 
         d.on_triggered("probe", t0).await.unwrap();
-        d.on_recovered("probe", t1, true).await.unwrap();
+        d.on_recovered("probe", t1).await.unwrap();
         // 70m > the 1h window since the last trigger, so this is a NEW incident even though it is
         // only 20m after the recovery signal.
         assert_eq!(
@@ -384,7 +382,7 @@ mod tests {
         let t2 = dt("2026-01-01T01:00:00Z"); // exactly 1h after the last trigger (t0)
 
         d.on_triggered("probe", t0).await.unwrap();
-        d.on_recovered("probe", t1, true).await.unwrap();
+        d.on_recovered("probe", t1).await.unwrap();
         // The window is half-open (`< recovery_window`), so exactly 1h after the last trigger is a
         // new incident.
         assert_eq!(
@@ -397,18 +395,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn recovery_with_no_prior_state_uses_now_as_the_baseline() {
+    async fn recovery_with_no_prior_state_is_ignored() {
         let d = debouncer().await;
         let t = dt("2026-01-01T00:00:00Z");
 
-        // A recovery for a surfaced alert we have no record of (e.g. one created before the debouncer
-        // existed) yields a zero-duration recovery.
-        assert_eq!(
-            d.on_recovered("probe", t, true).await.unwrap(),
-            Some(Detection::Recovering {
-                triggered_for: Duration::zero()
-            })
-        );
+        // A recovery for an entity we have no record of is a no-op: there was no incident to settle,
+        // so nothing is reported and no state is created.
+        assert_eq!(d.on_recovered("probe", t).await.unwrap(), None);
+        assert!(state(&d, "probe").await.is_none());
     }
 
     #[tokio::test]
@@ -419,7 +413,7 @@ mod tests {
         let t2 = dt("2026-01-01T00:30:00Z"); // flap
 
         d.on_triggered("probe", t0).await.unwrap();
-        d.on_recovered("probe", t1, true).await.unwrap();
+        d.on_recovered("probe", t1).await.unwrap();
         assert_eq!(state(&d, "probe").await.unwrap().recovering_since, Some(t1));
 
         // Once a trigger lands after the recovery, the recovery is cleared — it is no longer newer

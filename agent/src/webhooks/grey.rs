@@ -32,28 +32,13 @@ use sha2::Sha256;
 use crate::{
     prelude::*,
     publishers::{
-        TodoistDueDate, TodoistUpsertTask, TodoistUpsertTaskPayload, TodoistUpsertTaskState,
+        TodoistCompleteTask, TodoistCompleteTaskPayload, TodoistDueDate, TodoistUpsertTask,
+        TodoistUpsertTaskPayload,
     },
     services::debounce::{DebounceConfig, Debouncer, Detection},
 };
 
 type HmacSha256 = Hmac<Sha256>;
-
-/// How long to wait before surfacing a Todoist task for a newly-unhealthy monitor. This gives a
-/// flapping monitor time to settle before an operator is alerted; a recovery received within the
-/// window purges the pending task so a brief blip never surfaces at all.
-const ALERT_DELAY: chrono::Duration = chrono::Duration::minutes(5);
-
-/// How long after a monitor first reports healthy we keep the recovery "provisional". While inside
-/// this window the task is shown as *recovering*; once it elapses without another failure the task
-/// is stamped as fully *recovered*. A failure received within the window re-escalates the existing
-/// task instead of being treated as a brand-new incident.
-const RECOVERY_WINDOW: chrono::Duration = chrono::Duration::hours(1);
-
-/// The Todoist priority applied while a monitor is recovering or has recovered. It sits below every
-/// unhealthy priority (see [`GreyWebhookEvent::priority`]) so the task visibly de-escalates as the
-/// incident resolves.
-const RECOVERING_PRIORITY: i32 = 2;
 
 /// The key/value partition holding each Grey monitor's debounce state
 /// ([`crate::services::debounce::DebounceState`]), keyed by [`GreyWebhookEvent::unique_key`].
@@ -96,6 +81,18 @@ pub struct GreyWebhookConfig {
     #[serde(default)]
     pub dashboard_url: Option<String>,
 
+    /// The amount of time to wait for a monitor to settle before surfacing the alert.
+    #[serde(default = "default_alert_delay")]
+    pub alert_delay: chrono::Duration,
+
+    /// The amount of time to wait after a monitor recovers before confirming the recovery.
+    #[serde(default = "default_recovery_delay")]
+    pub recovery_delay: chrono::Duration,
+
+    /// The minimum amount of impact required for a monitor's failure to stay in Todoist for later review.
+    #[serde(default = "default_noise_duration")]
+    pub noise_duration: chrono::Duration,
+
     /// Filter applied to incoming events. The same fields Grey exposes to its own webhook filters
     /// are available here (`event`, `entity.*`, `state.*`).
     #[serde(default)]
@@ -103,6 +100,18 @@ pub struct GreyWebhookConfig {
 
     #[serde(default = "default_todoist_config")]
     pub todoist: crate::config::TodoistConfig,
+}
+
+fn default_alert_delay() -> chrono::Duration {
+    chrono::Duration::minutes(5)
+}
+
+fn default_recovery_delay() -> chrono::Duration {
+    chrono::Duration::hours(1)
+}
+
+fn default_noise_duration() -> chrono::Duration {
+    chrono::Duration::minutes(5)
 }
 
 fn default_todoist_config() -> crate::config::TodoistConfig {
@@ -232,9 +241,10 @@ impl Job for GreyWebhook {
         job: &Self::JobType,
     ) -> Result<(), human_errors::Error> {
         let services = ctx.services();
+        let config = services.config().webhooks.grey.clone();
 
         // Validate the Grey webhook signature header, exactly as for Tailscale.
-        let secret = &services.config().webhooks.grey.secret;
+        let secret = &config.secret;
 
         if !secret.is_empty() {
             // HTTP headers are case-insensitive, so search for the header case-insensitively.
@@ -268,7 +278,7 @@ impl Job for GreyWebhook {
 
         let event: GreyWebhookEvent = job.json()?;
 
-        if !services.config().webhooks.grey.filter.matches(&event)? {
+        if !config.filter.matches(&event)? {
             info!(
                 "Grey event for {} '{}' did not match filter; ignoring.",
                 event.entity.entity_type, event.entity.name
@@ -276,72 +286,84 @@ impl Job for GreyWebhook {
             return Ok(());
         }
 
-        let config = services.config().webhooks.grey.todoist.clone();
-        let dashboard_url = services.config().webhooks.grey.dashboard_url.clone();
+        let todoist_config = config.todoist.clone();
+        let dashboard_url = config.dashboard_url.clone();
 
-        // A stable key per monitor so a flapping entity reuses a single task rather than creating a
-        // fresh notification each time it changes state.
-        let unique_key = event.unique_key();
-        // A distinct queue key for the deferred "recovered" confirmation so it can coexist with (and
-        // be purged independently of) the task's active-state upserts, which share `unique_key`.
-        let recovered_key = format!("{unique_key}/recovered");
-
-        // The state machine reasons in terms of the event's own timestamp (Grey's clock) so that
-        // durations stay internally consistent and webhook retries remain idempotent.
         let now = event.timestamp;
+        let unique_key = event.unique_key();
 
-        // The debounce/recovery bookkeeping lives in the reusable `services::debounce` module; this
-        // handler only performs the Todoist actions each decision calls for.
         let debouncer = Debouncer::new(
             services.kv(),
             GREY_FAILURES_PARTITION,
             DebounceConfig {
-                alert_delay: ALERT_DELAY,
-                recovery_window: RECOVERY_WINDOW,
+                window: config.recovery_delay,
             },
         );
 
-        if event.state.healthy {
-            // Cancel any still-pending alert up front. If the monitor recovered before its alert
-            // delay elapsed this suppresses the task entirely; once the alert has surfaced it is a
-            // no-op.
-            services
-                .queue()
-                .purge(TodoistUpsertTask::partition(), unique_key.clone())
-                .await?;
+        let state = if event.state.healthy {
+            debouncer.on_recovered(&event.unique_key(), now).await?
+        } else {
+            Some(debouncer.on_triggered(&event.unique_key(), now).await?)
+        };
 
-            // Whether an alert actually reached an operator is tracked by the Todoist task's
-            // existence, which the debouncer uses to tell a genuine recovery from a blip that never
-            // surfaced.
-            let task_exists = services
-                .kv()
-                .get::<TodoistUpsertTaskState>("todoist/task", unique_key.clone())
-                .await?
-                .is_some();
-
-            if let Some(Detection::Recovering { triggered_for }) = debouncer
-                .on_recovered(&unique_key, now, task_exists)
-                .await?
-            {
+        match state {
+            None => {
+                // We recovered without a record of a failure, so there's nothing to do.
                 info!(
-                    "Grey {} '{}' recovered ({} -> {}); marking task as recovering (triggered for {}, confirming in {}).",
+                    "Grey {} '{}' sent a recovery event without a prior failure record, ignoring.",
+                    event.entity.entity_type, event.entity.name
+                );
+            }
+            Some(Detection::Triggered { first_triggered_at }) => {
+                info!(
+                    "Grey {} '{}' sent an alert.",
+                    event.entity.entity_type, event.entity.name,
+                );
+
+                services
+                    .queue()
+                    .purge(TodoistCompleteTask::partition(), unique_key.clone())
+                    .await?;
+
+                TodoistUpsertTask::dispatch_delayed(
+                    TodoistUpsertTaskPayload {
+                        unique_key: unique_key.clone(),
+                        title: event.task_title(dashboard_url.as_deref()),
+                        description: Some(event.task_description()),
+                        due: TodoistDueDate::DateTime(first_triggered_at),
+                        priority: Some(event.priority()),
+                        config: todoist_config,
+                        ..Default::default()
+                    },
+                    Some(unique_key.clone().into()),
+                    ((first_triggered_at + config.alert_delay) - now).max(chrono::Duration::zero()),
+                    services,
+                )
+                .await?;
+            }
+            Some(Detection::Recovering { triggered_for }) => {
+                info!(
+                    "Grey {} '{}' recovered ({} -> {}); triggered for {}, confirming in {}.",
                     event.entity.entity_type,
                     event.entity.name,
                     event.state.previous,
                     event.state.current,
                     format_duration(triggered_for),
-                    format_duration(RECOVERY_WINDOW),
+                    format_duration(config.recovery_delay),
                 );
 
-                // Immediately flip the existing task to "recovering" at a reduced priority.
+                // Grey internally has a 5m settling window before it sends a resolved event, so let's adjust for that
+                let true_impact_duration = triggered_for - chrono::Duration::minutes(5);
+
                 TodoistUpsertTask::dispatch(
                     TodoistUpsertTaskPayload {
                         unique_key: unique_key.clone(),
-                        title: event.recovering_title(dashboard_url.as_deref()),
-                        description: Some(event.recovering_description()),
+                        title: event
+                            .recovered_title(dashboard_url.as_deref(), true_impact_duration),
+                        description: Some(event.recovered_description(true_impact_duration)),
                         due: TodoistDueDate::DateTime(now),
-                        priority: Some(RECOVERING_PRIORITY),
-                        config: config.clone(),
+                        priority: Some(2),
+                        config: todoist_config.clone(),
                         ..Default::default()
                     },
                     Some(unique_key.clone().into()),
@@ -349,97 +371,14 @@ impl Job for GreyWebhook {
                 )
                 .await?;
 
-                // Defer the "recovered" confirmation to a full recovery window after this recovery.
-                // Any subsequent trigger purges it before it fires (see the unhealthy branch), so the
-                // recovery is only ever confirmed while it remains newer than the last trigger.
-                TodoistUpsertTask::dispatch_delayed(
-                    TodoistUpsertTaskPayload {
-                        unique_key: unique_key.clone(),
-                        title: event.recovered_title(dashboard_url.as_deref(), triggered_for),
-                        description: Some(event.recovered_description(triggered_for)),
-                        due: TodoistDueDate::DateTime(now),
-                        priority: Some(RECOVERING_PRIORITY),
-                        config,
-                        ..Default::default()
-                    },
-                    Some(recovered_key.into()),
-                    RECOVERY_WINDOW,
-                    services,
-                )
-                .await?;
-            } else {
-                info!(
-                    "Grey {} '{}' recovered before its alert surfaced; suppressing the task.",
-                    event.entity.entity_type, event.entity.name
-                );
-            }
-        } else {
-            // Any trigger supersedes a prior recovery, so cancel a pending "recovered" confirmation
-            // up front (a no-op when there isn't one). This guarantees the recovery is only ever
-            // confirmed while it remains newer than the last trigger.
-            services
-                .queue()
-                .purge(TodoistUpsertTask::partition(), recovered_key)
-                .await?;
-
-            match debouncer.on_triggered(&unique_key, now).await? {
-                Detection::Triggered { first_triggered_at } if first_triggered_at < now => {
-                    // The monitor triggered again while we were showing it as recovering; re-alert
-                    // immediately, dated to when the ongoing incident first triggered, since an
-                    // operator is already watching it.
-                    info!(
-                        "Grey {} '{}' flapped back to unhealthy ({} -> {}); re-escalating (first triggered {}).",
-                        event.entity.entity_type,
-                        event.entity.name,
-                        event.state.previous,
-                        event.state.current,
-                        first_triggered_at.to_rfc3339(),
-                    );
-
-                    TodoistUpsertTask::dispatch(
-                        TodoistUpsertTaskPayload {
+                if true_impact_duration < config.noise_duration {
+                    TodoistCompleteTask::dispatch_delayed(
+                        TodoistCompleteTaskPayload {
                             unique_key: unique_key.clone(),
-                            title: event.task_title(dashboard_url.as_deref()),
-                            description: Some(event.task_description()),
-                            due: TodoistDueDate::DateTime(first_triggered_at),
-                            priority: Some(event.priority()),
-                            config,
-                            ..Default::default()
+                            config: todoist_config,
                         },
-                        Some(unique_key.clone().into()),
-                        services,
-                    )
-                    .await?;
-                }
-                _ => {
-                    // A fresh incident. Delay surfacing the task so a
-                    // brief blip has time to settle; a recovery received within the delay purges it
-                    // before it is created.
-                    info!(
-                        "Grey {} '{}' is unhealthy ({} -> {}); scheduling delayed alert in {}.",
-                        event.entity.entity_type,
-                        event.entity.name,
-                        event.state.previous,
-                        event.state.current,
-                        format_duration(ALERT_DELAY),
-                    );
-
-                    TodoistUpsertTask::dispatch_delayed(
-                        TodoistUpsertTaskPayload {
-                            unique_key: unique_key.clone(),
-                            title: event.task_title(dashboard_url.as_deref()),
-                            description: Some(event.task_description()),
-                            due: event
-                                .state
-                                .since
-                                .map(TodoistDueDate::DateTime)
-                                .unwrap_or(TodoistDueDate::DateTime(now)),
-                            priority: Some(event.priority()),
-                            config,
-                            ..Default::default()
-                        },
-                        Some(unique_key.clone().into()),
-                        ALERT_DELAY,
+                        Some(unique_key.into()),
+                        config.recovery_delay,
                         services,
                     )
                     .await?;
@@ -528,17 +467,12 @@ impl GreyWebhookEvent {
         self.title_with_status(dashboard_url, &format!("is {}", self.state.current))
     }
 
-    /// The title shown the moment a monitor reports healthy, while we wait out the recovery window.
-    fn recovering_title(&self, dashboard_url: Option<&str>) -> String {
-        self.title_with_status(dashboard_url, "is recovering")
-    }
-
     /// The title stamped onto the task once a monitor has stayed healthy for the full recovery
     /// window, carrying the total impact time.
     fn recovered_title(&self, dashboard_url: Option<&str>, impact: chrono::Duration) -> String {
         self.title_with_status(
             dashboard_url,
-            &format!("has recovered after {}", format_duration(impact)),
+            &format!("recovered after {}", format_duration(impact)),
         )
     }
 
@@ -595,31 +529,6 @@ impl GreyWebhookEvent {
             lines.push(String::new());
             lines.push(format!("**Latest detail:** {detail}"));
         }
-
-        lines.push(String::new());
-        lines.push(self.event_footer());
-
-        lines.join("\n")
-    }
-
-    /// The description shown while a monitor is recovering, explaining that the task will confirm as
-    /// recovered once the recovery window elapses without another failure.
-    fn recovering_description(&self) -> String {
-        let mut lines = vec![
-            format!(
-                "**{} `{}`** has reported healthy again and is **recovering**.",
-                self.entity_label(),
-                self.entity.name
-            ),
-            String::new(),
-            format!(
-                "It will be confirmed as recovered in {} if it stays healthy.",
-                format_duration(RECOVERY_WINDOW)
-            ),
-            String::new(),
-        ];
-
-        lines.extend(self.detail_lines());
 
         lines.push(String::new());
         lines.push(self.event_footer());
@@ -737,6 +646,7 @@ impl Filterable for GreyWebhookEvent {
 mod tests {
     use super::*;
     use crate::db::PeekedMessage;
+    use crate::publishers::TodoistUpsertTaskState;
     use crate::services::debounce::DebounceState;
     use crate::webhooks::WebhookEvent;
     use std::collections::HashMap;
@@ -804,6 +714,21 @@ mod tests {
         value.parse().unwrap()
     }
 
+    /// Builds mock services wired with the Grey timings a real deployment uses. The plain
+    /// [`crate::services::ServicesContainer::new_mock`] leaves every `chrono::Duration` at its
+    /// `Default` (zero) because the `#[serde(default = "…")]` fallbacks only apply when
+    /// deserializing, so the delayed alert, recovery window, and noise threshold would all collapse
+    /// to zero and never exercise the debounce behaviour.
+    async fn mock_services() -> crate::services::ServicesContainer<crate::db::SqliteDatabase> {
+        crate::services::ServicesContainer::new_custom_mock(|config, _db| {
+            config.webhooks.grey.alert_delay = chrono::Duration::minutes(5);
+            config.webhooks.grey.recovery_delay = chrono::Duration::hours(1);
+            config.webhooks.grey.noise_duration = chrono::Duration::minutes(5);
+        })
+        .await
+        .unwrap()
+    }
+
     /// Peeks every pending Todoist upsert enqueued by the handler.
     async fn peek_upserts<S: Services>(
         services: &S,
@@ -811,6 +736,17 @@ mod tests {
         services
             .queue()
             .peek(TodoistUpsertTask::partition(), 16)
+            .await
+            .unwrap()
+    }
+
+    /// Peeks every pending Todoist cleanup (complete-task) enqueued by the handler.
+    async fn peek_completes<S: Services>(
+        services: &S,
+    ) -> Vec<PeekedMessage<TodoistCompleteTaskPayload>> {
+        services
+            .queue()
+            .peek(TodoistCompleteTask::partition(), 16)
             .await
             .unwrap()
     }
@@ -1013,19 +949,15 @@ mod tests {
     }
 
     #[test]
-    fn test_recovering_and_recovered_titles() {
+    fn test_recovered_titles() {
         let event: GreyWebhookEvent = serde_json::from_str(&probe_event("web.prod", true)).unwrap();
 
-        assert_eq!(
-            event.recovering_title(None),
-            "**Grey**: Probe `web.prod` is recovering"
-        );
         assert_eq!(
             event.recovered_title(
                 Some("https://grey.example.com"),
                 chrono::Duration::minutes(15)
             ),
-            "[**Grey**](https://grey.example.com): Probe `web.prod` has recovered after 15m"
+            "[**Grey**](https://grey.example.com): Probe `web.prod` recovered after 15m"
         );
     }
 
@@ -1040,9 +972,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_unhealthy_schedules_delayed_alert() {
-        let services = crate::services::ServicesContainer::new_mock()
-            .await
-            .unwrap();
+        let services = mock_services().await;
         let webhook = GreyWebhook;
         let unique_key = "grey/probe/web.prod";
 
@@ -1072,6 +1002,12 @@ mod tests {
         );
         assert!(alert.hidden_until < Utc::now() + chrono::Duration::minutes(6));
 
+        // A brand-new failure never schedules a cleanup; there is nothing to tidy up yet.
+        assert!(
+            peek_completes(&services).await.is_empty(),
+            "no cleanup should be queued for a fresh failure"
+        );
+
         // The first- and last-failure times are recorded, and we are not (yet) recovering.
         let record = failure_record(&services, unique_key)
             .await
@@ -1082,24 +1018,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_recovery_before_alert_surfaces_suppresses_it() {
-        let services = crate::services::ServicesContainer::new_mock()
-            .await
-            .unwrap();
+    async fn test_recovery_without_prior_failure_is_ignored() {
+        let services = mock_services().await;
         let webhook = GreyWebhook;
         let unique_key = "grey/probe/web.prod";
 
-        // A fresh failure schedules a (still-pending) delayed alert.
-        webhook
-            .handle(
-                JobContext::new(services.clone(), Utc::now(), None, None),
-                &webhook_event(probe_event("web.prod", false)),
-            )
-            .await
-            .unwrap();
-        assert_eq!(peek_upserts(&services).await.len(), 1);
-
-        // Recovery arrives before the alert surfaced: the pending alert is purged and forgotten.
+        // A healthy event with no recorded incident is a no-op: nothing to update, nothing to clean.
         webhook
             .handle(
                 JobContext::new(services.clone(), Utc::now(), None, None),
@@ -1110,24 +1034,113 @@ mod tests {
 
         assert!(
             peek_upserts(&services).await.is_empty(),
-            "the pending alert should be purged"
+            "no task should be touched without a prior failure"
+        );
+        assert!(
+            peek_completes(&services).await.is_empty(),
+            "no cleanup should be queued without a prior failure"
         );
         assert!(
             failure_record(&services, unique_key).await.is_none(),
-            "the incident should be forgotten when it never surfaced"
+            "no debounce state should be created for a stray recovery"
         );
     }
 
     #[tokio::test]
-    async fn test_recovery_marks_recovering_and_defers_recovered() {
-        let services = crate::services::ServicesContainer::new_mock()
-            .await
-            .unwrap();
+    async fn test_recovery_updates_task_and_schedules_cleanup_when_noise() {
+        let services = mock_services().await;
         let webhook = GreyWebhook;
         let unique_key = "grey/probe/web.prod";
 
-        // Pretend the alert already surfaced: the incident first went unhealthy at 11:45 (15m before
-        // recovery) and last reported unhealthy at 11:50.
+        // The alert already surfaced (a task exists) and a delayed alert is still queued from when
+        // the incident first fired. The incident first went unhealthy at 11:53, so by the 12:00
+        // recovery it was triggered for 7m — a true impact of ~2m once Grey's 5m settling window is
+        // discounted, which is below the 5m noise threshold.
+        seed_task(&services, unique_key).await;
+        services
+            .queue()
+            .enqueue(
+                TodoistUpsertTask::partition(),
+                TodoistUpsertTaskPayload {
+                    unique_key: unique_key.to_string(),
+                    ..Default::default()
+                },
+                Some(unique_key.to_string().into()),
+                Some(chrono::Duration::minutes(5)),
+            )
+            .await
+            .unwrap();
+        services
+            .kv()
+            .set(
+                GREY_FAILURES_PARTITION,
+                unique_key.to_string(),
+                DebounceState {
+                    first_triggered_at: dt("2026-06-19T11:53:00Z"),
+                    last_triggered_at: dt("2026-06-19T11:55:00Z"),
+                    recovering_since: None,
+                },
+            )
+            .await
+            .unwrap();
+
+        webhook
+            .handle(
+                JobContext::new(services.clone(), Utc::now(), None, None),
+                &webhook_event(probe_event("web.prod", true)),
+            )
+            .await
+            .unwrap();
+
+        // The pending alert is replaced in place by an immediate recovered update carrying the true
+        // impact time (~2m).
+        let upserts = peek_upserts(&services).await;
+        assert_eq!(
+            upserts.len(),
+            1,
+            "the recovered update should replace the pending alert on the same key"
+        );
+        let recovered = &upserts[0];
+        assert_eq!(recovered.key, unique_key);
+        assert_eq!(recovered.payload.priority, Some(2));
+        assert!(
+            recovered.payload.title.contains("recovered after 2m"),
+            "the recovered update should carry the true impact time, got {:?}",
+            recovered.payload.title
+        );
+        assert!(
+            recovered.hidden_until <= Utc::now(),
+            "the recovered update should fire immediately"
+        );
+
+        // Because it was just noise, a cleanup is deferred by the recovery window (~1h) to remove the
+        // task once we are confident it was not a flap.
+        let completes = peek_completes(&services).await;
+        assert_eq!(completes.len(), 1, "a delayed cleanup should be queued");
+        assert_eq!(completes[0].key, unique_key);
+        assert!(
+            completes[0].hidden_until > Utc::now() + chrono::Duration::minutes(55),
+            "the cleanup should be deferred by roughly the recovery window"
+        );
+
+        // We now track that we are recovering as of the healthy event, retaining the first-failure
+        // time so a later relapse still measures impact from the original outage.
+        let record = failure_record(&services, unique_key)
+            .await
+            .expect("a recovery record");
+        assert_eq!(record.recovering_since, Some(dt("2026-06-19T12:00:00Z")));
+        assert_eq!(record.first_triggered_at, dt("2026-06-19T11:53:00Z"));
+    }
+
+    #[tokio::test]
+    async fn test_recovery_updates_task_without_cleanup_when_impactful() {
+        let services = mock_services().await;
+        let webhook = GreyWebhook;
+        let unique_key = "grey/probe/web.prod";
+
+        // The incident first went unhealthy at 11:45, so by the 12:00 recovery it was triggered for
+        // 15m — a true impact of 10m once Grey's 5m settling window is discounted, which exceeds the
+        // 5m noise threshold and therefore stays in Todoist for review.
         seed_task(&services, unique_key).await;
         services
             .kv()
@@ -1143,7 +1156,6 @@ mod tests {
             .await
             .unwrap();
 
-        // The healthy event is stamped at 12:00:00Z, so the impact is 15 minutes.
         webhook
             .handle(
                 JobContext::new(services.clone(), Utc::now(), None, None),
@@ -1152,60 +1164,44 @@ mod tests {
             .await
             .unwrap();
 
+        // An immediate recovered update carries the true impact time (10m)...
         let upserts = peek_upserts(&services).await;
-        assert_eq!(
-            upserts.len(),
-            2,
-            "a recovering update and a deferred recovered update should be queued"
+        assert_eq!(upserts.len(), 1, "one recovered update should be queued");
+        let recovered = &upserts[0];
+        assert_eq!(recovered.key, unique_key);
+        assert_eq!(recovered.payload.priority, Some(2));
+        assert!(
+            recovered.payload.title.contains("recovered after 10m"),
+            "the recovered update should carry the true impact time, got {:?}",
+            recovered.payload.title
+        );
+        assert!(
+            recovered.hidden_until <= Utc::now(),
+            "the recovered update should fire immediately"
         );
 
-        let recovering = upserts
-            .iter()
-            .find(|m| m.key == unique_key)
-            .expect("an immediate recovering update");
-        assert_eq!(recovering.payload.priority, Some(RECOVERING_PRIORITY));
-        assert!(recovering.payload.title.contains("is recovering"));
+        // ...but because the impact was above the noise threshold, no cleanup is scheduled: the task
+        // stays for the operator to review.
         assert!(
-            recovering.hidden_until <= Utc::now(),
-            "the recovering update should fire immediately"
+            peek_completes(&services).await.is_empty(),
+            "an impactful incident should not schedule a cleanup"
         );
 
-        let recovered = upserts
-            .iter()
-            .find(|m| m.key == format!("{unique_key}/recovered"))
-            .expect("a deferred recovered update");
-        assert_eq!(recovered.payload.priority, Some(RECOVERING_PRIORITY));
-        assert!(
-            recovered.payload.title.contains("has recovered after 15m"),
-            "the recovered update should carry the total impact time"
-        );
-        // Confirmation is deferred a full recovery window after this recovery (~1h from 12:00).
-        assert!(
-            recovered.hidden_until > Utc::now() + chrono::Duration::minutes(55),
-            "the recovered update should be deferred by roughly the recovery window"
-        );
-
-        // We now track that we are recovering as of the healthy event, retaining the first- and
-        // last-failure times so a later relapse still measures impact from the original outage.
         let record = failure_record(&services, unique_key)
             .await
             .expect("a recovery record");
         assert_eq!(record.recovering_since, Some(dt("2026-06-19T12:00:00Z")));
         assert_eq!(record.first_triggered_at, dt("2026-06-19T11:45:00Z"));
-        assert_eq!(record.last_triggered_at, dt("2026-06-19T11:50:00Z"));
     }
 
     #[tokio::test]
-    async fn test_refailure_during_recovery_reescalates_immediately() {
-        let services = crate::services::ServicesContainer::new_mock()
-            .await
-            .unwrap();
+    async fn test_refailure_after_settling_reescalates_and_cancels_cleanup() {
+        let services = mock_services().await;
         let webhook = GreyWebhook;
         let unique_key = "grey/probe/web.prod";
-        let recovered_key = format!("{unique_key}/recovered");
 
         // The monitor first failed at 11:30, last reported unhealthy at 11:40, and is currently
-        // recovering (since 11:45), with a pending "recovered" confirmation queued.
+        // recovering (since 11:45), with a pending noise cleanup queued to remove the task.
         seed_task(&services, unique_key).await;
         services
             .kv()
@@ -1223,19 +1219,19 @@ mod tests {
         services
             .queue()
             .enqueue(
-                TodoistUpsertTask::partition(),
-                TodoistUpsertTaskPayload {
+                TodoistCompleteTask::partition(),
+                TodoistCompleteTaskPayload {
                     unique_key: unique_key.to_string(),
                     ..Default::default()
                 },
-                Some(recovered_key.clone().into()),
-                Some(RECOVERY_WINDOW),
+                Some(unique_key.to_string().into()),
+                Some(chrono::Duration::minutes(60)),
             )
             .await
             .unwrap();
 
-        // A failure at 12:00 — 20 minutes after the last unhealthy report, so inside the window —
-        // re-escalates immediately.
+        // A failure at 12:00 — 20 minutes after the last unhealthy report, so inside the recovery
+        // window — and well beyond the original 5m settling time, so it re-escalates immediately.
         webhook
             .handle(
                 JobContext::new(services.clone(), Utc::now(), None, None),
@@ -1244,13 +1240,13 @@ mod tests {
             .await
             .unwrap();
 
-        let upserts = peek_upserts(&services).await;
-        // The pending "recovered" confirmation is cancelled...
+        // The pending cleanup is cancelled so the task cannot be removed while the monitor is down...
         assert!(
-            upserts.iter().all(|m| m.key != recovered_key),
-            "the deferred recovered confirmation should be purged"
+            peek_completes(&services).await.is_empty(),
+            "the pending cleanup should be purged on re-failure"
         );
         // ...and the task is re-escalated to unhealthy immediately.
+        let upserts = peek_upserts(&services).await;
         let escalation = upserts
             .iter()
             .find(|m| m.key == unique_key)
@@ -1276,16 +1272,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_new_incident_failure_purges_pending_recovery_confirmation() {
-        let services = crate::services::ServicesContainer::new_mock()
-            .await
-            .unwrap();
+    async fn test_new_incident_failure_purges_stale_cleanup() {
+        let services = mock_services().await;
         let webhook = GreyWebhook;
         let unique_key = "grey/probe/web.prod";
-        let recovered_key = format!("{unique_key}/recovered");
 
-        // A previous incident recovered at 10:45 (last failure 10:30) and left a pending "recovered"
-        // confirmation queued.
+        // A previous incident recovered at 10:45 (last failure 10:30) and left a pending noise
+        // cleanup queued.
         seed_task(&services, unique_key).await;
         services
             .kv()
@@ -1303,20 +1296,20 @@ mod tests {
         services
             .queue()
             .enqueue(
-                TodoistUpsertTask::partition(),
-                TodoistUpsertTaskPayload {
+                TodoistCompleteTask::partition(),
+                TodoistCompleteTaskPayload {
                     unique_key: unique_key.to_string(),
                     ..Default::default()
                 },
-                Some(recovered_key.clone().into()),
-                Some(RECOVERY_WINDOW),
+                Some(unique_key.to_string().into()),
+                Some(chrono::Duration::minutes(60)),
             )
             .await
             .unwrap();
 
         // A failure at 12:00 — 90 minutes after the last failure, so a brand-new incident, not a
-        // relapse — must still cancel the stale confirmation so it can never mark the task recovered
-        // while the monitor is unhealthy.
+        // relapse — must still cancel the stale cleanup so it can never remove the task while the
+        // monitor is unhealthy.
         webhook
             .handle(
                 JobContext::new(services.clone(), Utc::now(), None, None),
@@ -1325,13 +1318,13 @@ mod tests {
             .await
             .unwrap();
 
-        let upserts = peek_upserts(&services).await;
         assert!(
-            upserts.iter().all(|m| m.key != recovered_key),
-            "the stale recovered confirmation should be purged even for a new incident"
+            peek_completes(&services).await.is_empty(),
+            "the stale cleanup should be purged even for a new incident"
         );
         // It is a new incident: the alert is delayed (not an immediate escalation) and the
         // first-failure time is reset.
+        let upserts = peek_upserts(&services).await;
         let alert = upserts
             .iter()
             .find(|m| m.key == unique_key)
