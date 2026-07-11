@@ -7,7 +7,8 @@ use crate::app::{AuthHandle, AuthStatus, Route};
 /// login popup here with `?code&state`; the [`use_auth`](crate::app) hook performs
 /// the actual code exchange on mount. In a popup the window hands its tokens back
 /// to the opener and closes itself before this matters; on a direct-navigation
-/// fallback the session is established and this view sends the user home.
+/// fallback the session is established and this view sends the user straight into
+/// the admin area.
 #[function_component(AuthCallback)]
 pub fn auth_callback() -> Html {
     let auth = use_context::<AuthHandle>().expect("AuthHandle context must be provided");
@@ -16,13 +17,13 @@ pub fn auth_callback() -> Html {
     {
         let navigator = navigator.clone();
         // Once the callback has resolved (anything but the initial Loading state),
-        // return to the app root. In a popup the window closes itself first, so
-        // this only runs on the direct-navigation fallback.
+        // continue into the admin area. In a popup the window closes itself first,
+        // so this only runs on the direct-navigation fallback.
         use_effect_with(auth.status.clone(), move |status| {
             if !matches!(status, AuthStatus::Loading)
                 && let Some(nav) = navigator.clone()
             {
-                nav.push(&Route::Landing);
+                nav.push(&Route::AdminRoot);
             }
             || ()
         });
