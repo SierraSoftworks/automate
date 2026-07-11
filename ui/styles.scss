@@ -224,6 +224,79 @@ pre {
   }
 }
 
+// Connect dropdown: a themed menu of configured integration providers, opened
+// from a toolbar button beside Refresh.
+.connect-menu {
+  position: relative;
+  display: inline-flex;
+
+  &__icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  &__chevron {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    margin-left: -0.1rem;
+    color: $text-secondary;
+    transition: transform $transition;
+
+    &--open {
+      transform: rotate(180deg);
+    }
+  }
+
+  // A transparent, full-viewport layer that catches outside clicks to dismiss
+  // the menu. It sits below the list but above the rest of the page.
+  &__backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 40;
+  }
+
+  &__list {
+    position: absolute;
+    top: calc(100% + 0.35rem);
+    right: 0;
+    z-index: 41;
+    min-width: 12rem;
+    margin: 0;
+    padding: 0.3rem;
+    list-style: none;
+    background: $bg-white;
+    border: 1px solid $border-base;
+    border-radius: $radius-sm;
+    box-shadow: $shadow-md;
+  }
+
+  &__item {
+    display: block;
+    width: 100%;
+    padding: 0.45rem 0.6rem;
+    border: none;
+    border-radius: $radius-sm;
+    background: transparent;
+    color: $text-regular;
+    font-family: inherit;
+    font-size: 0.82rem;
+    text-align: left;
+    cursor: pointer;
+    transition: color $transition, background $transition;
+
+    &:hover {
+      color: $brand;
+      background: $brand-tint;
+    }
+
+    &:focus-visible {
+      @include focus-ring;
+    }
+  }
+}
+
 // Status badges
 .badge {
   display: inline-flex;
@@ -587,6 +660,13 @@ pre {
     margin: 0.35rem 0 0;
     font-size: 0.9rem;
     color: $text-secondary;
+  }
+
+  // Groups the page's toolbar controls (Connect, Refresh) at the end of the row.
+  &__actions {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
   }
 }
 
