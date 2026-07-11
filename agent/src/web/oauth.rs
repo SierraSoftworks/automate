@@ -245,7 +245,7 @@ pub async fn start<S: Services + Send + Sync + 'static>(
         }
         Err(e) => {
             error!("Failed to build OAuth login URL: {}", e);
-            services.session().record_error(&e);
+            services.session().record_human_error(&e);
             super::api::json_error(
                 actix_web::http::StatusCode::INTERNAL_SERVER_ERROR,
                 "Failed to start the integration setup.",
@@ -336,7 +336,7 @@ async fn oauth_authorize<S: Services + Send + Sync + 'static>(
                     }
                     Err(e) => {
                         error!("Failed to get OAuth login URL: {}", e);
-                        services.session().record_error(&e);
+                        services.session().record_human_error(&e);
                         error_page(
                             500,
                             "Internal Server Error",
@@ -437,7 +437,7 @@ async fn oauth_callback<S: Services + Send + Sync + 'static>(
                     .await
                 {
                     error!("Failed to enqueue OAuth token storage task: {}", e);
-                    services.session().record_error(&e);
+                    services.session().record_human_error(&e);
                     return with_cleared_state(
                         &provider,
                         error_page(
@@ -464,7 +464,7 @@ async fn oauth_callback<S: Services + Send + Sync + 'static>(
         }
         Err(e) => {
             error!("OAuth callback handling failed: {}", e);
-            services.session().record_error(&e);
+            services.session().record_human_error(&e);
             with_cleared_state(
                 &provider,
                 error_page(
@@ -738,7 +738,6 @@ mod tests {
     use actix_web::{App, web};
     use oauth2::{RequestTokenError, StandardErrorResponse, basic::BasicErrorResponseType};
 
-    use crate::config::Config;
     use crate::db::SqliteDatabase;
     use crate::filter::Filter;
     use crate::services::ServicesContainer;

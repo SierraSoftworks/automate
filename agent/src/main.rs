@@ -64,7 +64,7 @@ async fn main() {
         eprintln!("{}", human_errors::pretty(err));
 
         if err.is(human_errors::Kind::System) {
-            session.record_error(err);
+            session.record_human_error(err);
 
         }
     }
