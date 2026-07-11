@@ -330,7 +330,7 @@ impl JobHost {
                         );
                         if let Err(err) = queue.complete(item.partition.clone(), item).await {
                             error!(error = %err, "Failed to drop unhandled job message: {err}");
-                            services.session().record_error(&err);
+                            services.session().record_human_error(&err);
                         }
                         continue;
                     };
@@ -344,7 +344,7 @@ impl JobHost {
                 }
                 Err(err) => {
                     error!(error = %err, "An error occurred while fetching a job from the queue: {err}");
-                    services.session().record_error(&err);
+                    services.session().record_human_error(&err);
                     tokio::time::sleep(std::time::Duration::from_secs(5)).await;
                 }
             }
@@ -377,7 +377,7 @@ impl JobHost {
             .await
         {
             warn!(error = %err, "Failed to set the reservation window for job '{name}': {err}");
-            session.record_error(&err);
+            session.record_human_error(&err);
         }
 
         let span = info_span!(
@@ -424,12 +424,12 @@ impl JobHost {
                 info!("Job '{name}' completed successfully (traceparent: {traceparent}).");
                 if let Err(err) = queue.complete(name.to_string(), item).await {
                     error!(error = %err, "Failed to mark job '{name}' as completed (traceparent: {traceparent}): {err}");
-                    session.record_error(&err);
+                    session.record_human_error(&err);
                 }
             }
             Err(err) => {
                 if err.is(human_errors::Kind::System) {
-                    session.record_error(&err);
+                    session.record_human_error(&err);
                 }
 
                 // Record the failure against the job's own span (rather than the

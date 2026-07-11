@@ -45,7 +45,7 @@ pub async fn metadata<S: Services>(services: web::Data<S>) -> HttpResponse {
         Ok(d) => d,
         Err(e) => {
             error!("Failed to load OIDC discovery document for auth metadata: {e}");
-            services.session().record_error(&e);
+            services.session().record_human_error(&e);
             return json_error(
                 actix_web::http::StatusCode::BAD_GATEWAY,
                 "We could not reach the configured identity provider.",
@@ -86,7 +86,7 @@ pub async fn auth_token<S: Services>(
         Ok(d) => d,
         Err(e) => {
             error!("Failed to load OIDC discovery document during token exchange: {e}");
-            services.session().record_error(&e);
+            services.session().record_human_error(&e);
             return json_error(
                 actix_web::http::StatusCode::BAD_GATEWAY,
                 "We could not reach the configured identity provider.",
@@ -134,7 +134,7 @@ pub async fn auth_refresh<S: Services>(
         Ok(d) => d,
         Err(e) => {
             error!("Failed to load OIDC discovery document during refresh: {e}");
-            services.session().record_error(&e);
+            services.session().record_human_error(&e);
             return json_error(
                 actix_web::http::StatusCode::BAD_GATEWAY,
                 "We could not reach the configured identity provider.",
