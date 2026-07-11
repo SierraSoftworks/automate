@@ -12,7 +12,7 @@ use yew::prelude::*;
 use crate::api::{self, ApiError};
 use crate::app::AuthHandle;
 use crate::components::{
-    Alert, AlertKind, BrowserPartition, Integrations, PageActions, PartitionBrowser, RefreshButton,
+    Alert, AlertKind, BrowserPartition, ConnectMenu, PageActions, PartitionBrowser, RefreshButton,
 };
 use crate::fixtures;
 use crate::search::{SearchVocabulary, VocabularyContext};
@@ -195,8 +195,9 @@ pub fn admin() -> Html {
         })
     };
 
-    // Publish a refresh button into the page title row that re-fetches both
-    // stores in place. It is cleared when the page unmounts.
+    // Publish the toolbar actions into the page title row: a Connect dropdown for
+    // wiring up integrations, and a refresh button that re-fetches both stores in
+    // place. They are cleared when the page unmounts.
     let page_actions = use_context::<PageActions>();
     {
         let page_actions = page_actions.clone();
@@ -209,7 +210,12 @@ pub fn admin() -> Html {
                     let refresh = refresh.clone();
                     Callback::from(move |_: MouseEvent| refresh.emit(()))
                 };
-                actions.set(html! { <RefreshButton {onclick} {busy} /> });
+                actions.set(html! {
+                    <div class="page-title__actions">
+                        <ConnectMenu />
+                        <RefreshButton {onclick} {busy} />
+                    </div>
+                });
             }
             move || {
                 if let Some(actions) = page_actions {
@@ -336,7 +342,6 @@ pub fn admin() -> Html {
     html! {
         <>
             { banner }
-            <Integrations />
             <PartitionBrowser
                 partitions={partitions}
                 empty="No partitions found in the key-value store or job queues."

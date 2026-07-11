@@ -72,8 +72,8 @@ Some workflows act on third-party accounts (for example Spotify) that you link
 by walking through an OAuth flow. The agent drives the confidential exchange
 server-side and stores the resulting refresh token.
 
-Admin-gated providers (the default) are launched from the **Integrations** panel
-in the admin area: the SPA calls the bearer-authenticated
+Admin-gated providers (the default) are launched from the **Connect** dropdown
+in the admin area's toolbar: the SPA calls the bearer-authenticated
 `POST /api/v1/oauth/<provider>/start`, which returns a provider authorization
 URL the SPA opens in a popup. The provider redirects back to the agent's
 server-rendered `/oauth/<provider>/callback`, which stores the token. A provider
