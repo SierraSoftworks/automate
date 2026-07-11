@@ -246,13 +246,12 @@ mod tests {
         let t1 = dt("2026-01-01T00:02:00Z");
 
         d.on_triggered("probe", t0).await.unwrap();
-        // A second trigger while not recovering reports `first_triggered_at: now` (a fresh alert,
-        // not a flap), even though the incident's first-trigger time is preserved in the stored
-        // state so the last trigger can advance.
+        // A second trigger within the window belongs to the same ongoing incident, so it reports the
+        // incident's original first-trigger time (not `now`) while advancing the last trigger.
         assert_eq!(
             d.on_triggered("probe", t1).await.unwrap(),
             Detection::Triggered {
-                first_triggered_at: t1
+                first_triggered_at: t0
             }
         );
 
@@ -285,14 +284,29 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn recovery_without_surfaced_alert_is_forgotten() {
+    async fn repeated_recovery_is_idempotent() {
         let d = debouncer().await;
         let t0 = dt("2026-01-01T00:00:00Z");
-        let t1 = dt("2026-01-01T00:01:00Z");
+        let t1 = dt("2026-01-01T00:15:00Z"); // recover
+        let t2 = dt("2026-01-01T00:20:00Z"); // a second recovery signal
 
         d.on_triggered("probe", t0).await.unwrap();
-        assert_eq!(d.on_recovered("probe", t1).await.unwrap(), None);
-        assert!(state(&d, "probe").await.is_none());
+        assert_eq!(
+            d.on_recovered("probe", t1).await.unwrap(),
+            Some(Detection::Recovering {
+                triggered_for: Duration::minutes(15)
+            })
+        );
+
+        // A second recovery while already recovering re-reports the same impact and does not move the
+        // recovery timestamp forward — recovery began at t1, not t2.
+        assert_eq!(
+            d.on_recovered("probe", t2).await.unwrap(),
+            Some(Detection::Recovering {
+                triggered_for: Duration::minutes(15)
+            })
+        );
+        assert_eq!(state(&d, "probe").await.unwrap().recovering_since, Some(t1));
     }
 
     #[tokio::test]
@@ -381,18 +395,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn recovery_with_no_prior_state_uses_now_as_the_baseline() {
+    async fn recovery_with_no_prior_state_is_ignored() {
         let d = debouncer().await;
         let t = dt("2026-01-01T00:00:00Z");
 
-        // A recovery for a surfaced alert we have no record of (e.g. one created before the debouncer
-        // existed) yields a zero-duration recovery.
-        assert_eq!(
-            d.on_recovered("probe", t).await.unwrap(),
-            Some(Detection::Recovering {
-                triggered_for: Duration::zero()
-            })
-        );
+        // A recovery for an entity we have no record of is a no-op: there was no incident to settle,
+        // so nothing is reported and no state is created.
+        assert_eq!(d.on_recovered("probe", t).await.unwrap(), None);
+        assert!(state(&d, "probe").await.is_none());
     }
 
     #[tokio::test]
