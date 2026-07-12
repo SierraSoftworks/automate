@@ -32,6 +32,7 @@ pub async fn run_web_server<S: Services + Clone + Send + Sync + 'static>(
                 .service(api::configure::<S>())
                 .service(oauth::configure::<S>())
                 .route("/webhooks/{kind:.*}", web::post().to(webhooks::handle::<S>))
+                .route("/robots.txt", web::get().to(ui::robots))
                 .default_service(web::get().to(ui::serve))
         })
         .bind((addr, port))
