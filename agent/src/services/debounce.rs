@@ -145,11 +145,13 @@ impl<K: KeyValueStore> Debouncer<K> {
 
     /// Records a recovery for `key` observed at `now`.
     ///
-    /// `alert_surfaced` tells the debouncer whether an alert actually reached an operator for this
-    /// incident (for example, whether the delayed alert already ran). When it did, this returns
-    /// [`Detection::Recovering`] with the total triggered duration and marks the entity as
-    /// recovering; when it did not, the incident never mattered, so the state is dropped and `None`
-    /// is returned. Any still-pending alert is the caller's to cancel.
+    /// Returns [`Detection::Recovering`] carrying the incident's total triggered duration (first
+    /// trigger → this recovery) and marks the entity as recovering when an incident is on record;
+    /// returns `None` when there is nothing to settle. The debounce state is preserved either way, so
+    /// a later trigger within the window is still recognised as the same (flapping) incident. Whether
+    /// a given recovery is worth acting on — for example, whether the delayed alert had already
+    /// surfaced to an operator — is a policy decision left to the caller, as is cancelling any
+    /// still-pending alert.
     pub async fn on_recovered(
         &self,
         key: &str,

@@ -13,12 +13,16 @@
 //!   When `first_triggered_at` is earlier the monitor has flapped back to unhealthy while recovering,
 //!   so we re-escalate the task immediately (dated to the incident's first trigger) since an operator
 //!   is already watching it.
-//! * [`Recovering`](Detection::Recovering) — the monitor recovered and a task had surfaced. We
-//!   immediately flip it to *recovering* at a reduced priority and defer a *recovered* update
-//!   [`RECOVERY_WINDOW`] out, stamped with the total triggered duration. (Grey already debounces
-//!   recovery internally for 5m, so a healthy report is a strong signal.) Any later trigger cancels
-//!   that deferred update, so the recovery is only confirmed while it stays newer than the last
-//!   trigger. If no task ever surfaced we simply forget the incident.
+//! * [`Recovering`](Detection::Recovering) — the monitor recovered after being triggered. If the
+//!   recovery arrives before the [`ALERT_DELAY`] window has elapsed the operator's task never
+//!   surfaced (its upsert is still pending), so we purge that pending alert and surface nothing — a
+//!   brief blip never becomes a task. Otherwise the task has surfaced, so we immediately flip it to
+//!   *recovering* at a reduced priority and defer a *recovered* update [`RECOVERY_WINDOW`] out,
+//!   stamped with the total triggered duration. (Grey already debounces recovery internally for 5m,
+//!   so a healthy report is a strong signal.) Any later trigger cancels that deferred update, so the
+//!   recovery is only confirmed while it stays newer than the last trigger. Either way the debounce
+//!   state is retained, so a relapse within the recovery window is still recognised as the same
+//!   flapping incident and re-escalated immediately.
 //!
 //! Signatures are verified exactly as for [`super::tailscale`]: HMAC-SHA256 over
 //! `"<timestamp>.<body>"`, carried in the `Grey-Webhook-Signature: t=<unix-seconds>,v1=<hex>`
@@ -301,9 +305,9 @@ impl Job for GreyWebhook {
         );
 
         let state = if event.state.healthy {
-            debouncer.on_recovered(&event.unique_key(), now).await?
+            debouncer.on_recovered(&unique_key, now).await?
         } else {
-            Some(debouncer.on_triggered(&event.unique_key(), now).await?)
+            Some(debouncer.on_triggered(&unique_key, now).await?)
         };
 
         match state {
@@ -342,6 +346,32 @@ impl Job for GreyWebhook {
                 .await?;
             }
             Some(Detection::Recovering { triggered_for }) => {
+                // If the monitor returned to healthy before the alert debounce window elapsed, the
+                // operator's task never surfaced — its delayed upsert is still sitting in the queue —
+                // so cancel that pending alert and don't surface anything. A brief blip that clears
+                // within the alert window must never reach Todoist (previously these produced spurious
+                // "recovered after 0s" tasks). The debounce state is deliberately left in place so a
+                // relapse within the recovery window is still recognised as the same flapping incident
+                // and re-escalated immediately.
+                if triggered_for < config.alert_delay {
+                    info!(
+                        "Grey {} '{}' recovered ({} -> {}) after only {}, before the {} alert window elapsed; purging the pending alert without surfacing a task.",
+                        event.entity.entity_type,
+                        event.entity.name,
+                        event.state.previous,
+                        event.state.current,
+                        format_duration(triggered_for),
+                        format_duration(config.alert_delay),
+                    );
+
+                    services
+                        .queue()
+                        .purge(TodoistUpsertTask::partition(), unique_key.clone())
+                        .await?;
+
+                    return Ok(());
+                }
+
                 info!(
                     "Grey {} '{}' recovered ({} -> {}); triggered for {}, confirming in {}.",
                     event.entity.entity_type,
@@ -1192,6 +1222,97 @@ mod tests {
             .expect("a recovery record");
         assert_eq!(record.recovering_since, Some(dt("2026-06-19T12:00:00Z")));
         assert_eq!(record.first_triggered_at, dt("2026-06-19T11:45:00Z"));
+    }
+
+    #[tokio::test]
+    async fn test_recovery_before_alert_surfaces_purges_pending_alert() {
+        let services = mock_services().await;
+        let webhook = GreyWebhook;
+        let unique_key = "grey/probe/web.prod";
+
+        // The monitor first went unhealthy at 11:58 and its alert is still sitting in the queue
+        // (it only fires at 12:03, once the 5m alert window elapses). The 12:00 recovery therefore
+        // lands inside the alert window — only 2m of impact — before the operator was ever notified.
+        services
+            .queue()
+            .enqueue(
+                TodoistUpsertTask::partition(),
+                TodoistUpsertTaskPayload {
+                    unique_key: unique_key.to_string(),
+                    ..Default::default()
+                },
+                Some(unique_key.to_string().into()),
+                Some(chrono::Duration::minutes(3)),
+            )
+            .await
+            .unwrap();
+        services
+            .kv()
+            .set(
+                GREY_FAILURES_PARTITION,
+                unique_key.to_string(),
+                DebounceState {
+                    first_triggered_at: dt("2026-06-19T11:58:00Z"),
+                    last_triggered_at: dt("2026-06-19T11:58:00Z"),
+                    recovering_since: None,
+                },
+            )
+            .await
+            .unwrap();
+
+        webhook
+            .handle(
+                JobContext::new(services.clone(), Utc::now(), None, None),
+                &webhook_event(probe_event("web.prod", true)),
+            )
+            .await
+            .unwrap();
+
+        // The pending alert is purged and nothing is surfaced: a blip that clears before the alert
+        // window elapses never reaches Todoist (previously this produced a "recovered after 0s" task).
+        assert!(
+            peek_upserts(&services).await.is_empty(),
+            "the pending alert should be purged and no recovered task surfaced"
+        );
+        assert!(
+            peek_completes(&services).await.is_empty(),
+            "no cleanup should be queued for an unsurfaced blip"
+        );
+
+        // Crucially the debounce state is retained (now marked recovering, first-failure time
+        // preserved) so we still know when the probe last failed and can treat a relapse as flapping.
+        let record = failure_record(&services, unique_key)
+            .await
+            .expect("the debounce state should be retained when the alert never surfaced");
+        assert_eq!(record.first_triggered_at, dt("2026-06-19T11:58:00Z"));
+        assert_eq!(record.recovering_since, Some(dt("2026-06-19T12:00:00Z")));
+
+        // A relapse within the recovery window is therefore recognised as the same incident and
+        // re-escalated immediately (dated to the original 11:58 first failure), not debounced afresh.
+        // (12:05 is past the original 12:03 alert deadline, so the escalation fires immediately.)
+        webhook
+            .handle(
+                JobContext::new(services.clone(), Utc::now(), None, None),
+                &webhook_event(probe_event_at(
+                    "web.prod",
+                    false,
+                    "2026-06-19T12:05:00Z",
+                    "2026-06-19T12:05:00Z",
+                )),
+            )
+            .await
+            .unwrap();
+
+        let upserts = peek_upserts(&services).await;
+        let escalation = upserts
+            .iter()
+            .find(|m| m.key == unique_key)
+            .expect("the relapse should re-escalate the alert");
+        assert!(
+            escalation.hidden_until <= Utc::now(),
+            "a relapse of an ongoing incident should re-escalate immediately"
+        );
+        assert!(escalation.payload.title.contains("is failing"));
     }
 
     #[tokio::test]
