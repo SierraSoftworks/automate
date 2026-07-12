@@ -23,6 +23,14 @@ pub async fn serve(req: HttpRequest) -> HttpResponse {
     }
 }
 
+/// Serves a `robots.txt` that disallows all crawlers, since the admin UI is not
+/// intended to be indexed by search engines.
+pub async fn robots() -> HttpResponse {
+    HttpResponse::Ok()
+        .content_type(ContentType::plaintext())
+        .body("User-agent: *\nDisallow: /\n")
+}
+
 /// Builds a response for an embedded asset, inferring its content type from the
 /// file extension.
 fn asset_response(path: &str, contents: &'static [u8]) -> HttpResponse {
