@@ -160,7 +160,7 @@ impl Job for YnabStocksWorkflow {
         )?;
         let budget_currency = budget_currency_iso_code(&settings).ok_or_else(|| {
             human_errors::system(
-                format!("Failed to fetch the settings for YNAB budget '{budget}'."),
+                format!("The YNAB budget '{budget}' does not have a currency configured."),
                 &["The YNAB API response did not include a budget currency."],
             )
         })?;
