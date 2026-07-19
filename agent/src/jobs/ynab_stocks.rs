@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::fmt::Display;
 
-use rust_ynab::{Account, ClearedStatus, Client, NewTransaction, PlanId};
+use rust_ynab::{Account, ClearedStatus, Client, NewTransaction, PlanId, ServerKnowledge};
 use uuid::Uuid;
 
 use crate::parsers::parse_key_value_pairs;
@@ -31,7 +31,7 @@ crate::register_job!(YnabStocksWorkflow);
 #[derive(Clone, Serialize, Deserialize, Default)]
 struct StocksState {
     #[serde(default)]
-    server_knowledge: Option<i64>,
+    server_knowledge: Option<ServerKnowledge>,
     #[serde(default)]
     accounts: HashMap<Uuid, Account>,
 }
@@ -158,7 +158,12 @@ impl Job for YnabStocksWorkflow {
             format!("Failed to fetch the settings for YNAB budget '{budget}'."),
             &["Check that the budget ID is correct."],
         )?;
-        let budget_currency = settings.currency_format.iso_code;
+        let budget_currency = budget_currency_iso_code(&settings).ok_or_else(|| {
+            human_errors::system(
+                format!("Failed to fetch the settings for YNAB budget '{budget}'."),
+                &["The YNAB API response did not include a budget currency."],
+            )
+        })?;
 
         for account in state.accounts.values() {
             if account.closed {
@@ -178,7 +183,7 @@ impl Job for YnabStocksWorkflow {
                 let price = alphavantage.quote(services, symbol).await?;
                 let currency = alphavantage.currency(services, symbol).await?;
                 let rate = alphavantage
-                    .exchange_rate(services, &currency, &budget_currency)
+                    .exchange_rate(services, &currency, budget_currency)
                     .await?;
                 let native_value = quantity * price;
                 values.push(StockValue {
@@ -202,7 +207,7 @@ impl Job for YnabStocksWorkflow {
                 Some(raw) => match parse_currency_value(raw) {
                     Some((Some(ccy), amount)) => {
                         let rate = alphavantage
-                            .exchange_rate(services, &ccy, &budget_currency)
+                            .exchange_rate(services, &ccy, budget_currency)
                             .await?;
                         amount * rate
                     }
@@ -283,6 +288,14 @@ fn net_value(gross: f64, cost_basis: f64, cgt_rate: f64) -> f64 {
 fn compute_shift(net: f64, current_balance: i64) -> i64 {
     let net_milliunits = (net * 1000.0).floor() as i64;
     net_milliunits - current_balance
+}
+
+/// Extracts the budget currency code from a plan settings response.
+fn budget_currency_iso_code(settings: &rust_ynab::PlanSettings) -> Option<&str> {
+    settings
+        .currency_format
+        .as_ref()
+        .map(|currency_format| currency_format.iso_code.as_str())
 }
 
 /// Builds a human-readable memo summarising the valued holdings, truncated to
@@ -471,6 +484,35 @@ mod tests {
     fn net_value_without_cost_basis_taxes_full_gross() {
         let net = net_value(10_000.0, 0.0, 0.25);
         assert!((net - 7_500.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn extracts_budget_currency_from_settings() {
+        let settings = rust_ynab::PlanSettings {
+            date_format: None,
+            currency_format: Some(rust_ynab::CurrencyFormat {
+                iso_code: "USD".to_string(),
+                example_format: "123,456.78".to_string(),
+                decimal_digits: 2,
+                decimal_separator: ".".to_string(),
+                symbol_first: true,
+                group_separator: ",".to_string(),
+                currency_symbol: "$".to_string(),
+                display_symbol: true,
+            }),
+        };
+
+        assert_eq!(budget_currency_iso_code(&settings), Some("USD"));
+    }
+
+    #[test]
+    fn returns_none_when_budget_currency_is_missing() {
+        let settings = rust_ynab::PlanSettings {
+            date_format: None,
+            currency_format: None,
+        };
+
+        assert_eq!(budget_currency_iso_code(&settings), None);
     }
 
     #[rstest]
