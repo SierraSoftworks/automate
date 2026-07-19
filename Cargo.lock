@@ -3225,17 +3225,19 @@ dependencies = [
 
 [[package]]
 name = "rust-ynab"
-version = "0.4.11"
+version = "0.5.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ba2e07c7c202c04d48fa39f4b167d54d430dbc7174327124aff8d2f5bd2203c3"
+checksum = "2b497ac8301f4dc0092d17f91f598b670e7275288d9d5c3e55fd240f5372d237"
 dependencies = [
  "chrono",
+ "futures",
  "governor",
  "reqwest 0.13.4",
  "secrecy",
  "serde",
  "thiserror 2.0.18",
  "tokio",
+ "tracing",
  "url",
  "uuid",
 ]
