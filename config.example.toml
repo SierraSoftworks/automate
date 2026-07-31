@@ -106,6 +106,31 @@ todoist = { project = "Software", section = "Outages" }
 # [connections.todoist].
 todoist = { project = "Software", section = "Maintenance" }
 
+# Raises a Todoist task when an issue, pull request or repository needs your
+# attention. Comments and assignments collapse onto one task per issue/PR (so a
+# busy thread does not spam you), while each security alert gets its own. Remove
+# this section to disable the behaviour entirely.
+#
+# NOTE: this overlaps with [[workflows.github_notifications]], which raises its
+# own task keyed on the notification thread. Narrow that workflow's filter to
+# whatever you do not cover here, or you will get two tasks for the same thread.
+#
+# Filters can reference: kind ("comment", "assignment", "security_alert"), event,
+# action, resolved, repository, repository_owner, repository_name, number, title,
+# author, assignee, subject_author (the issue/PR author), body and severity.
+[webhooks.github.attention]
+# Comments and reviews. Defaults to everything except Dependabot's own
+# commentary - add yourself so your own replies do not nag you, and consider
+# narrowing it to threads that concern you.
+comments = '!(author in ["dependabot[bot]", "dependabot-preview[bot]", "notheotherben"]) && subject_author == "notheotherben"'
+# Assignments and unassignments. Defaults to `false`, because only you know
+# which account is yours. An unassignment completes the task again.
+assignments = 'assignee == "notheotherben"'
+# Dependabot, code scanning and secret scanning alerts. Defaults to all of them;
+# resolving or dismissing an alert completes its task.
+# security_alerts = 'severity in ["critical", "high"]'
+todoist = { project = "Hobbies", section = "Open Source" }
+
 [webhooks.grafana]
 # secret = "xxxxxx"  # Optional authorization header value for webhook authentication
 # filter = 'true'

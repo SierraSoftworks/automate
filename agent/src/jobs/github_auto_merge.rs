@@ -244,6 +244,7 @@ mod tests {
             config.webhooks.github = GitHubWebhookConfig {
                 secret: "secret".to_string(),
                 auto_merge: Some(GitHubAutoMergeConfig::default()),
+                attention: None,
             };
         })
         .await

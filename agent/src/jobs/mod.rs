@@ -1,5 +1,6 @@
 mod calendar;
 mod cron;
+mod github_attention;
 mod github_auto_merge;
 mod github_notifications;
 mod github_notifications_cleanup;
@@ -15,6 +16,7 @@ mod youtube;
 
 pub use calendar::CalendarWorkflow;
 pub use cron::{CronJob, CronJobConfig};
+pub use github_attention::{GitHubAttentionConfig, GitHubAttentionWorkflow};
 pub use github_auto_merge::{GitHubAutoMergeConfig, GitHubAutoMergeWorkflow};
 pub use github_notifications::GitHubNotificationsWorkflow;
 pub use github_notifications_cleanup::GitHubNotificationsCleanupWorkflow;

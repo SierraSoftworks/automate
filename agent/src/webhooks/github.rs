@@ -4,7 +4,8 @@ use std::fmt::Display;
 use hmac::{Hmac, KeyInit, Mac};
 
 use crate::jobs::{
-    GitHubAutoMergeConfig, GitHubAutoMergeWorkflow, GitHubNotificationsRefreshWorkflow,
+    GitHubAttentionConfig, GitHubAttentionWorkflow, GitHubAutoMergeConfig, GitHubAutoMergeWorkflow,
+    GitHubNotificationsRefreshWorkflow,
 };
 use crate::prelude::*;
 
@@ -16,6 +17,8 @@ use sha2::Sha256;
 /// thread. Anything else (pushes, statuses, deployments) never moves the
 /// notifications inbox, so it would only cost us a wasted fetch.
 const NOTIFICATION_EVENTS: &[&str] = &[
+    "code_scanning_alert",
+    "dependabot_alert",
     "discussion",
     "discussion_comment",
     "issue_comment",
@@ -25,8 +28,36 @@ const NOTIFICATION_EVENTS: &[&str] = &[
     "pull_request_review_comment",
     "release",
     "repository_vulnerability_alert",
+    "secret_scanning_alert",
     "security_advisory",
     "workflow_run",
+];
+
+/// Events carrying a comment or review on an issue or pull request.
+const COMMENT_EVENTS: &[&str] = &[
+    "issue_comment",
+    "pull_request_review",
+    "pull_request_review_comment",
+];
+
+/// Events carrying a repository security alert. The deprecated
+/// `repository_vulnerability_alert` is excluded because its payload predates
+/// the shape the others share.
+const SECURITY_ALERT_EVENTS: &[&str] = &[
+    "code_scanning_alert",
+    "dependabot_alert",
+    "secret_scanning_alert",
+];
+
+/// Alert and assignment actions which mean the subject no longer needs
+/// attention, so any task tracking it is completed instead of raised.
+const RESOLVING_ACTIONS: &[&str] = &[
+    "auto_dismissed",
+    "closed_by_user",
+    "dismissed",
+    "fixed",
+    "resolved",
+    "unassigned",
 ];
 
 #[derive(Clone, Deserialize, Default)]
@@ -40,6 +71,11 @@ pub struct GitHubWebhookConfig {
     /// Enables auto-merge handling for `pull_request` events when present.
     #[serde(default)]
     pub auto_merge: Option<GitHubAutoMergeConfig>,
+
+    /// Enables Todoist reminders for comments, assignments and security alerts
+    /// when present.
+    #[serde(default)]
+    pub attention: Option<GitHubAttentionConfig>,
 }
 
 /// The entry point for GitHub's organization-level webhook.
@@ -161,8 +197,23 @@ impl Job for GitHubWebhook {
 
         if event_type == "pull_request" && github.auto_merge.is_some() {
             let event: GitHubPullRequestEvent = job.json()?;
-            GitHubAutoMergeWorkflow::dispatch(event, delivery, services).await?;
+            GitHubAutoMergeWorkflow::dispatch(event, delivery.clone(), services).await?;
             handled = true;
+        }
+
+        if github.attention.is_some() {
+            // A payload we cannot interpret is skipped rather than raised, so that
+            // an unmodelled variant cannot poison the queue by retrying forever.
+            match GitHubAttentionEvent::parse(event_type, job) {
+                Ok(Some(event)) => {
+                    GitHubAttentionWorkflow::dispatch(event, delivery, services).await?;
+                    handled = true;
+                }
+                Ok(None) => {}
+                Err(err) => warn!(
+                    "Could not interpret the '{event_type}' payload as an attention event; skipping it: {err}"
+                ),
+            }
         }
 
         if NOTIFICATION_EVENTS.contains(&event_type) {
@@ -251,12 +302,373 @@ pub struct GitHubWebhookUser {
     pub login: String,
 }
 
+/// What prompted a subject to need the user's attention.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GitHubAttentionKind {
+    Comment,
+    Assignment,
+    SecurityAlert,
+}
+
+impl GitHubAttentionKind {
+    fn as_str(&self) -> &'static str {
+        match self {
+            Self::Comment => "comment",
+            Self::Assignment => "assignment",
+            Self::SecurityAlert => "security_alert",
+        }
+    }
+}
+
+/// A GitHub event which suggests an issue, pull request or repository needs the
+/// user's attention.
+///
+/// The various source events (comments, reviews, assignments and the three
+/// security alert flavours) are normalised into this one shape so that a single
+/// filter surface and job can serve them all.
+#[derive(Clone, Serialize, Deserialize)]
+pub struct GitHubAttentionEvent {
+    pub kind: GitHubAttentionKind,
+    pub event: String,
+    pub action: String,
+
+    /// Whether the subject has been dealt with, in which case any task tracking
+    /// it is completed rather than raised.
+    pub resolved: bool,
+
+    pub repository: String,
+    pub repository_owner: String,
+    pub repository_name: String,
+
+    /// The issue/pull request number, or the alert number.
+    pub number: u64,
+    pub title: String,
+    pub url: String,
+
+    /// Whoever's action prompted this: the comment author, or the person who
+    /// changed the assignment or alert.
+    pub actor: Option<String>,
+    pub assignee: Option<String>,
+
+    /// The author of the issue or pull request being commented on, which is
+    /// what makes "comments on my pull requests" expressible as a filter.
+    pub subject_author: Option<String>,
+
+    pub body: Option<String>,
+    pub severity: Option<String>,
+}
+
+impl Display for GitHubAttentionEvent {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{}#{} ({}/{})",
+            self.repository,
+            self.number,
+            self.kind.as_str(),
+            self.action
+        )
+    }
+}
+
+impl Filterable for GitHubAttentionEvent {
+    fn get(&self, key: &str) -> crate::filter::FilterValue<'_> {
+        match key {
+            "kind" => self.kind.as_str().into(),
+            "event" => self.event.as_str().into(),
+            "action" => self.action.as_str().into(),
+            "resolved" => crate::filter::FilterValue::Bool(self.resolved),
+            "repository" => self.repository.as_str().into(),
+            "repository_owner" => self.repository_owner.as_str().into(),
+            "repository_name" => self.repository_name.as_str().into(),
+            "number" => crate::filter::FilterValue::Number(self.number as f64),
+            "title" => self.title.as_str().into(),
+            "author" => optional(self.actor.as_ref()),
+            "assignee" => optional(self.assignee.as_ref()),
+            "subject_author" => optional(self.subject_author.as_ref()),
+            "body" => optional(self.body.as_ref()),
+            "severity" => optional(self.severity.as_ref()),
+            _ => crate::filter::FilterValue::Null,
+        }
+    }
+}
+
+fn optional(value: Option<&String>) -> crate::filter::FilterValue<'_> {
+    value
+        .map(|v| v.as_str().into())
+        .unwrap_or(crate::filter::FilterValue::Null)
+}
+
+impl GitHubAttentionEvent {
+    /// The Todoist key this event maps onto. Comments and assignments collapse
+    /// onto their issue or pull request so that a busy thread yields one task,
+    /// while each security alert is tracked separately because each needs its
+    /// own fix.
+    pub fn unique_key(&self) -> String {
+        match self.kind {
+            GitHubAttentionKind::SecurityAlert => format!(
+                "github/attention/{}/{}/{}",
+                self.repository, self.event, self.number
+            ),
+            _ => format!("github/attention/{}#{}", self.repository, self.number),
+        }
+    }
+
+    /// Normalises a webhook delivery, returning `None` when the event carries
+    /// nothing which warrants attention.
+    pub fn parse(
+        event_type: &str,
+        job: &WebhookEvent,
+    ) -> Result<Option<Self>, human_errors::Error> {
+        if COMMENT_EVENTS.contains(&event_type) {
+            let payload: GitHubActivityPayload = job.json()?;
+
+            // Edits and deletions of an existing comment do not represent new
+            // activity to respond to.
+            if !matches!(payload.action.as_str(), "created" | "submitted") {
+                return Ok(None);
+            }
+
+            let (Some(subject), Some(comment)) = (
+                payload.subject(),
+                payload.comment.as_ref().or(payload.review.as_ref()),
+            ) else {
+                return Ok(None);
+            };
+
+            return Ok(Some(Self {
+                kind: GitHubAttentionKind::Comment,
+                event: event_type.to_string(),
+                action: payload.action.clone(),
+                resolved: false,
+                repository: payload.repository.full_name.clone(),
+                repository_owner: payload.repository.owner.login.clone(),
+                repository_name: payload.repository.name.clone(),
+                number: subject.number,
+                title: subject.title.clone(),
+                url: comment
+                    .html_url
+                    .clone()
+                    .unwrap_or_else(|| subject.html_url.clone()),
+                actor: comment
+                    .user
+                    .as_ref()
+                    .or(payload.sender.as_ref())
+                    .map(|u| u.login.clone()),
+                assignee: None,
+                subject_author: subject.user.as_ref().map(|u| u.login.clone()),
+                body: comment.body.clone(),
+                severity: None,
+            }));
+        }
+
+        if SECURITY_ALERT_EVENTS.contains(&event_type) {
+            let payload: GitHubActivityPayload = job.json()?;
+            let Some(alert) = payload.alert.as_ref() else {
+                return Ok(None);
+            };
+
+            return Ok(Some(Self {
+                kind: GitHubAttentionKind::SecurityAlert,
+                event: event_type.to_string(),
+                action: payload.action.clone(),
+                resolved: RESOLVING_ACTIONS.contains(&payload.action.as_str()),
+                repository: payload.repository.full_name.clone(),
+                repository_owner: payload.repository.owner.login.clone(),
+                repository_name: payload.repository.name.clone(),
+                number: alert.number,
+                title: alert.summary(),
+                url: alert.html_url.clone().unwrap_or_else(|| {
+                    format!(
+                        "https://github.com/{}/security",
+                        payload.repository.full_name
+                    )
+                }),
+                actor: payload.sender.as_ref().map(|u| u.login.clone()),
+                assignee: None,
+                subject_author: None,
+                body: alert.detail(),
+                severity: alert.severity(),
+            }));
+        }
+
+        if matches!(event_type, "issues" | "pull_request") {
+            let payload: GitHubActivityPayload = job.json()?;
+
+            if !matches!(payload.action.as_str(), "assigned" | "unassigned") {
+                return Ok(None);
+            }
+
+            let Some(subject) = payload.subject() else {
+                return Ok(None);
+            };
+
+            return Ok(Some(Self {
+                kind: GitHubAttentionKind::Assignment,
+                event: event_type.to_string(),
+                action: payload.action.clone(),
+                resolved: RESOLVING_ACTIONS.contains(&payload.action.as_str()),
+                repository: payload.repository.full_name.clone(),
+                repository_owner: payload.repository.owner.login.clone(),
+                repository_name: payload.repository.name.clone(),
+                number: subject.number,
+                title: subject.title.clone(),
+                url: subject.html_url.clone(),
+                actor: payload.sender.as_ref().map(|u| u.login.clone()),
+                assignee: payload.assignee.as_ref().map(|u| u.login.clone()),
+                subject_author: subject.user.as_ref().map(|u| u.login.clone()),
+                body: None,
+                severity: None,
+            }));
+        }
+
+        Ok(None)
+    }
+}
+
+/// A permissive view over the issue, pull request, comment, assignment and
+/// alert payloads, which overlap enough to share one model.
+#[derive(Deserialize)]
+struct GitHubActivityPayload {
+    action: String,
+    #[serde(default)]
+    issue: Option<GitHubSubject>,
+    #[serde(default)]
+    pull_request: Option<GitHubSubject>,
+    #[serde(default)]
+    comment: Option<GitHubComment>,
+    #[serde(default)]
+    review: Option<GitHubComment>,
+    #[serde(default)]
+    assignee: Option<GitHubWebhookUser>,
+    #[serde(default)]
+    alert: Option<GitHubAlert>,
+    repository: GitHubWebhookRepository,
+    #[serde(default)]
+    sender: Option<GitHubWebhookUser>,
+}
+
+impl GitHubActivityPayload {
+    fn subject(&self) -> Option<&GitHubSubject> {
+        self.issue.as_ref().or(self.pull_request.as_ref())
+    }
+}
+
+#[derive(Deserialize)]
+struct GitHubSubject {
+    number: u64,
+    title: String,
+    html_url: String,
+    #[serde(default)]
+    user: Option<GitHubWebhookUser>,
+}
+
+#[derive(Deserialize)]
+struct GitHubComment {
+    #[serde(default)]
+    body: Option<String>,
+    #[serde(default)]
+    html_url: Option<String>,
+    #[serde(default)]
+    user: Option<GitHubWebhookUser>,
+}
+
+/// The union of the Dependabot, code scanning and secret scanning alert
+/// payloads, each of which describes itself through a different field.
+#[derive(Deserialize)]
+struct GitHubAlert {
+    number: u64,
+    #[serde(default)]
+    html_url: Option<String>,
+    #[serde(default)]
+    security_advisory: Option<GitHubAdvisory>,
+    #[serde(default)]
+    dependency: Option<GitHubDependency>,
+    #[serde(default)]
+    rule: Option<GitHubRule>,
+    #[serde(default)]
+    secret_type_display_name: Option<String>,
+    #[serde(default)]
+    secret_type: Option<String>,
+}
+
+impl GitHubAlert {
+    fn summary(&self) -> String {
+        if let Some(advisory) = self.security_advisory.as_ref() {
+            return match self.dependency.as_ref().and_then(|d| d.package.as_ref()) {
+                Some(package) => format!("{} in {}", advisory.summary, package.name),
+                None => advisory.summary.clone(),
+            };
+        }
+
+        if let Some(rule) = self.rule.as_ref()
+            && let Some(description) = rule.description.as_ref().or(rule.id.as_ref())
+        {
+            return description.clone();
+        }
+
+        if let Some(secret) = self
+            .secret_type_display_name
+            .as_ref()
+            .or(self.secret_type.as_ref())
+        {
+            return format!("Leaked {secret}");
+        }
+
+        format!("Security alert #{}", self.number)
+    }
+
+    fn detail(&self) -> Option<String> {
+        self.security_advisory
+            .as_ref()
+            .and_then(|a| a.description.clone())
+    }
+
+    fn severity(&self) -> Option<String> {
+        self.security_advisory
+            .as_ref()
+            .and_then(|a| a.severity.clone())
+            .or_else(|| self.rule.as_ref().and_then(|r| r.severity.clone()))
+    }
+}
+
+#[derive(Deserialize)]
+struct GitHubAdvisory {
+    summary: String,
+    #[serde(default)]
+    description: Option<String>,
+    #[serde(default)]
+    severity: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct GitHubDependency {
+    #[serde(default)]
+    package: Option<GitHubPackage>,
+}
+
+#[derive(Deserialize)]
+struct GitHubPackage {
+    name: String,
+}
+
+#[derive(Deserialize)]
+struct GitHubRule {
+    #[serde(default)]
+    id: Option<String>,
+    #[serde(default)]
+    description: Option<String>,
+    #[serde(default)]
+    severity: Option<String>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::collections::HashMap;
 
-    const BODY: &str = r#"{"action":"opened","number":1,"pull_request":{"node_id":"PR_node","html_url":"https://github.com/example/repo/pull/1","title":"Bump serde","draft":false,"user":{"login":"dependabot[bot]"}},"repository":{"name":"repo","full_name":"example/repo","private":false,"owner":{"login":"example"}},"sender":{"login":"dependabot[bot]"}}"#;
+    const BODY: &str = r#"{"action":"opened","number":1,"pull_request":{"node_id":"PR_node","number":1,"html_url":"https://github.com/example/repo/pull/1","title":"Bump serde","draft":false,"user":{"login":"dependabot[bot]"}},"repository":{"name":"repo","full_name":"example/repo","private":false,"owner":{"login":"example"}},"sender":{"login":"dependabot[bot]"}}"#;
 
     fn sign(secret: &str, body: &str) -> String {
         let mut mac = HmacSha256::new_from_slice(secret.as_bytes()).unwrap();
@@ -275,13 +687,25 @@ mod tests {
         }
     }
 
+    fn delivery(body: serde_json::Value) -> WebhookEvent {
+        WebhookEvent {
+            body: body.to_string(),
+            query: String::new(),
+            headers: HashMap::new(),
+        }
+    }
+
     async fn services_with(
         secret: &str,
         auto_merge: Option<GitHubAutoMergeConfig>,
     ) -> crate::services::ServicesContainer<crate::db::SqliteDatabase> {
         let secret = secret.to_string();
         crate::services::ServicesContainer::new_custom_mock(move |config, _| {
-            config.webhooks.github = GitHubWebhookConfig { secret, auto_merge };
+            config.webhooks.github = GitHubWebhookConfig {
+                secret,
+                auto_merge,
+                attention: Some(GitHubAttentionConfig::default()),
+            };
         })
         .await
         .expect("build mock services")
@@ -367,6 +791,177 @@ mod tests {
             1,
             "a pull_request also moves the notifications inbox"
         );
+    }
+
+    #[test]
+    fn issue_comments_normalise_onto_their_thread() {
+        let job = delivery(serde_json::json!({
+            "action": "created",
+            "issue": {
+                "number": 7,
+                "title": "Fix the thing",
+                "html_url": "https://github.com/example/repo/issues/7",
+                "user": { "login": "notheotherben" },
+            },
+            "comment": {
+                "body": "Any update on this?",
+                "html_url": "https://github.com/example/repo/issues/7#issuecomment-1",
+                "user": { "login": "someone-else" },
+            },
+            "repository": {
+                "name": "repo",
+                "full_name": "example/repo",
+                "owner": { "login": "example" },
+            },
+            "sender": { "login": "someone-else" },
+        }));
+
+        let parsed = GitHubAttentionEvent::parse("issue_comment", &job)
+            .expect("the comment should parse")
+            .expect("the comment should warrant attention");
+
+        assert_eq!(parsed.kind, GitHubAttentionKind::Comment);
+        assert_eq!(parsed.number, 7);
+        assert_eq!(parsed.actor.as_deref(), Some("someone-else"));
+        assert_eq!(parsed.subject_author.as_deref(), Some("notheotherben"));
+        assert!(!parsed.resolved);
+        assert_eq!(parsed.unique_key(), "github/attention/example/repo#7");
+    }
+
+    #[test]
+    fn edited_comments_do_not_warrant_attention() {
+        let job = delivery(serde_json::json!({
+            "action": "edited",
+            "issue": { "number": 7, "title": "Fix the thing", "html_url": "https://example.com" },
+            "comment": { "body": "Any update on this?" },
+            "repository": {
+                "name": "repo",
+                "full_name": "example/repo",
+                "owner": { "login": "example" },
+            },
+        }));
+
+        assert!(
+            GitHubAttentionEvent::parse("issue_comment", &job)
+                .expect("the comment should parse")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn unassignment_resolves_the_thread() {
+        let job = delivery(serde_json::json!({
+            "action": "unassigned",
+            "pull_request": {
+                "number": 3,
+                "title": "Bump serde",
+                "html_url": "https://github.com/example/repo/pull/3",
+                "user": { "login": "dependabot[bot]" },
+            },
+            "assignee": { "login": "notheotherben" },
+            "repository": {
+                "name": "repo",
+                "full_name": "example/repo",
+                "owner": { "login": "example" },
+            },
+            "sender": { "login": "someone-else" },
+        }));
+
+        let parsed = GitHubAttentionEvent::parse("pull_request", &job)
+            .expect("the assignment should parse")
+            .expect("the assignment should warrant attention");
+
+        assert_eq!(parsed.kind, GitHubAttentionKind::Assignment);
+        assert_eq!(parsed.assignee.as_deref(), Some("notheotherben"));
+        assert!(parsed.resolved);
+    }
+
+    #[test]
+    fn dependabot_alerts_describe_the_vulnerable_package() {
+        let job = delivery(serde_json::json!({
+            "action": "created",
+            "alert": {
+                "number": 12,
+                "html_url": "https://github.com/example/repo/security/dependabot/12",
+                "dependency": { "package": { "ecosystem": "cargo", "name": "openssl" } },
+                "security_advisory": {
+                    "summary": "Denial of service",
+                    "description": "A malformed certificate can crash the parser.",
+                    "severity": "high",
+                },
+            },
+            "repository": {
+                "name": "repo",
+                "full_name": "example/repo",
+                "owner": { "login": "example" },
+            },
+        }));
+
+        let parsed = GitHubAttentionEvent::parse("dependabot_alert", &job)
+            .expect("the alert should parse")
+            .expect("the alert should warrant attention");
+
+        assert_eq!(parsed.kind, GitHubAttentionKind::SecurityAlert);
+        assert_eq!(parsed.title, "Denial of service in openssl");
+        assert_eq!(parsed.severity.as_deref(), Some("high"));
+        assert!(!parsed.resolved);
+        assert_eq!(
+            parsed.unique_key(),
+            "github/attention/example/repo/dependabot_alert/12"
+        );
+    }
+
+    #[test]
+    fn secret_scanning_alerts_describe_the_leaked_secret() {
+        let job = delivery(serde_json::json!({
+            "action": "resolved",
+            "alert": {
+                "number": 4,
+                "html_url": "https://github.com/example/repo/security/secret-scanning/4",
+                "secret_type": "aws_access_key_id",
+                "secret_type_display_name": "Amazon AWS Access Key ID",
+            },
+            "repository": {
+                "name": "repo",
+                "full_name": "example/repo",
+                "owner": { "login": "example" },
+            },
+        }));
+
+        let parsed = GitHubAttentionEvent::parse("secret_scanning_alert", &job)
+            .expect("the alert should parse")
+            .expect("the alert should warrant attention");
+
+        assert_eq!(parsed.title, "Leaked Amazon AWS Access Key ID");
+        assert!(parsed.resolved);
+    }
+
+    #[test]
+    fn code_scanning_alerts_describe_the_rule() {
+        let job = delivery(serde_json::json!({
+            "action": "created",
+            "alert": {
+                "number": 9,
+                "html_url": "https://github.com/example/repo/security/code-scanning/9",
+                "rule": {
+                    "id": "rust/sql-injection",
+                    "description": "Query built from user-controlled sources",
+                    "severity": "error",
+                },
+            },
+            "repository": {
+                "name": "repo",
+                "full_name": "example/repo",
+                "owner": { "login": "example" },
+            },
+        }));
+
+        let parsed = GitHubAttentionEvent::parse("code_scanning_alert", &job)
+            .expect("the alert should parse")
+            .expect("the alert should warrant attention");
+
+        assert_eq!(parsed.title, "Query built from user-controlled sources");
+        assert_eq!(parsed.severity.as_deref(), Some("error"));
     }
 
     #[tokio::test]

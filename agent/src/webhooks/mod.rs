@@ -13,7 +13,9 @@ mod tailscale;
 mod terraform;
 
 pub use azure_monitor::AzureMonitorWebhookConfig;
-pub use github::{GitHubPullRequestEvent, GitHubWebhookConfig};
+pub use github::{
+    GitHubAttentionEvent, GitHubAttentionKind, GitHubPullRequestEvent, GitHubWebhookConfig,
+};
 pub use grafana::GrafanaWebhookConfig;
 pub use grey::GreyWebhookConfig;
 pub use honeycomb::HoneycombWebhookConfig;
