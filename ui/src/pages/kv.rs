@@ -106,7 +106,9 @@ pub fn kv_partitions(
                     });
                     // Cache entries wrap their payload in an `expires_at`
                     // envelope; surface the relative expiry beneath the key.
-                    let meta = cache_expiry(&value).map(cache_expiry_meta).unwrap_or_default();
+                    let meta = cache_expiry(&value)
+                        .map(cache_expiry_meta)
+                        .unwrap_or_default();
                     // A pre-lowercased haystack covering every searchable
                     // property of the entry, used by free-text search terms.
                     let search = format!(

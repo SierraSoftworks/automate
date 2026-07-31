@@ -65,7 +65,6 @@ async fn main() {
 
         if err.is(human_errors::Kind::System) {
             session.record_human_error(err);
-
         }
     }
 

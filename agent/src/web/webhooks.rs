@@ -42,7 +42,9 @@ pub async fn handle<S: Services>(
         services.session().record_human_error(&err);
         return actix_web::HttpResponse::InternalServerError().finish();
     } else {
-        services.session().record_event(format!("webhook/{kind}"), [].into());
+        services
+            .session()
+            .record_event(format!("webhook/{kind}"), [].into());
     }
 
     actix_web::HttpResponse::NoContent().finish()

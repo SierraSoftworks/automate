@@ -42,7 +42,11 @@ pub struct PartitionBrowserProps {
 }
 
 /// Evaluates the filter against a single entry of a partition.
-fn entry_matches(filter: &SearchFilter, partition: &BrowserPartition, entry: &BrowserEntry) -> bool {
+fn entry_matches(
+    filter: &SearchFilter,
+    partition: &BrowserPartition,
+    entry: &BrowserEntry,
+) -> bool {
     filter.matches(&MatchContext {
         partition: &partition.name,
         key: &entry.key,

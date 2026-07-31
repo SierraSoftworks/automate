@@ -1,6 +1,6 @@
 use gloo_timers::callback::Timeout;
 use serde_json::Value;
-use wasm_bindgen_futures::{spawn_local, JsFuture};
+use wasm_bindgen_futures::{JsFuture, spawn_local};
 use yew::prelude::*;
 
 #[derive(Properties, PartialEq)]
@@ -23,8 +23,8 @@ pub fn json_highlight(props: &JsonHighlightProps) -> Html {
     // The pretty-printed text shared by both the highlighted view and the
     // clipboard copy. `to_string_pretty` uses the same two-space indentation as
     // the highlighter, so the copied text matches what is displayed.
-    let pretty = serde_json::to_string_pretty(&props.value)
-        .unwrap_or_else(|_| props.value.to_string());
+    let pretty =
+        serde_json::to_string_pretty(&props.value).unwrap_or_else(|_| props.value.to_string());
 
     let body = match serde_json::to_string(&props.value) {
         Ok(_) => {
