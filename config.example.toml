@@ -75,6 +75,30 @@ scopes = ['openid', 'profile', 'email', 'offline_access']
 # filter = 'true'
 todoist = { project = "Software", section = "Outages" }
 
+[webhooks.github]
+# Add an organization (or repository) webhook in GitHub pointing at
+# POST /webhooks/github with a JSON content type. Deliveries are rejected unless
+# a secret is configured, because the events it carries drive writes to your
+# repositories.
+# secret = "xxxxxx"  # Shared secret used to verify the X-Hub-Signature-256 HMAC
+
+# Enables GitHub's native auto-merge behaviour on pull requests matching the
+# filter, so they merge themselves once their required checks pass. Remove this
+# section to disable auto-merge handling entirely. Requires the webhook to
+# deliver "Pull requests" events, and connections.github.api_key to hold a token
+# with the `repo` scope for the repositories you want to manage.
+[webhooks.github.auto_merge]
+# filter = 'action == "opened" && author in ["dependabot[bot]", "dependabot-preview[bot]"]'
+# Leave an approving review as well, for repositories whose branch protection
+# requires one before auto-merge can complete.
+# approve = true
+# approval_message = "This pull request has been automatically approved because it was raised by a trusted account."
+# Repositories which do not have their "Allow auto-merge" setting turned on get a
+# one-off reminder task (keyed on the repository, so later pull requests from it
+# do not raise more), filed using the settings below merged over the global
+# [connections.todoist].
+todoist = { project = "Software", section = "Maintenance" }
+
 [webhooks.grafana]
 # secret = "xxxxxx"  # Optional authorization header value for webhook authentication
 # filter = 'true'
