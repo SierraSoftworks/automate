@@ -108,7 +108,7 @@ impl GitHubNotificationsWorkflow {
                             todoist: job.todoist.clone(),
                         },
                         Some(id.into()),
-                        TimeDelta::minutes(30),
+                        TimeDelta::hours(2),
                         &services,
                     )
                     .await?;
