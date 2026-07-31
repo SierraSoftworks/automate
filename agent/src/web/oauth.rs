@@ -839,7 +839,9 @@ mod tests {
                     todoist: Default::default(),
                 },
             );
-        }).await.unwrap()
+        })
+        .await
+        .unwrap()
     }
 
     async fn wizard_home_status(services: ServicesContainer<SqliteDatabase>) -> StatusCode {

@@ -160,4 +160,3 @@ pub struct VocabularyContext {
     /// Replaces the published vocabulary.
     pub set: Callback<SearchVocabulary>,
 }
-

@@ -171,7 +171,9 @@ mod tests {
                 .oauth2
                 .insert("spotify".into(), spotify_oauth_config());
             config.web.base_url = Some("https://automate.example.com".into());
-        }).await.unwrap();
+        })
+        .await
+        .unwrap();
 
         let ctx = JobContext::new(services.clone(), chrono::Utc::now(), None, None);
         OAuth2ReauthorizationRequiredWorkflow
@@ -213,7 +215,9 @@ mod tests {
             config
                 .oauth2
                 .insert("spotify".into(), spotify_oauth_config());
-        }).await.unwrap();
+        })
+        .await
+        .unwrap();
 
         let ctx = JobContext::new(services.clone(), chrono::Utc::now(), None, None);
         OAuth2ReauthorizationRequiredWorkflow

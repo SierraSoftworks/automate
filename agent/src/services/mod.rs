@@ -93,15 +93,21 @@ impl ServicesContainer<crate::db::SqliteDatabase> {
     pub async fn new_mock() -> Result<Self, human_errors::Error> {
         let database = crate::db::SqliteDatabase::open_in_memory().await?;
         let config = Config::default();
-        let session = Arc::new(Session::new("automate", "0.0.0-test").with_battery(tracing_batteries::Testing));
+        let session = Arc::new(
+            Session::new("automate", "0.0.0-test").with_battery(tracing_batteries::Testing),
+        );
         Ok(Self::new(config, database, session))
     }
 
-    pub async fn new_custom_mock(f: impl Sized + FnOnce(&mut Config, &crate::db::SqliteDatabase)) -> Result<Self, human_errors::Error> {
+    pub async fn new_custom_mock(
+        f: impl Sized + FnOnce(&mut Config, &crate::db::SqliteDatabase),
+    ) -> Result<Self, human_errors::Error> {
         let database = crate::db::SqliteDatabase::open_in_memory().await?;
         let mut config = Config::default();
         f(&mut config, &database);
-        let session = Arc::new(Session::new("automate", "0.0.0-test").with_battery(tracing_batteries::Testing));
+        let session = Arc::new(
+            Session::new("automate", "0.0.0-test").with_battery(tracing_batteries::Testing),
+        );
         Ok(Self::new(config, database, session))
     }
 }

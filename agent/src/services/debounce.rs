@@ -158,13 +158,15 @@ impl<K: KeyValueStore> Debouncer<K> {
         now: DateTime<Utc>,
     ) -> Result<Option<Detection>, human_errors::Error> {
         if let Some(state) = self.load(key).await? {
-            let triggered_for = if let Some(recovering) = state.recovering_since &&
-                recovering > state.last_triggered_at
+            let triggered_for = if let Some(recovering) = state.recovering_since
+                && recovering > state.last_triggered_at
             {
                 // The entity is already recovering, so the caller has already been notified and the
                 // recovery duration has already been reported. Don't adjust the
                 // recovery timestamp.
-                return Ok(Some(Detection::Recovering { triggered_for: (recovering - state.first_triggered_at).max(Duration::zero()) }));
+                return Ok(Some(Detection::Recovering {
+                    triggered_for: (recovering - state.first_triggered_at).max(Duration::zero()),
+                }));
             } else {
                 (now - state.first_triggered_at).max(Duration::zero())
             };

@@ -324,9 +324,7 @@ impl JobHost {
                         );
                         services.session().record_event(
                             "job::missing-handler",
-                            [
-                                ("partition".to_string(), item.partition.clone()),
-                            ].into()
+                            [("partition".to_string(), item.partition.clone())].into(),
                         );
                         if let Err(err) = queue.complete(item.partition.clone(), item).await {
                             error!(error = %err, "Failed to drop unhandled job message: {err}");

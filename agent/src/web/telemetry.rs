@@ -3,8 +3,8 @@ use std::{
     task::{Context, Poll},
 };
 
-use actix_web::{dev::*, web};
 use actix_web::{Error, http::header::HeaderMap};
+use actix_web::{dev::*, web};
 use futures::{
     Future, FutureExt,
     future::{Ready, ok},
@@ -91,7 +91,9 @@ pub struct TracingLogger<S: Services + Clone + Send + Sync + 'static> {
 
 impl<S: Services + Clone + Send + Sync + 'static> TracingLogger<S> {
     pub fn new() -> Self {
-        TracingLogger { _services: std::marker::PhantomData }
+        TracingLogger {
+            _services: std::marker::PhantomData,
+        }
     }
 }
 
@@ -108,7 +110,10 @@ where
     type Future = Ready<Result<Self::Transform, Self::InitError>>;
 
     fn new_transform(&self, service: A) -> Self::Future {
-        ok(TracingLoggerMiddleware { service, _services: std::marker::PhantomData })
+        ok(TracingLoggerMiddleware {
+            service,
+            _services: std::marker::PhantomData,
+        })
     }
 }
 
@@ -118,7 +123,8 @@ pub struct TracingLoggerMiddleware<S: Services + Clone + Send + Sync + 'static, 
     _services: std::marker::PhantomData<S>,
 }
 
-impl<S: Services + Clone + Send + Sync + 'static, A, B> Service<ServiceRequest> for TracingLoggerMiddleware<S, A>
+impl<S: Services + Clone + Send + Sync + 'static, A, B> Service<ServiceRequest>
+    for TracingLoggerMiddleware<S, A>
 where
     A: Service<ServiceRequest, Response = ServiceResponse<B>, Error = Error>,
     A::Future: 'static,
@@ -180,7 +186,10 @@ where
                     if let Some(services) = services {
                         let err = tracing_batteries::ErrorInfo::new(&error)
                             .with_metadata("http.target", http_target)
-                            .with_metadata("http.status_code", error.as_response_error().status_code().as_u16().to_string());
+                            .with_metadata(
+                                "http.status_code",
+                                error.as_response_error().status_code().as_u16().to_string(),
+                            );
                         services.session().record_custom_error(err);
                     }
 
