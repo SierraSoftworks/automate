@@ -201,6 +201,9 @@ pub struct WebhookConfigs {
     pub azure_monitor: AzureMonitorWebhookConfig,
 
     #[serde(default)]
+    pub github: GitHubWebhookConfig,
+
+    #[serde(default)]
     pub grafana: GrafanaWebhookConfig,
 
     #[serde(default)]

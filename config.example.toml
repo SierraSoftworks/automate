@@ -75,6 +75,62 @@ scopes = ['openid', 'profile', 'email', 'offline_access']
 # filter = 'true'
 todoist = { project = "Software", section = "Outages" }
 
+[webhooks.github]
+# Add an organization (or repository) webhook in GitHub pointing at
+# POST /webhooks/github with a JSON content type. Deliveries are rejected unless
+# a secret is configured, because the events it carries drive writes to your
+# repositories.
+# secret = "xxxxxx"  # Shared secret used to verify the X-Hub-Signature-256 HMAC
+#
+# Events which move the notifications inbox (issues, pull requests, reviews,
+# comments, discussions, releases, security advisories) also schedule a
+# debounced fetch of [[workflows.github_notifications]], so notifications are
+# collected seconds after something happens instead of on the cron interval. No
+# configuration is needed - subscribe the webhook to those events and lower the
+# workflow's cron to a safety net.
+
+# Enables GitHub's native auto-merge behaviour on pull requests matching the
+# filter, so they merge themselves once their required checks pass. Remove this
+# section to disable auto-merge handling entirely. Requires the webhook to
+# deliver "Pull requests" events, and connections.github.api_key to hold a token
+# with the `repo` scope for the repositories you want to manage.
+[webhooks.github.auto_merge]
+# filter = 'action == "opened" && author in ["dependabot[bot]", "dependabot-preview[bot]"]'
+# Leave an approving review as well, for repositories whose branch protection
+# requires one before auto-merge can complete.
+# approve = true
+# approval_message = "This pull request has been automatically approved because it was raised by a trusted account."
+# Repositories which do not have their "Allow auto-merge" setting turned on get a
+# one-off reminder task (keyed on the repository, so later pull requests from it
+# do not raise more), filed using the settings below merged over the global
+# [connections.todoist].
+todoist = { project = "Software", section = "Maintenance" }
+
+# Raises a Todoist task when an issue, pull request or repository needs your
+# attention. Comments and assignments collapse onto one task per issue/PR (so a
+# busy thread does not spam you), while each security alert gets its own. Remove
+# this section to disable the behaviour entirely.
+#
+# NOTE: this overlaps with [[workflows.github_notifications]], which raises its
+# own task keyed on the notification thread. Narrow that workflow's filter to
+# whatever you do not cover here, or you will get two tasks for the same thread.
+#
+# Filters can reference: kind ("comment", "assignment", "security_alert"), event,
+# action, resolved, repository, repository_owner, repository_name, number, title,
+# author, assignee, subject_author (the issue/PR author), body and severity.
+[webhooks.github.attention]
+# Comments and reviews. Defaults to everything except Dependabot's own
+# commentary - add yourself so your own replies do not nag you, and consider
+# narrowing it to threads that concern you.
+comments = '!(author in ["dependabot[bot]", "dependabot-preview[bot]", "notheotherben"]) && subject_author == "notheotherben"'
+# Assignments and unassignments. Defaults to `false`, because only you know
+# which account is yours. An unassignment completes the task again.
+assignments = 'assignee == "notheotherben"'
+# Dependabot, code scanning and secret scanning alerts. Defaults to all of them;
+# resolving or dismissing an alert completes its task.
+# security_alerts = 'severity in ["critical", "high"]'
+todoist = { project = "Hobbies", section = "Open Source" }
+
 [webhooks.grafana]
 # secret = "xxxxxx"  # Optional authorization header value for webhook authentication
 # filter = 'true'
@@ -115,7 +171,9 @@ priority = 4
 todoist = { project = "Life", section = "Plans" }
 
 [[workflows.github_notifications]]
-cron = "*/15 * * * *"
+# When the GitHub webhook is wired up this only needs to be a safety net for
+# missed or undelivered events; without it, drop the interval back to "*/15 * * * *".
+cron = "0 * * * *"
 todoist = { project = "Hobbies", section = "Open Source" }
 
 [[workflows.github_releases]]
