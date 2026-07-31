@@ -3,12 +3,31 @@ use std::fmt::Display;
 
 use hmac::{Hmac, KeyInit, Mac};
 
-use crate::jobs::{GitHubAutoMergeConfig, GitHubAutoMergeWorkflow};
+use crate::jobs::{
+    GitHubAutoMergeConfig, GitHubAutoMergeWorkflow, GitHubNotificationsRefreshWorkflow,
+};
 use crate::prelude::*;
 
 type HmacSha256 = Hmac<Sha256>;
 
 use sha2::Sha256;
+
+/// The webhook events which can add to, or resolve, a GitHub notification
+/// thread. Anything else (pushes, statuses, deployments) never moves the
+/// notifications inbox, so it would only cost us a wasted fetch.
+const NOTIFICATION_EVENTS: &[&str] = &[
+    "discussion",
+    "discussion_comment",
+    "issue_comment",
+    "issues",
+    "pull_request",
+    "pull_request_review",
+    "pull_request_review_comment",
+    "release",
+    "repository_vulnerability_alert",
+    "security_advisory",
+    "workflow_run",
+];
 
 #[derive(Clone, Deserialize, Default)]
 pub struct GitHubWebhookConfig {
@@ -133,27 +152,29 @@ impl Job for GitHubWebhook {
         let delivery = Self::header(job, "x-github-delivery").map(|id| Cow::Owned(id.to_string()));
         let event_type = Self::header(job, "x-github-event").unwrap_or_default();
 
-        match event_type {
-            "ping" => {
-                info!("Received a GitHub webhook ping event.");
-                Ok(())
-            }
-            "pull_request" => {
-                if github.auto_merge.is_none() {
-                    debug!(
-                        "Received a GitHub pull_request event but no webhooks.github.auto_merge configuration is present; ignoring."
-                    );
-                    return Ok(());
-                }
-
-                let event: GitHubPullRequestEvent = job.json()?;
-                GitHubAutoMergeWorkflow::dispatch(event, delivery, services).await
-            }
-            other => {
-                debug!("Received an unsupported GitHub webhook event '{other}'; ignoring.");
-                Ok(())
-            }
+        if event_type == "ping" {
+            info!("Received a GitHub webhook ping event.");
+            return Ok(());
         }
+
+        let mut handled = false;
+
+        if event_type == "pull_request" && github.auto_merge.is_some() {
+            let event: GitHubPullRequestEvent = job.json()?;
+            GitHubAutoMergeWorkflow::dispatch(event, delivery, services).await?;
+            handled = true;
+        }
+
+        if NOTIFICATION_EVENTS.contains(&event_type) {
+            GitHubNotificationsRefreshWorkflow::schedule(event_type, services).await?;
+            handled = true;
+        }
+
+        if !handled {
+            debug!("Received an unsupported GitHub webhook event '{event_type}'; ignoring.");
+        }
+
+        Ok(())
     }
 }
 
@@ -275,6 +296,15 @@ mod tests {
             .len()
     }
 
+    async fn refreshes<S: Services>(services: &S) -> usize {
+        services
+            .queue()
+            .peek::<_, serde_json::Value>(GitHubNotificationsRefreshWorkflow::partition(), 10)
+            .await
+            .expect("peek the notifications refresh queue")
+            .len()
+    }
+
     #[test]
     fn verify_signature_accepts_a_valid_signature() {
         GitHubWebhook::verify_signature("secret", BODY, &sign("secret", BODY))
@@ -332,6 +362,30 @@ mod tests {
             .expect("a signed pull_request delivery should be dispatched");
 
         assert_eq!(dispatched(&services).await, 1);
+        assert_eq!(
+            refreshes(&services).await,
+            1,
+            "a pull_request also moves the notifications inbox"
+        );
+    }
+
+    #[tokio::test]
+    async fn notification_events_schedule_a_refresh() {
+        let services = services_with("secret", None).await;
+        let job = event(&[
+            ("X-GitHub-Event", "issue_comment"),
+            ("X-Hub-Signature-256", &sign("secret", BODY)),
+        ]);
+
+        GitHubWebhook
+            .handle(
+                JobContext::new(services.clone(), chrono::Utc::now(), None, None),
+                &job,
+            )
+            .await
+            .expect("a signed issue_comment delivery should schedule a refresh");
+
+        assert_eq!(refreshes(&services).await, 1);
     }
 
     #[tokio::test]
@@ -370,5 +424,6 @@ mod tests {
             .expect("an unsupported event should be ignored without erroring");
 
         assert_eq!(dispatched(&services).await, 0);
+        assert_eq!(refreshes(&services).await, 0);
     }
 }

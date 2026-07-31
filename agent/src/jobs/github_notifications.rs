@@ -88,11 +88,15 @@ impl GitHubNotificationsWorkflow {
             }
 
             if let Some(subject) = collector.get_subject(&item.subject, &services).await? {
-                if subject.is_open()
-                    && subject
-                        .user
-                        .as_ref()
-                        .is_some_and(|u| u.login == "dependabot[bot]")
+                if !subject.is_open() {
+                    // Closing the subject bumps its notification thread, so a
+                    // webhook-triggered collection resolves it within seconds
+                    // rather than waiting for the delayed re-check below.
+                    self.resolve(&collector, &item, job, &services).await?;
+                } else if subject
+                    .user
+                    .as_ref()
+                    .is_some_and(|u| u.login == "dependabot[bot]")
                 {
                     // Schedule an auto-close task to resolve this notification later if the PR is auto-merged
 
@@ -108,7 +112,7 @@ impl GitHubNotificationsWorkflow {
                         &services,
                     )
                     .await?;
-                } else if subject.is_open() {
+                } else {
                     TodoistUpsertTask::dispatch(
                         self.build_task(&item, job, Some(subject)),
                         Some(item.id.clone().into()),
@@ -126,6 +130,30 @@ impl GitHubNotificationsWorkflow {
             }
         }
         Ok(())
+    }
+
+    /// Marks a resolved notification thread as done and completes the Todoist
+    /// task which was tracking it.
+    async fn resolve(
+        &self,
+        collector: &GitHubNotificationsCollector,
+        event: &<GitHubNotificationsCollector as Collector>::Item,
+        job: &GitHubNotificationsConfig,
+        services: &(impl Services + Send + Sync + 'static),
+    ) -> Result<(), human_errors::Error> {
+        collector.mark_as_done(&event.id, services).await?;
+
+        TodoistCompleteTask::dispatch(
+            #[allow(clippy::needless_update)]
+            TodoistCompleteTaskPayload {
+                unique_key: event.id.clone(),
+                config: job.todoist.clone(),
+                ..Default::default()
+            },
+            Some(event.id.clone().into()),
+            services,
+        )
+        .await
     }
 }
 
@@ -190,18 +218,7 @@ impl Job for GitHubNotificationsWorkflow {
                 }
                 _ => {
                     // Closed/Resolved/Merged/etc., mark as done
-                    collector.mark_as_done(&event.id, services).await?;
-                    TodoistCompleteTask::dispatch(
-                        #[allow(clippy::needless_update)]
-                        TodoistCompleteTaskPayload {
-                            unique_key: event.id.clone(),
-                            config: job.todoist.clone(),
-                            ..Default::default()
-                        },
-                        Some(event.id.clone().into()),
-                        services,
-                    )
-                    .await?;
+                    self.resolve(&collector, event, job, services).await?;
                 }
             }
 
