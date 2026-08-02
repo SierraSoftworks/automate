@@ -396,6 +396,28 @@ pub struct GitHubNotificationsSubject {
     pub latest_comment_url: Option<String>,
 }
 
+impl GitHubNotificationsSubject {
+    /// The `{owner}/{repo}` and number of the issue or pull request this subject
+    /// refers to, parsed out of its API URL
+    /// (`https://api.github.com/repos/{owner}/{repo}/{issues,pulls}/{number}`).
+    ///
+    /// Returns `None` for subjects which are not issues or pull requests, such
+    /// as releases, discussions and check suites.
+    pub fn issue_reference(&self) -> Option<(String, u64)> {
+        let path = self.url.as_ref()?.split("/repos/").nth(1)?;
+        let mut parts = path.split('/');
+
+        let owner = parts.next()?;
+        let repository = parts.next()?;
+
+        if !matches!(parts.next()?, "issues" | "pulls") {
+            return None;
+        }
+
+        Some((format!("{owner}/{repository}"), parts.next()?.parse().ok()?))
+    }
+}
+
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Debug)]
 #[serde(rename_all = "lowercase")]
 pub enum GitHubNotificationsSubjectState {
@@ -439,6 +461,48 @@ mod tests {
     use super::*;
     use wiremock::matchers::method;
     use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    fn subject(url: Option<&str>) -> GitHubNotificationsSubject {
+        GitHubNotificationsSubject {
+            title: "Bump serde".to_string(),
+            type_: "PullRequest".to_string(),
+            url: url.map(str::to_string),
+            latest_comment_url: None,
+        }
+    }
+
+    #[test]
+    fn issue_reference_parses_issues_and_pull_requests() {
+        assert_eq!(
+            subject(Some(
+                "https://api.github.com/repos/testorg/test-repo/pulls/42"
+            ))
+            .issue_reference(),
+            Some(("testorg/test-repo".to_string(), 42))
+        );
+
+        assert_eq!(
+            subject(Some(
+                "https://api.github.com/repos/testorg/test-repo/issues/7"
+            ))
+            .issue_reference(),
+            Some(("testorg/test-repo".to_string(), 7))
+        );
+    }
+
+    #[test]
+    fn issue_reference_ignores_subjects_without_an_issue() {
+        // Releases, discussions and check suites have no issue to converge on,
+        // and discussions carry no URL at all.
+        assert_eq!(
+            subject(Some(
+                "https://api.github.com/repos/testorg/test-repo/releases/1"
+            ))
+            .issue_reference(),
+            None
+        );
+        assert_eq!(subject(None).issue_reference(), None);
+    }
 
     #[test]
     fn test_notification_reason_serialization() {

@@ -4,6 +4,7 @@ use chrono::TimeDelta;
 use serde::{Deserialize, Serialize};
 
 use crate::collectors::{GitHubNotificationsCollector, GitHubSubjectInformation};
+use crate::jobs::subject_key;
 use crate::prelude::*;
 use crate::publishers::{
     TodoistCompleteTask, TodoistCompleteTaskPayload, TodoistDueDate, TodoistUpsertTask,
@@ -32,6 +33,30 @@ impl Display for GitHubNotificationsConfig {
 pub struct GitHubNotificationsWorkflow;
 
 impl GitHubNotificationsWorkflow {
+    /// The Todoist key tracking this notification's subject.
+    ///
+    /// Issues and pull requests are keyed on `{repo}#{number}` so that the
+    /// webhook-driven attention path resolves to the same task. Their API URL
+    /// cannot serve as the key because GitHub spells the same pull request as
+    /// `pulls/{n}` in a notification and `issues/{n}` in an `issue_comment`
+    /// payload; the number is shared between both.
+    ///
+    /// Everything else (releases, check suites) has no webhook counterpart to
+    /// converge with, so its own API URL is the natural identity. Only subjects
+    /// carrying no URL at all fall back to the notification thread id, which is
+    /// a last resort because marking a thread done ends it and later activity
+    /// arrives under a new one.
+    fn task_key(event: &<GitHubNotificationsCollector as Collector>::Item) -> String {
+        match event.subject.issue_reference() {
+            Some((repository, number)) => subject_key(&repository, number),
+            None => event
+                .subject
+                .url
+                .clone()
+                .unwrap_or_else(|| event.id.clone()),
+        }
+    }
+
     fn build_task(
         &self,
         event: &<GitHubNotificationsCollector as Collector>::Item,
@@ -44,11 +69,18 @@ impl GitHubNotificationsWorkflow {
                 .replace("/pulls/", "/pull/")
         });
 
+        // Rendered identically to the attention path's title, so that a subject
+        // seen by both does not flip between two spellings of the same task.
+        let reference = match event.subject.issue_reference() {
+            Some((repository, number)) => format!("{repository}#{number}"),
+            None => event.repository.full_name.clone(),
+        };
+
         TodoistUpsertTaskPayload {
-            unique_key: event.id.clone(),
+            unique_key: Self::task_key(event),
             title: format!(
                 "[**{}**]({}): {}",
-                &event.repository.full_name,
+                reference,
                 subject_html_url.unwrap_or(event.repository.html_url.clone()),
                 event.subject.title
             ),
@@ -146,7 +178,7 @@ impl GitHubNotificationsWorkflow {
         TodoistCompleteTask::dispatch(
             #[allow(clippy::needless_update)]
             TodoistCompleteTaskPayload {
-                unique_key: event.id.clone(),
+                unique_key: Self::task_key(event),
                 config: job.todoist.clone(),
                 ..Default::default()
             },
@@ -227,5 +259,90 @@ impl Job for GitHubNotificationsWorkflow {
             self.collect_new_notifications(job, ctx.into_services())
                 .await
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::webhooks::GitHubAttentionEvent;
+
+    fn notification(
+        subject_url: Option<&str>,
+    ) -> <GitHubNotificationsCollector as Collector>::Item {
+        serde_json::from_value(serde_json::json!({
+            "id": "14523698",
+            "reason": "review_requested",
+            "unread": true,
+            "updated_at": "2026-07-31T12:00:00Z",
+            "last_read_at": null,
+            "repository": {
+                "name": "repo",
+                "full_name": "example/repo",
+                "html_url": "https://github.com/example/repo",
+                "owner": { "login": "example", "html_url": "https://github.com/example" },
+            },
+            "subject": {
+                "title": "Bump serde",
+                "type": "PullRequest",
+                "url": subject_url,
+                "latest_comment_url": null,
+            },
+        }))
+        .expect("the sample notification should deserialize")
+    }
+
+    fn comment_on(repository: &str, number: u64) -> GitHubAttentionEvent {
+        serde_json::from_value(serde_json::json!({
+            "kind": "comment",
+            "event": "issue_comment",
+            "action": "created",
+            "resolved": false,
+            "repository": repository,
+            "repository_owner": "example",
+            "repository_name": "repo",
+            "number": number,
+            "title": "Bump serde",
+            "url": format!("https://github.com/{repository}/pull/{number}"),
+            "actor": "someone-else",
+            "assignee": null,
+            "subject_author": "notheotherben",
+            "body": "Any update?",
+            "severity": null,
+        }))
+        .expect("the sample attention event should deserialize")
+    }
+
+    /// The regression this guards: keying on the notification thread id meant a
+    /// webhook comment and the notification about it resolved to different
+    /// Todoist tasks, so one pull request accumulated several entries.
+    #[test]
+    fn a_notification_and_a_webhook_comment_share_one_task() {
+        let event = notification(Some("https://api.github.com/repos/example/repo/pulls/7"));
+
+        assert_eq!(
+            GitHubNotificationsWorkflow::task_key(&event),
+            comment_on("example/repo", 7).unique_key()
+        );
+    }
+
+    #[test]
+    fn subjects_without_an_issue_are_keyed_on_their_api_url() {
+        // A release has no webhook counterpart to converge with, but its URL is
+        // still a stabler identity than the notification thread id.
+        let event = notification(Some("https://api.github.com/repos/example/repo/releases/1"));
+
+        assert_eq!(
+            GitHubNotificationsWorkflow::task_key(&event),
+            "https://api.github.com/repos/example/repo/releases/1"
+        );
+    }
+
+    #[test]
+    fn subjects_without_a_url_fall_back_to_the_thread_id() {
+        assert_eq!(
+            GitHubNotificationsWorkflow::task_key(&notification(None)),
+            "14523698"
+        );
     }
 }

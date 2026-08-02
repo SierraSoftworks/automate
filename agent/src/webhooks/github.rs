@@ -344,7 +344,15 @@ pub struct GitHubAttentionEvent {
     /// The issue/pull request number, or the alert number.
     pub number: u64,
     pub title: String,
+    /// The issue, pull request or alert this concerns. Comments deliberately
+    /// point here rather than at the comment permalink, so that the task's title
+    /// is identical to the one the notification collector would render for the
+    /// same subject.
     pub url: String,
+
+    /// The permalink to the comment or review which prompted this, if any.
+    #[serde(default)]
+    pub comment_url: Option<String>,
 
     /// Whoever's action prompted this: the comment author, or the person who
     /// changed the assignment or alert.
@@ -411,7 +419,7 @@ impl GitHubAttentionEvent {
                 "github/attention/{}/{}/{}",
                 self.repository, self.event, self.number
             ),
-            _ => format!("github/attention/{}#{}", self.repository, self.number),
+            _ => crate::jobs::subject_key(&self.repository, self.number),
         }
     }
 
@@ -447,10 +455,8 @@ impl GitHubAttentionEvent {
                 repository_name: payload.repository.name.clone(),
                 number: subject.number,
                 title: subject.title.clone(),
-                url: comment
-                    .html_url
-                    .clone()
-                    .unwrap_or_else(|| subject.html_url.clone()),
+                url: subject.html_url.clone(),
+                comment_url: comment.html_url.clone(),
                 actor: comment
                     .user
                     .as_ref()
@@ -485,6 +491,7 @@ impl GitHubAttentionEvent {
                         payload.repository.full_name
                     )
                 }),
+                comment_url: None,
                 actor: payload.sender.as_ref().map(|u| u.login.clone()),
                 assignee: None,
                 subject_author: None,
@@ -515,6 +522,7 @@ impl GitHubAttentionEvent {
                 number: subject.number,
                 title: subject.title.clone(),
                 url: subject.html_url.clone(),
+                comment_url: None,
                 actor: payload.sender.as_ref().map(|u| u.login.clone()),
                 assignee: payload.assignee.as_ref().map(|u| u.login.clone()),
                 subject_author: subject.user.as_ref().map(|u| u.login.clone()),
