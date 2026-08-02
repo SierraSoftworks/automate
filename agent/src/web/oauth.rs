@@ -10,17 +10,17 @@ use crate::prelude::Services;
 use crate::web::helpers::oidc::AdminRequestFilter;
 use crate::web::helpers::request::client_ip;
 
-/// The transient cookie that carries the OAuth setup wizard's CSRF `state` across
-/// the redirect to the provider, so the callback can confirm the response
-/// belongs to a flow this browser actually started.
-const OAUTH_SETUP_STATE_COOKIE: &str = "automate_oauth_setup";
+/// The transient cookie that carries a setup wizard's CSRF `state` across the
+/// redirect to the provider, so the callback can confirm the response belongs to
+/// a flow this browser actually started.
+pub(crate) const OAUTH_SETUP_STATE_COOKIE: &str = "automate_oauth_setup";
 
-/// How long the OAuth setup wizard's state cookie remains valid.
+/// How long a setup wizard's state cookie remains valid.
 const OAUTH_SETUP_STATE_SECONDS: i64 = 10 * 60;
 
 /// Renders a minimal, self-contained HTML page for the server-side OAuth setup
 /// wizard. All interpolated values are HTML-escaped to avoid injection.
-fn html_page(status: u16, title: &str, heading: &str, message: &str) -> HttpResponse {
+pub(crate) fn html_page(status: u16, title: &str, heading: &str, message: &str) -> HttpResponse {
     let body = format!(
         "<!DOCTYPE html><html lang=\"en\"><head><meta charset=\"utf-8\"/>\
 <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"/>\
@@ -37,7 +37,7 @@ fn html_page(status: u16, title: &str, heading: &str, message: &str) -> HttpResp
 }
 
 /// Renders a page with a call-to-action link (used to start the login flow).
-fn html_action_page(
+pub(crate) fn html_action_page(
     title: &str,
     heading: &str,
     message: &str,
@@ -61,7 +61,7 @@ fn html_action_page(
         .body(body)
 }
 
-fn error_page(status: u16, title: &str, message: &str) -> HttpResponse {
+pub(crate) fn error_page(status: u16, title: &str, message: &str) -> HttpResponse {
     html_page(status, title, title, message)
 }
 
@@ -73,12 +73,12 @@ fn not_found() -> HttpResponse {
     )
 }
 
-/// Builds the transient state cookie for the OAuth setup wizard. It is scoped to
-/// the provider's own `/oauth/{provider}` path and `SameSite=Lax` so it is
-/// returned on the provider's top-level redirect back to the callback.
-fn oauth_state_cookie(provider: &str, state: String, secure: bool) -> Cookie<'static> {
+/// Builds the transient state cookie for a setup wizard. It is scoped to the
+/// wizard's own path and `SameSite=Lax` so it is returned on the provider's
+/// top-level redirect back to the callback.
+pub(crate) fn wizard_state_cookie(path: &str, state: String, secure: bool) -> Cookie<'static> {
     Cookie::build(OAUTH_SETUP_STATE_COOKIE, state)
-        .path(format!("/oauth/{provider}"))
+        .path(path.to_string())
         .http_only(true)
         .secure(secure)
         .same_site(SameSite::Lax)
@@ -86,31 +86,43 @@ fn oauth_state_cookie(provider: &str, state: String, secure: bool) -> Cookie<'st
         .finish()
 }
 
-/// Builds a removal for the OAuth setup wizard's state cookie (one-shot: it is
-/// cleared as soon as the callback resolves, whatever the outcome).
-fn clear_oauth_state_cookie(provider: &str) -> Cookie<'static> {
+/// Builds a removal for a setup wizard's state cookie (one-shot: it is cleared
+/// as soon as the callback resolves, whatever the outcome).
+fn clear_wizard_state_cookie(path: &str) -> Cookie<'static> {
     let mut removal = Cookie::build(OAUTH_SETUP_STATE_COOKIE, "")
-        .path(format!("/oauth/{provider}"))
+        .path(path.to_string())
         .finish();
     removal.make_removal();
     removal
 }
 
 /// Attaches the state-cookie removal to a callback response.
-fn with_cleared_state(provider: &str, mut response: HttpResponse) -> HttpResponse {
-    let _ = response.add_cookie(&clear_oauth_state_cookie(provider));
+pub(crate) fn with_cleared_state(path: &str, mut response: HttpResponse) -> HttpResponse {
+    let _ = response.add_cookie(&clear_wizard_state_cookie(path));
     response
+}
+
+fn oauth_wizard_path(provider: &str) -> String {
+    format!("/oauth/{provider}")
+}
+
+fn oauth_state_cookie(provider: &str, state: String, secure: bool) -> Cookie<'static> {
+    wizard_state_cookie(&oauth_wizard_path(provider), state, secure)
+}
+
+fn with_cleared_oauth_state(provider: &str, response: HttpResponse) -> HttpResponse {
+    with_cleared_state(&oauth_wizard_path(provider), response)
 }
 
 /// Validates the OAuth `state`: the value echoed back by the provider must equal
 /// the (non-empty) value stored in the browser's state cookie.
-fn state_matches(expected: Option<&str>, provided: Option<&str>) -> bool {
+pub(crate) fn state_matches(expected: Option<&str>, provided: Option<&str>) -> bool {
     matches!((expected, provided), (Some(a), Some(b)) if !a.is_empty() && a == b)
 }
 
 /// An HTML page shown when a visitor is not permitted to use a provider's
 /// self-service wizard.
-fn access_denied_page() -> HttpResponse {
+pub(crate) fn access_denied_page() -> HttpResponse {
     error_page(
         403,
         "Access denied",
@@ -121,7 +133,7 @@ fn access_denied_page() -> HttpResponse {
 /// An HTML page shown when an admin-gated wizard is opened directly (a top-level
 /// navigation that cannot carry the admin bearer token). These wizards are
 /// launched from the Automate admin area instead.
-fn admin_only_page() -> HttpResponse {
+pub(crate) fn admin_only_page() -> HttpResponse {
     error_page(
         403,
         "Sign in required",
@@ -131,7 +143,7 @@ fn admin_only_page() -> HttpResponse {
 
 /// The outcome of evaluating a request against a provider's *public* (top-level
 /// navigation) wizard path.
-enum PublicWizardOutcome {
+pub(crate) enum PublicWizardOutcome {
     /// The visitor may proceed with the flow.
     Allowed,
     /// The visitor is not permitted by the applicable ACL.
@@ -151,15 +163,15 @@ enum PublicWizardOutcome {
 /// (e.g. an IP allow-list still grants access); when OIDC is enabled the bearer
 /// cannot ride a top-level navigation, so the flow must be started from the admin
 /// SPA and this path reports [`PublicWizardOutcome::AdminOnly`].
-fn public_wizard_outcome<S: Services>(
+pub(crate) fn public_wizard_outcome<S: Services>(
     services: &S,
     req: &HttpRequest,
-    provider_config: &OAuth2Config,
+    wizard_acl: Option<&Filter>,
 ) -> PublicWizardOutcome {
     let config = services.config();
     let admin = &config.web.admin;
 
-    let acl = match provider_config.acl.as_ref() {
+    let acl = match wizard_acl {
         Some(acl) => acl,
         None => {
             if admin.oidc.is_some() {
@@ -277,7 +289,7 @@ async fn oauth_home<S: Services + Send + Sync + 'static>(
         return not_found();
     };
 
-    match public_wizard_outcome(services.as_ref(), &req, &config) {
+    match public_wizard_outcome(services.as_ref(), &req, config.acl.as_ref()) {
         PublicWizardOutcome::AdminOnly => admin_only_page(),
         PublicWizardOutcome::Denied => access_denied_page(),
         PublicWizardOutcome::Allowed => html_action_page(
@@ -312,7 +324,7 @@ async fn oauth_authorize<S: Services + Send + Sync + 'static>(
                 // (with their own `acl`) are evaluated here; admin-gated providers
                 // are reachable only when OIDC is off (via the admin ACL), and
                 // otherwise must be launched from the admin SPA.
-                match public_wizard_outcome(services.as_ref(), &req, &cfg) {
+                match public_wizard_outcome(services.as_ref(), &req, cfg.acl.as_ref()) {
                     PublicWizardOutcome::AdminOnly => return admin_only_page(),
                     PublicWizardOutcome::Denied => return access_denied_page(),
                     PublicWizardOutcome::Allowed => {}
@@ -399,7 +411,7 @@ async fn oauth_callback<S: Services + Send + Sync + 'static>(
         query.get("state").map(String::as_str),
     ) {
         warn!("Rejected an OAuth setup callback with a missing or mismatched state.");
-        return with_cleared_state(
+        return with_cleared_oauth_state(
             &provider,
             error_page(
                 400,
@@ -410,7 +422,7 @@ async fn oauth_callback<S: Services + Send + Sync + 'static>(
     }
 
     let Some(code) = query.get("code") else {
-        return with_cleared_state(
+        return with_cleared_oauth_state(
             &provider,
             error_page(
                 400,
@@ -438,7 +450,7 @@ async fn oauth_callback<S: Services + Send + Sync + 'static>(
                 {
                     error!("Failed to enqueue OAuth token storage task: {}", e);
                     services.session().record_human_error(&e);
-                    return with_cleared_state(
+                    return with_cleared_oauth_state(
                         &provider,
                         error_page(
                             500,
@@ -449,7 +461,7 @@ async fn oauth_callback<S: Services + Send + Sync + 'static>(
                 }
             }
 
-            with_cleared_state(
+            with_cleared_oauth_state(
                 &provider,
                 html_page(
                     200,
@@ -465,7 +477,7 @@ async fn oauth_callback<S: Services + Send + Sync + 'static>(
         Err(e) => {
             error!("OAuth callback handling failed: {}", e);
             services.session().record_human_error(&e);
-            with_cleared_state(
+            with_cleared_oauth_state(
                 &provider,
                 error_page(
                     500,

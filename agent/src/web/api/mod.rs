@@ -92,6 +92,10 @@ pub fn configure<S: Services + Clone + Send + Sync + 'static>() -> actix_web::Sc
                     web::get().to(crate::web::oauth::list_providers::<S>),
                 )
                 .route(
+                    "/github/installations",
+                    web::get().to(crate::web::github_app::list_installations::<S>),
+                )
+                .route(
                     "/oauth/{provider}/start",
                     web::post().to(crate::web::oauth::start::<S>),
                 ),

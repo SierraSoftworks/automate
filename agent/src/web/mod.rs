@@ -4,12 +4,16 @@ use human_errors::ResultExt;
 use crate::prelude::Services;
 
 mod api;
+mod github_app;
 mod helpers;
 mod oauth;
 mod telemetry;
 mod ui;
 mod webhooks;
 
+#[cfg(test)]
+pub use github_app::INSTALLATIONS_PARTITION;
+pub use github_app::{forget_installation, record_installation};
 pub use oauth::{OAuth2Config, OAuth2RefreshToken, refresh_or_notify};
 
 pub async fn run_web_server<S: Services + Clone + Send + Sync + 'static>(
@@ -31,6 +35,7 @@ pub async fn run_web_server<S: Services + Clone + Send + Sync + 'static>(
                 .wrap(telemetry::TracingLogger::<S>::new())
                 .service(api::configure::<S>())
                 .service(oauth::configure::<S>())
+                .service(github_app::configure::<S>())
                 .route("/webhooks/{kind:.*}", web::post().to(webhooks::handle::<S>))
                 .route("/robots.txt", web::get().to(ui::robots))
                 .default_service(web::get().to(ui::serve))

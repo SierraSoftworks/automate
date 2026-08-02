@@ -1,5 +1,31 @@
 [connections.github]
+# A *classic* personal access token, with the `notifications` scope (and `repo`
+# to see private repositories' subjects). This cannot be replaced by the App
+# below: GitHub's notifications API accepts classic tokens only, and the releases
+# workflow reads repositories no installation of yours covers.
 api_key = "${{ env.GITHUB_API_KEY }}"
+
+# A GitHub App, used for management calls (enabling auto-merge, approving pull
+# requests) so those writes are attributed to the App and scoped to whatever
+# repositories each installation grants, rather than to your whole account.
+#
+# Install it from https://your-automate-host/github/install/ — the wizard is
+# admin-gated by default and works exactly like the OAuth "Connect" flow. Install
+# it on as many user accounts and organizations as you like; personal accounts
+# cannot host an organization-level webhook, so an App is the only way to cover
+# them with a single endpoint. Automate keeps track of the installations from
+# GitHub's own `installation` events, so installs made directly on GitHub are
+# picked up too.
+#
+# Point the App's webhook at https://your-automate-host/webhooks/github and set
+# its webhook secret to the same value as webhooks.github.secret.
+# [connections.github.app]
+# app_id = "123456"
+# slug = "my-automate"  # the App's URL slug, from its public page
+# private_key = "${{ env.GITHUB_APP_PRIVATE_KEY }}"
+# Who may use the install wizard, evaluated exactly like the OAuth providers'
+# acl. Admin-gated when omitted.
+# acl = 'true'
 
 [connections.todoist]
 api_key = "${{ env.TODOIST_API_KEY }}"
