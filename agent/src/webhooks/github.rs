@@ -237,6 +237,11 @@ pub struct GitHubPullRequestEvent {
     pub repository: GitHubWebhookRepository,
     #[serde(default)]
     pub sender: Option<GitHubWebhookUser>,
+
+    /// Present when the delivery came from a GitHub App installation, which is
+    /// what lets management calls authenticate as the App rather than a PAT.
+    #[serde(default)]
+    pub installation: Option<GitHubWebhookInstallation>,
 }
 
 impl Display for GitHubPullRequestEvent {
@@ -300,6 +305,11 @@ pub struct GitHubWebhookRepository {
 #[derive(Clone, Serialize, Deserialize)]
 pub struct GitHubWebhookUser {
     pub login: String,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+pub struct GitHubWebhookInstallation {
+    pub id: u64,
 }
 
 /// What prompted a subject to need the user's attention.

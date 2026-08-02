@@ -1,7 +1,7 @@
 use crate::config::TodoistConfig;
 use crate::prelude::*;
 use crate::publishers::{TodoistUpsertTask, TodoistUpsertTaskPayload};
-use crate::services::{AutoMergeOutcome, GitHubClient};
+use crate::services::{AutoMergeOutcome, GitHubAppClient, GitHubClient};
 use crate::webhooks::GitHubPullRequestEvent;
 
 #[derive(Clone, Deserialize)]
@@ -54,6 +54,31 @@ fn default_approval_message() -> String {
 pub struct GitHubAutoMergeWorkflow;
 
 impl GitHubAutoMergeWorkflow {
+    /// The credential management calls are made with.
+    ///
+    /// Prefers an App installation token, so the approval and merge are
+    /// attributed to the App and limited to the repositories that installation
+    /// covers. Falls back to the personal access token when the App is not
+    /// configured, or when the delivery came from a plain repository webhook
+    /// and so carries no installation.
+    async fn management_token(
+        event: &GitHubPullRequestEvent,
+        services: &(impl Services + Send + Sync + 'static),
+    ) -> Result<Option<String>, human_errors::Error> {
+        let config = services.config();
+
+        if let Some(app) = config.connections.github.app.as_ref()
+            && let Some(installation) = event.installation.as_ref()
+        {
+            let client = GitHubAppClient::new(app, services.http_client())?;
+            return Ok(Some(
+                client.installation_token(installation.id, services).await?,
+            ));
+        }
+
+        Ok(config.connections.github.api_key.clone())
+    }
+
     /// Raises a reminder to turn on the repository's "Allow auto-merge"
     /// setting.
     ///
@@ -118,14 +143,14 @@ impl Job for GitHubAutoMergeWorkflow {
             return Ok(());
         }
 
-        let Some(api_key) = config.connections.github.api_key.as_ref() else {
+        let Some(token) = Self::management_token(job, services).await? else {
             warn!(
-                "Pull request {job} matched the auto-merge filter, but no connections.github.api_key is configured; ignoring."
+                "Pull request {job} matched the auto-merge filter, but no GitHub credentials are configured; ignoring."
             );
             return Ok(());
         };
 
-        let client = GitHubClient::new(services.http_client(), api_key);
+        let client = GitHubClient::new(services.http_client(), token);
 
         if auto_merge.approve
             && !client
