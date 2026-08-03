@@ -10,6 +10,17 @@ use crate::webhooks::{GitHubAttentionEvent, GitHubAttentionKind};
 /// being a summary.
 const MAX_BODY: usize = 500;
 
+/// The Todoist key tracking a GitHub issue or pull request.
+///
+/// Both the webhook-driven attention path and the notification collector resolve
+/// to this, so one issue yields one task no matter which noticed it first. It is
+/// deliberately derived from the subject rather than from a notification thread
+/// id, because a thread identifies the *notification* and one issue accumulates
+/// several threads over its life.
+pub fn subject_key(repository: &str, number: u64) -> String {
+    format!("github/attention/{repository}#{number}")
+}
+
 #[derive(Clone, Deserialize)]
 pub struct GitHubAttentionConfig {
     /// Selects the comments and reviews worth raising a task for. Defaults to
@@ -93,6 +104,11 @@ impl GitHubAttentionWorkflow {
             ),
         };
 
+        let link = match event.comment_url.as_deref() {
+            Some(url) => format!("\n{url}"),
+            None => String::new(),
+        };
+
         match event
             .body
             .as_deref()
@@ -101,10 +117,10 @@ impl GitHubAttentionWorkflow {
         {
             Some(body) if body.chars().count() > MAX_BODY => {
                 let truncated: String = body.chars().take(MAX_BODY).collect();
-                format!("{summary}\n\n{truncated}…")
+                format!("{summary}{link}\n\n{truncated}…")
             }
-            Some(body) => format!("{summary}\n\n{body}"),
-            None => summary,
+            Some(body) => format!("{summary}{link}\n\n{body}"),
+            None => format!("{summary}{link}"),
         }
     }
 
@@ -207,7 +223,8 @@ mod tests {
             repository_name: "repo".to_string(),
             number: 7,
             title: "Fix the thing".to_string(),
-            url: "https://github.com/example/repo/pull/7#issuecomment-1".to_string(),
+            url: "https://github.com/example/repo/pull/7".to_string(),
+            comment_url: Some("https://github.com/example/repo/pull/7#issuecomment-1".to_string()),
             actor: Some(author.to_string()),
             assignee: None,
             subject_author: Some("notheotherben".to_string()),
