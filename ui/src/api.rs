@@ -6,7 +6,7 @@
 //! handled separately via a popup (see [`crate::auth::begin_login`]). A `401` that survives a refresh
 //! is surfaced as [`ApiError::Unauthorized`] so callers can prompt for sign-in.
 
-use automate_api::{AdminUser, KeyValueEntry, QueueMessage};
+use automate_api::{AdminUser, Connection, IntegrationInfo, KeyValueEntry, QueueMessage};
 use gloo_net::http::{Request, Response};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -229,16 +229,29 @@ pub async fn delete_queue(partition: &str, key: &str) -> Result<(), ApiError> {
     .await
 }
 
-/// A configured integration provider the admin may connect.
-#[derive(Debug, Clone, PartialEq, serde::Deserialize)]
-pub struct OAuthProvider {
-    pub provider: String,
-    pub name: String,
+/// Lists the integrations configured on the agent.
+pub async fn list_integrations() -> Result<Vec<IntegrationInfo>, ApiError> {
+    get_json("/integrations").await
 }
 
-/// Lists the configured integration providers.
-pub async fn list_oauth_providers() -> Result<Vec<OAuthProvider>, ApiError> {
-    get_json("/oauth").await
+/// Lists the accounts currently connected to an integration.
+pub async fn list_connections(integration: &str) -> Result<Vec<Connection>, ApiError> {
+    get_json(&format!(
+        "/integrations/{}/connections",
+        urlencode(integration)
+    ))
+    .await
+}
+
+/// Severs a connection. For GitHub this uninstalls the App from the account; for
+/// an OAuth2 provider it discards the stored credential.
+pub async fn disconnect(integration: &str, connection: &str) -> Result<(), ApiError> {
+    delete(&format!(
+        "/integrations/{}/connections/{}",
+        urlencode(integration),
+        urlencode(connection)
+    ))
+    .await
 }
 
 #[derive(serde::Deserialize)]
@@ -246,12 +259,12 @@ struct StartResponse {
     authorize_url: String,
 }
 
-/// Begins connecting an integration provider, returning the provider authorization URL to open in a
-/// popup. The agent has already set the transient state cookie the callback verifies.
-pub async fn start_oauth(provider: &str) -> Result<String, ApiError> {
+/// Begins connecting an integration, returning the provider authorization URL to open in a popup.
+/// The agent has already set the transient state cookie the callback verifies.
+pub async fn start_setup(integration: &str) -> Result<String, ApiError> {
     let resp = send(
         Verb::Post,
-        &format!("/oauth/{}/start", urlencode(provider)),
+        &format!("/integrations/{}/setup/start", urlencode(integration)),
         Some(&serde_json::Value::Null),
     )
     .await?;

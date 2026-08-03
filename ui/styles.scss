@@ -295,6 +295,85 @@ pre {
       @include focus-ring;
     }
   }
+
+  // Shown in place of the trigger when the listing could not be fetched. An
+  // empty menu and a broken endpoint look identical otherwise.
+  &__error {
+    display: inline-flex;
+    align-items: center;
+    padding: 0 0.4rem;
+    color: $text-secondary;
+    font-size: 0.78rem;
+    cursor: help;
+  }
+}
+
+// Connections panel: the accounts currently linked to each configured
+// integration, with a control to sever each one.
+.connections {
+  margin-bottom: 1.25rem;
+  padding: 0.9rem 1rem;
+  background: $bg-white;
+  border: 1px solid $border-base;
+  border-radius: $radius-sm;
+
+  &__heading {
+    margin: 0 0 0.75rem;
+    font-size: 0.95rem;
+    color: $text-regular;
+  }
+
+  &__group + &__group {
+    margin-top: 0.9rem;
+    padding-top: 0.9rem;
+    border-top: 1px solid $border-base;
+  }
+
+  &__title {
+    margin: 0 0 0.45rem;
+    font-size: 0.85rem;
+    color: $text-regular;
+  }
+
+  &__empty {
+    margin: 0;
+    color: $text-secondary;
+    font-size: 0.82rem;
+  }
+
+  &__list {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  &__item {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    padding: 0.4rem 0;
+
+    & + & {
+      border-top: 1px solid $brand-tint-border;
+    }
+  }
+
+  &__name {
+    font-size: 0.85rem;
+    color: $text-regular;
+  }
+
+  &__kind,
+  &__detail {
+    color: $text-secondary;
+    font-size: 0.76rem;
+  }
+
+  // Keeps the disconnect control at the far end of the row whether or not the
+  // connection supplied a kind or a detail.
+  &__item .btn {
+    margin-left: auto;
+  }
 }
 
 // Status badges
