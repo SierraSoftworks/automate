@@ -9,13 +9,18 @@ api_key = "${{ env.GITHUB_API_KEY }}"
 # requests) so those writes are attributed to the App and scoped to whatever
 # repositories each installation grants, rather than to your whole account.
 #
-# Install it from https://your-automate-host/github/install/ — the wizard is
-# admin-gated by default and works exactly like the OAuth "Connect" flow. Install
-# it on as many user accounts and organizations as you like; personal accounts
-# cannot host an organization-level webhook, so an App is the only way to cover
-# them with a single endpoint. Automate keeps track of the installations from
-# GitHub's own `installation` events, so installs made directly on GitHub are
-# picked up too.
+# Install it from https://your-automate-host/integrations/github/setup — the
+# wizard is admin-gated by default and works exactly like the OAuth "Connect"
+# flow. Install it on as many user accounts and organizations as you like;
+# personal accounts cannot host an organization-level webhook, so an App is the
+# only way to cover them with a single endpoint. Automate keeps track of the
+# installations from GitHub's own `installation` events, so installs made
+# directly on GitHub are picked up too, and disconnecting one from the admin
+# area uninstalls it.
+#
+# This claims the integration id `github`, which shares a namespace with the
+# `[oauth2.*]` provider keys — an `[oauth2.github]` provider alongside this one
+# is refused at start-up rather than resolved arbitrarily.
 #
 # Point the App's webhook at https://your-automate-host/webhooks/github and set
 # its webhook secret to the same value as webhooks.github.secret.
@@ -43,11 +48,15 @@ api_key = "${{ env.ALPHAVANTAGE_API_KEY }}"
 [oauth2.spotify]
 name = "Spotify"
 jobs = ["spotify/yearly-playlist"]
-# The setup wizard at /oauth/spotify/ is admin-gated by default (you must sign in
-# as an admin to link the account). To let other people connect their own account,
-# set an `acl` here. It is evaluated like the admin ACL (`client_ip`, `method`,
-# `path`, `headers.*`, and, when OIDC is configured and the visitor is signed in,
-# `claims.*`). For example, `acl = 'true'` lets anyone connect without signing in.
+# The provider key doubles as the integration id, so this is set up at
+# /integrations/spotify/setup and its callback stays at /oauth/spotify/callback
+# (the redirect URI registered with Spotify).
+#
+# The wizard is admin-gated by default (you must sign in as an admin to link the
+# account). To let other people connect their own account, set an `acl` here. It
+# is evaluated like the admin ACL (`client_ip`, `method`, `path`, `headers.*`,
+# and, when OIDC is configured and the visitor is signed in, `claims.*`). For
+# example, `acl = 'true'` lets anyone connect without signing in.
 # acl = 'true'
 client_id = "${{ env.SPOTIFY_CLIENT_ID }}"
 client_secret = "${{ env.SPOTIFY_CLIENT_SECRET }}"
