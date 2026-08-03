@@ -2,4 +2,7 @@ target/
 config.toml
 *.sqlite
 
-ui/dist/*
+# The UI's build output, embedded into the agent at compile time. Nothing here is
+# tracked: `trunk build` wipes the directory on every run, and `agent/build.rs`
+# recreates it so the agent still compiles without a UI build.
+ui/dist/
