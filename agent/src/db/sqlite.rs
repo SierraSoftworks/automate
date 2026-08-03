@@ -60,6 +60,14 @@ const MIGRATIONS: &[&str] = &[
      WHERE partition IN ('rss/feed', 'github/releases') \
      AND json_valid(value) \
      AND json_type(value) = 'text';",
+    // Migration 8: record whether a message's key was chosen by the caller or
+    // generated for it. The row key has always been the caller's idempotency key
+    // when one was supplied and a random UUID otherwise, but the two were
+    // indistinguishable once written. Keeping the caller's key here lets a job
+    // re-enqueue itself under the identity it was given (see `JobContext::key`)
+    // without mistaking a generated UUID for a meaningful one. Rows written
+    // before this migration are left NULL, i.e. treated as generated.
+    "ALTER TABLE queues ADD COLUMN idempotencyKey TEXT",
 ];
 
 impl SqliteDatabase {
@@ -340,16 +348,21 @@ impl Queue for SqliteDatabase {
             .map(|d| chrono::Utc::now() + d)
             .unwrap_or_else(|| chrono::DateTime::UNIX_EPOCH);
 
-        let key = idempotency_key.unwrap_or_else(|| uuid::Uuid::new_v4().to_string().into());
+        // The row key is the caller's idempotency key when they supplied one, and
+        // a random UUID otherwise. `idempotencyKey` records which of the two it
+        // was, so a consumer can tell a meaningful identity from a generated one.
+        let key = idempotency_key
+            .clone()
+            .unwrap_or_else(|| uuid::Uuid::new_v4().to_string().into());
 
         self.connection
             .call(move |c| {
                 c.execute(
-                    "INSERT INTO queues (partition, key, payload, hiddenUntil, traceparent, tracestate) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+                    "INSERT INTO queues (partition, key, payload, hiddenUntil, traceparent, tracestate, idempotencyKey) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
                         ON CONFLICT (partition, key)
                         DO UPDATE
-                        SET payload = ?3, hiddenUntil = ?4, scheduledAt = CURRENT_TIMESTAMP, reservedBy = NULL, traceparent = ?5, tracestate = ?6",
-                    (partition, &key, &serialized, &hidden_until, trace_headers.get("traceparent"), trace_headers.get("tracestate")),
+                        SET payload = ?3, hiddenUntil = ?4, scheduledAt = CURRENT_TIMESTAMP, reservedBy = NULL, traceparent = ?5, tracestate = ?6, idempotencyKey = ?7",
+                    (partition, &key, &serialized, &hidden_until, trace_headers.get("traceparent"), trace_headers.get("tracestate"), idempotency_key.as_deref()),
                 )
             })
             .await
@@ -375,12 +388,13 @@ impl Queue for SqliteDatabase {
             let message = self.connection.call(move |c| {
                 let tx = c.transaction().or_system_err(ADVICE_DB_ERROR)?;
 
-                let message = tx.query_one("SELECT key, payload, scheduledAt, traceparent, tracestate FROM queues WHERE partition = ?1 AND hiddenUntil < CURRENT_TIMESTAMP LIMIT 1", [&partition], |row| {
+                let message = tx.query_one("SELECT key, payload, scheduledAt, traceparent, tracestate, idempotencyKey FROM queues WHERE partition = ?1 AND hiddenUntil < CURRENT_TIMESTAMP LIMIT 1", [&partition], |row| {
                     let key: String = row.get(0)?;
                     let payload_str: String = row.get(1)?;
                     let scheduled_at: chrono::DateTime<chrono::Utc> = row.get(2)?;
                     let traceparent: Option<String> = row.get(3)?;
                     let tracestate: Option<String> = row.get(4)?;
+                    let idempotency_key: Option<String> = row.get(5)?;
 
                     let payload: T = serde_json::from_str(&payload_str).map_err(|e| {
                         rusqlite::Error::FromSqlConversionFailure(
@@ -398,6 +412,7 @@ impl Queue for SqliteDatabase {
                         scheduled_at,
                         traceparent,
                         tracestate,
+                        idempotency_key,
                     })
                 }).optional().or_system_err(ADVICE_DB_ERROR)?;
 
@@ -436,7 +451,7 @@ impl Queue for SqliteDatabase {
                 let tx = c.transaction().or_system_err(ADVICE_DB_ERROR)?;
 
                 let message = tx.query_one(
-                    "SELECT partition, key, payload, scheduledAt, traceparent, tracestate FROM queues WHERE hiddenUntil < CURRENT_TIMESTAMP ORDER BY scheduledAt LIMIT 1",
+                    "SELECT partition, key, payload, scheduledAt, traceparent, tracestate, idempotencyKey FROM queues WHERE hiddenUntil < CURRENT_TIMESTAMP ORDER BY scheduledAt LIMIT 1",
                     [],
                     |row| {
                         let partition: String = row.get(0)?;
@@ -445,6 +460,7 @@ impl Queue for SqliteDatabase {
                         let scheduled_at: chrono::DateTime<chrono::Utc> = row.get(3)?;
                         let traceparent: Option<String> = row.get(4)?;
                         let tracestate: Option<String> = row.get(5)?;
+                        let idempotency_key: Option<String> = row.get(6)?;
 
                         let payload: serde_json::Value = serde_json::from_str(&payload_str).map_err(|e| {
                             rusqlite::Error::FromSqlConversionFailure(
@@ -462,6 +478,7 @@ impl Queue for SqliteDatabase {
                             scheduled_at,
                             traceparent,
                             tracestate,
+                            idempotency_key,
                         })
                     },
                 ).optional().or_system_err(ADVICE_DB_ERROR)?;
@@ -550,7 +567,7 @@ impl Queue for SqliteDatabase {
                 let mut stmt = c
                     .prepare(
                         "SELECT key, payload, scheduledAt, hiddenUntil, reservedBy, \
-                         traceparent, tracestate \
+                         traceparent, tracestate, idempotencyKey \
                          FROM queues WHERE partition = ?1 \
                          ORDER BY scheduledAt ASC LIMIT ?2",
                     )
@@ -565,6 +582,7 @@ impl Queue for SqliteDatabase {
                         let reserved_by: Option<String> = row.get(4)?;
                         let traceparent: Option<String> = row.get(5)?;
                         let tracestate: Option<String> = row.get(6)?;
+                        let idempotency_key: Option<String> = row.get(7)?;
 
                         let payload: T = serde_json::from_str(&payload_str).map_err(|e| {
                             rusqlite::Error::FromSqlConversionFailure(
@@ -582,6 +600,7 @@ impl Queue for SqliteDatabase {
                             reserved_by,
                             traceparent,
                             tracestate,
+                            idempotency_key,
                         })
                     })
                     .or_system_err(ADVICE_DB_ERROR)?;
@@ -735,6 +754,68 @@ mod tests {
             })
             .await
             .unwrap();
+    }
+
+    /// A caller-supplied idempotency key is both the row key *and* recorded as
+    /// the message's identity, so a consumer can re-enqueue under it. A generated
+    /// key is only the row key, and must not be mistaken for a meaningful one.
+    #[tokio::test]
+    async fn test_queue_distinguishes_supplied_keys_from_generated_ones() {
+        let db = SqliteDatabase::open_in_memory().await.unwrap();
+
+        db.enqueue("test_queue", "explicit", Some("my-key".into()), None)
+            .await
+            .unwrap();
+
+        let peeked: Vec<super::super::PeekedMessage<String>> =
+            db.peek("test_queue", 10).await.unwrap();
+        assert_eq!(peeked.len(), 1);
+        assert_eq!(peeked[0].key, "my-key");
+        assert_eq!(peeked[0].idempotency_key.as_deref(), Some("my-key"));
+
+        let job: QueueMessage<String> = db
+            .dequeue("test_queue", chrono::Duration::seconds(60))
+            .await
+            .unwrap();
+        assert_eq!(job.idempotency_key.as_deref(), Some("my-key"));
+        db.complete("test_queue", job).await.unwrap();
+
+        db.enqueue("test_queue", "generated", None, None)
+            .await
+            .unwrap();
+
+        let job: QueueMessage<String> = db
+            .dequeue("test_queue", chrono::Duration::seconds(60))
+            .await
+            .unwrap();
+        assert_eq!(
+            job.idempotency_key, None,
+            "a generated key identifies the row but carries no meaning"
+        );
+        assert!(
+            !job.key.is_empty(),
+            "the row key is still populated with the generated UUID"
+        );
+    }
+
+    /// Re-enqueueing under the same key must keep the message's identity rather
+    /// than clearing it, since the upsert path rewrites every other column.
+    #[tokio::test]
+    async fn test_queue_upsert_preserves_the_supplied_key() {
+        let db = SqliteDatabase::open_in_memory().await.unwrap();
+
+        db.enqueue("test_queue", "first", Some("my-key".into()), None)
+            .await
+            .unwrap();
+        db.enqueue("test_queue", "second", Some("my-key".into()), None)
+            .await
+            .unwrap();
+
+        let peeked: Vec<super::super::PeekedMessage<String>> =
+            db.peek("test_queue", 10).await.unwrap();
+        assert_eq!(peeked.len(), 1, "the second enqueue replaced the first");
+        assert_eq!(peeked[0].payload, "second");
+        assert_eq!(peeked[0].idempotency_key.as_deref(), Some("my-key"));
     }
 
     #[tokio::test]
