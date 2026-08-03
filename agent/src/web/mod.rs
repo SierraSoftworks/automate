@@ -1,24 +1,36 @@
+use std::sync::Arc;
+
 use actix_web::{App, HttpServer, web};
 use human_errors::ResultExt;
 
+use crate::integrations::Registry;
 use crate::prelude::Services;
+use crate::services::AppServices;
 
 mod api;
-mod github_app;
 mod helpers;
+mod integrations;
 mod oauth;
 mod telemetry;
 mod ui;
 mod webhooks;
 
-#[cfg(test)]
-pub use github_app::INSTALLATIONS_PARTITION;
-pub use github_app::{forget_installation, record_installation};
 pub use oauth::{OAuth2Config, OAuth2RefreshToken, refresh_or_notify};
 
-pub async fn run_web_server<S: Services + Clone + Send + Sync + 'static>(
-    services: S,
-) -> Result<(), human_errors::Error> {
+/// Concrete over [`AppServices`] rather than generic over [`Services`].
+///
+/// The integration registry has to name one concrete services type to stay
+/// object-safe (as [`crate::job::JobRunnable`] does), and its routes extract that
+/// type. A generic parameter here would still compile but would leave the
+/// integration routes looking for application data that was never registered, so
+/// the constraint is stated in the signature instead of being discovered at
+/// runtime.
+pub async fn run_web_server(services: AppServices) -> Result<(), human_errors::Error> {
+    // Built once, up front, so a duplicate integration id is a start-up failure
+    // rather than a route that quietly resolves to whichever registration the
+    // linker emitted first.
+    let registry = Arc::new(Registry::new(&services.config())?);
+
     if let Some((mut addr, port)) = services.config().web.address.split_once(':') {
         if addr.is_empty() {
             addr = "0.0.0.0";
@@ -32,11 +44,15 @@ pub async fn run_web_server<S: Services + Clone + Send + Sync + 'static>(
         let server = HttpServer::new(move || {
             App::new()
                 .app_data(web::Data::new(services.clone()))
-                .wrap(telemetry::TracingLogger::<S>::new())
-                .service(api::configure::<S>())
-                .service(oauth::configure::<S>())
-                .service(github_app::configure::<S>())
-                .route("/webhooks/{kind:.*}", web::post().to(webhooks::handle::<S>))
+                .app_data(web::Data::from(registry.clone()))
+                .wrap(telemetry::TracingLogger::<AppServices>::new())
+                .service(api::configure())
+                .service(integrations::configure())
+                .service(integrations::configure_oauth_callback())
+                .route(
+                    "/webhooks/{kind:.*}",
+                    web::post().to(webhooks::handle::<AppServices>),
+                )
                 .route("/robots.txt", web::get().to(ui::robots))
                 .default_service(web::get().to(ui::serve))
         })

@@ -19,6 +19,14 @@ const JWT_SKEW_SECONDS: i64 = 60;
 
 const TOKEN_CACHE_PARTITION: &str = "github/installation-token";
 
+/// GitHub's maximum page size for the installations listing.
+const INSTALLATIONS_PER_PAGE: usize = 100;
+
+/// A backstop so a misbehaving API cannot spin the listing forever. At 100 per
+/// page this is far beyond any plausible number of installations for a single
+/// Automate instance.
+const MAX_INSTALLATION_PAGES: usize = 20;
+
 /// An account which has installed the GitHub App.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GitHubInstallation {
@@ -186,50 +194,120 @@ impl GitHubAppClient {
     }
 
     /// Lists every account the App is currently installed on.
+    ///
+    /// Paginated, because both the install wizard and the connections listing
+    /// need the *complete* set: the wizard confirms a just-created installation
+    /// against it, and would reject a legitimate install that happened to fall
+    /// beyond the first page.
     #[instrument("services.github_app.installations", skip(self), err(Display))]
     pub async fn installations(&self) -> Result<Vec<GitHubInstallation>, human_errors::Error> {
+        let mut installations = Vec::new();
+
+        for page in 1..=MAX_INSTALLATION_PAGES {
+            let response = self
+                .http_client
+                .get(format!("{}/app/installations", self.api_url))
+                .query(&[
+                    ("per_page", INSTALLATIONS_PER_PAGE.to_string()),
+                    ("page", page.to_string()),
+                ])
+                .bearer_auth(self.jwt()?)
+                .header("Accept", "application/vnd.github+json")
+                .header("X-GitHub-Api-Version", "2022-11-28")
+                .send()
+                .await
+                .wrap_user_err(
+                    "We were unable to list the GitHub App's installations.",
+                    &[
+                        "Make sure that your network connection is working properly.",
+                        "Check https://www.githubstatus.com/ for any ongoing issues with GitHub's services.",
+                    ],
+                )?;
+
+            if !response.status().is_success() {
+                return Err(human_errors::user(
+                    format!(
+                        "Failed to list GitHub App installations (status {}).",
+                        response.status()
+                    ),
+                    &[
+                        "Ensure that connections.github.app.app_id matches the App the private key belongs to.",
+                        "Check that the system clock on this host is accurate, since App JWTs are short-lived.",
+                    ],
+                ));
+            }
+
+            let batch: Vec<InstallationResponse> = response.json().await.wrap_system_err(
+                "Failed to read GitHub's installations response.",
+                &["Please report this issue to the dev team on GitHub so the model can be updated."],
+            )?;
+
+            let exhausted = batch.len() < INSTALLATIONS_PER_PAGE;
+
+            installations.extend(batch.into_iter().map(|i| GitHubInstallation {
+                id: i.id,
+                account: i.account.login,
+                account_type: i.account.type_,
+            }));
+
+            if exhausted {
+                return Ok(installations);
+            }
+        }
+
+        // Far beyond any plausible number of installations for one Automate
+        // instance; stopping is better than looping forever on a misbehaving API.
+        warn!(
+            "Stopped listing GitHub App installations after {MAX_INSTALLATION_PAGES} pages; the list may be incomplete."
+        );
+
+        Ok(installations)
+    }
+
+    /// Uninstalls the App from an account, revoking the access it was granted.
+    ///
+    /// An installation GitHub has already forgotten is treated as success, so
+    /// that removing a stale entry twice is not an error.
+    #[instrument("services.github_app.uninstall", skip(self), err(Display))]
+    pub async fn uninstall(&self, installation_id: u64) -> Result<(), human_errors::Error> {
         let response = self
             .http_client
-            .get(format!("{}/app/installations", self.api_url))
+            .delete(format!(
+                "{}/app/installations/{installation_id}",
+                self.api_url
+            ))
             .bearer_auth(self.jwt()?)
             .header("Accept", "application/vnd.github+json")
             .header("X-GitHub-Api-Version", "2022-11-28")
             .send()
             .await
             .wrap_user_err(
-                "We were unable to list the GitHub App's installations.",
+                "We were unable to uninstall the GitHub App.",
                 &[
                     "Make sure that your network connection is working properly.",
                     "Check https://www.githubstatus.com/ for any ongoing issues with GitHub's services.",
                 ],
             )?;
 
+        if response.status() == reqwest::StatusCode::NOT_FOUND {
+            debug!("GitHub App installation {installation_id} was already removed.");
+            return Ok(());
+        }
+
         if !response.status().is_success() {
             return Err(human_errors::user(
                 format!(
-                    "Failed to list GitHub App installations (status {}).",
+                    "Failed to uninstall GitHub App installation {installation_id} (status {}).",
                     response.status()
                 ),
                 &[
                     "Ensure that connections.github.app.app_id matches the App the private key belongs to.",
-                    "Check that the system clock on this host is accurate, since App JWTs are short-lived.",
+                    "You can also remove the installation from the account's GitHub settings.",
                 ],
             ));
         }
 
-        let installations: Vec<InstallationResponse> = response.json().await.wrap_system_err(
-            "Failed to read GitHub's installations response.",
-            &["Please report this issue to the dev team on GitHub so the model can be updated."],
-        )?;
-
-        Ok(installations
-            .into_iter()
-            .map(|i| GitHubInstallation {
-                id: i.id,
-                account: i.account.login,
-                account_type: i.account.type_,
-            })
-            .collect())
+        Ok(())
     }
 }
 
@@ -261,7 +339,7 @@ struct InstallationAccount {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use wiremock::matchers::{method, path};
+    use wiremock::matchers::{method, path, query_param};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     #[test]
@@ -368,5 +446,127 @@ mod tests {
                 },
             ]
         );
+    }
+
+    /// A full page means there may be more. The install wizard confirms a
+    /// just-created installation against this list, so stopping at the first page
+    /// would reject a legitimate install on a busy App.
+    #[tokio::test]
+    async fn installations_beyond_the_first_page_are_collected() {
+        let server = MockServer::start().await;
+        let services = crate::testing::mock_services()
+            .await
+            .expect("build mock services");
+
+        let first_page: Vec<serde_json::Value> = (1..=INSTALLATIONS_PER_PAGE)
+            .map(|i| {
+                serde_json::json!({ "id": i, "account": { "login": format!("acct{i}"), "type": "User" } })
+            })
+            .collect();
+
+        Mock::given(method("GET"))
+            .and(path("/app/installations"))
+            .and(query_param("page", "1"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(first_page))
+            .mount(&server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/app/installations"))
+            .and(query_param("page", "2"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                { "id": 999, "account": { "login": "last", "type": "Organization" } },
+            ])))
+            .mount(&server)
+            .await;
+
+        let client = GitHubAppClient::new_for_test("123", server.uri(), services.http_client());
+        let installations = client.installations().await.expect("list installations");
+
+        assert_eq!(installations.len(), INSTALLATIONS_PER_PAGE + 1);
+        assert_eq!(installations.last().unwrap().account, "last");
+    }
+
+    /// A short page means the listing is exhausted, so we must not ask for
+    /// another one.
+    #[tokio::test]
+    async fn a_short_page_ends_the_listing() {
+        let server = MockServer::start().await;
+        let services = crate::testing::mock_services()
+            .await
+            .expect("build mock services");
+
+        Mock::given(method("GET"))
+            .and(path("/app/installations"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                { "id": 1, "account": { "login": "only", "type": "User" } },
+            ])))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let client = GitHubAppClient::new_for_test("123", server.uri(), services.http_client());
+        assert_eq!(client.installations().await.unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn uninstalling_revokes_the_installation() {
+        let server = MockServer::start().await;
+        let services = crate::testing::mock_services()
+            .await
+            .expect("build mock services");
+
+        Mock::given(method("DELETE"))
+            .and(path("/app/installations/42"))
+            .respond_with(ResponseTemplate::new(204))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let client = GitHubAppClient::new_for_test("123", server.uri(), services.http_client());
+        client.uninstall(42).await.expect("uninstall");
+    }
+
+    /// Removing a stale entry is exactly when an installation is already gone, so
+    /// a 404 has to be success rather than an error the operator cannot resolve.
+    #[tokio::test]
+    async fn uninstalling_something_already_gone_succeeds() {
+        let server = MockServer::start().await;
+        let services = crate::testing::mock_services()
+            .await
+            .expect("build mock services");
+
+        Mock::given(method("DELETE"))
+            .and(path("/app/installations/42"))
+            .respond_with(ResponseTemplate::new(404))
+            .mount(&server)
+            .await;
+
+        let client = GitHubAppClient::new_for_test("123", server.uri(), services.http_client());
+        client
+            .uninstall(42)
+            .await
+            .expect("a missing installation is not an error");
+    }
+
+    #[tokio::test]
+    async fn a_refused_uninstall_is_reported() {
+        let server = MockServer::start().await;
+        let services = crate::testing::mock_services()
+            .await
+            .expect("build mock services");
+
+        Mock::given(method("DELETE"))
+            .and(path("/app/installations/42"))
+            .respond_with(ResponseTemplate::new(403))
+            .mount(&server)
+            .await;
+
+        let client = GitHubAppClient::new_for_test("123", server.uri(), services.http_client());
+        let err = client
+            .uninstall(42)
+            .await
+            .expect_err("a 403 should surface");
+        assert!(err.to_string().contains("403"));
     }
 }

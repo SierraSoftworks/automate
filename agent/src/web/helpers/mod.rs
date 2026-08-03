@@ -7,3 +7,4 @@
 
 pub mod oidc;
 pub mod request;
+pub mod wizard;

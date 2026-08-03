@@ -154,11 +154,15 @@ impl GitHubWebhook {
                     "GitHub App installed on '{}' (installation {}).",
                     installation.account, installation.id
                 );
-                crate::web::record_installation(&installation, services).await
+                crate::integrations::github_app::record_installation(&installation, services).await
             }
             "deleted" | "suspend" => {
                 info!("GitHub App removed from '{}'.", installation.account);
-                crate::web::forget_installation(&installation.account, services).await
+                crate::integrations::github_app::forget_installation(
+                    &installation.account,
+                    services,
+                )
+                .await
             }
             other => {
                 debug!("Ignoring GitHub installation event '{other}'.");
@@ -1140,7 +1144,7 @@ mod tests {
         let recorded = services
             .kv()
             .get::<crate::services::GitHubInstallation>(
-                crate::web::INSTALLATIONS_PARTITION,
+                crate::integrations::github_app::INSTALLATIONS_PARTITION,
                 "notheotherben",
             )
             .await
@@ -1155,7 +1159,7 @@ mod tests {
             services
                 .kv()
                 .get::<crate::services::GitHubInstallation>(
-                    crate::web::INSTALLATIONS_PARTITION,
+                    crate::integrations::github_app::INSTALLATIONS_PARTITION,
                     "notheotherben",
                 )
                 .await

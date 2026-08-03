@@ -2,6 +2,7 @@ mod collectors;
 mod config;
 mod db;
 mod filter;
+mod integrations;
 mod job;
 mod jobs;
 mod parsers;
