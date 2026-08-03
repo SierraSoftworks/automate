@@ -5,9 +5,11 @@ use crate::config::Config;
 mod alphavantage;
 pub mod debounce;
 mod github;
+mod github_app;
 
 pub use alphavantage::AlphaVantageClient;
 pub use github::{AutoMergeOutcome, GitHubClient};
+pub use github_app::{GitHubAppClient, GitHubInstallation};
 use tracing_batteries::Session;
 
 /// The concrete [`Services`] implementation used by the running application and

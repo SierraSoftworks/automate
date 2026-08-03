@@ -80,7 +80,18 @@ impl Job for SpotifyYearlyPlaylistWorkflow {
             }
         }
 
-        Self::dispatch_delayed(token, Some(user.id.into()), TimeDelta::hours(1), services).await?;
+        // Re-enqueue under the key we were given, so a connection keeps the same
+        // identity for as long as it lives. The very first message comes from the
+        // OAuth callback with a generated key (it has no idea whose account this
+        // is yet), so on that first run we fall back to the Spotify account id —
+        // which also collapses a duplicate connection of the same account onto
+        // the existing one, since `enqueue` upserts on the key.
+        let key: std::borrow::Cow<'static, str> = match ctx.key() {
+            Some(key) => key.to_string().into(),
+            None => user.id.clone().into(),
+        };
+
+        Self::dispatch_delayed(token, Some(key), TimeDelta::hours(1), services).await?;
 
         Ok(())
     }

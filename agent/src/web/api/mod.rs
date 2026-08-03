@@ -56,7 +56,7 @@ pub fn json_error(status: actix_web::http::StatusCode, message: impl ToString) -
 
 /// Registers the `/api/v1` routes. The `auth` endpoints are public; everything
 /// else is wrapped in the [`api_auth`] middleware.
-pub fn configure<S: Services + Clone + Send + Sync + 'static>() -> actix_web::Scope<
+pub fn configure() -> actix_web::Scope<
     impl actix_web::dev::ServiceFactory<
         ServiceRequest,
         Config = (),
@@ -65,6 +65,8 @@ pub fn configure<S: Services + Clone + Send + Sync + 'static>() -> actix_web::Sc
         InitError = (),
     >,
 > {
+    type S = crate::services::AppServices;
+
     web::scope("/api/v1")
         .service(
             web::scope("/auth")
@@ -85,15 +87,24 @@ pub fn configure<S: Services + Clone + Send + Sync + 'static>() -> actix_web::Sc
                 )
                 .route("/queue/{partition}", web::delete().to(queue::delete::<S>))
                 // The setup wizard is launched from the admin SPA: list the
-                // configured providers and mint a popup authorization URL. Both
-                // are admin-gated by `api_auth`.
+                // configured integrations, mint a popup authorization URL, and
+                // manage the resulting connections. All admin-gated by
+                // `api_auth`.
                 .route(
-                    "/oauth",
-                    web::get().to(crate::web::oauth::list_providers::<S>),
+                    "/integrations",
+                    web::get().to(crate::web::integrations::list),
                 )
                 .route(
-                    "/oauth/{provider}/start",
-                    web::post().to(crate::web::oauth::start::<S>),
+                    "/integrations/{integration}/connections",
+                    web::get().to(crate::web::integrations::list_connections),
+                )
+                .route(
+                    "/integrations/{integration}/connections/{connection}",
+                    web::delete().to(crate::web::integrations::disconnect),
+                )
+                .route(
+                    "/integrations/{integration}/setup/start",
+                    web::post().to(crate::web::integrations::start),
                 ),
         )
 }
@@ -201,7 +212,7 @@ mod tests {
         let app = test::init_service(
             App::new()
                 .app_data(web::Data::new(service_with_acl("false").await))
-                .service(configure::<ServicesContainer<SqliteDatabase>>()),
+                .service(configure()),
         )
         .await;
 
@@ -219,7 +230,7 @@ mod tests {
         let app = test::init_service(
             App::new()
                 .app_data(web::Data::new(service_with_acl("true").await))
-                .service(configure::<ServicesContainer<SqliteDatabase>>()),
+                .service(configure()),
         )
         .await;
 
@@ -237,7 +248,7 @@ mod tests {
         let app = test::init_service(
             App::new()
                 .app_data(web::Data::new(service_with_acl("true").await))
-                .service(configure::<ServicesContainer<SqliteDatabase>>()),
+                .service(configure()),
         )
         .await;
 

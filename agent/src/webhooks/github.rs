@@ -136,6 +136,40 @@ impl GitHubWebhook {
             .find(|(key, _)| key.eq_ignore_ascii_case(name))
             .map(|(_, value)| value.as_str())
     }
+
+    async fn track_installation(
+        job: &WebhookEvent,
+        services: &(impl Services + Send + Sync + 'static),
+    ) -> Result<(), human_errors::Error> {
+        let event: GitHubInstallationEvent = job.json()?;
+        let installation = crate::services::GitHubInstallation {
+            id: event.installation.id,
+            account: event.installation.account.login.clone(),
+            account_type: event.installation.account.type_.clone(),
+        };
+
+        match event.action.as_str() {
+            "created" | "new_permissions_accepted" | "unsuspend" => {
+                info!(
+                    "GitHub App installed on '{}' (installation {}).",
+                    installation.account, installation.id
+                );
+                crate::integrations::github_app::record_installation(&installation, services).await
+            }
+            "deleted" | "suspend" => {
+                info!("GitHub App removed from '{}'.", installation.account);
+                crate::integrations::github_app::forget_installation(
+                    &installation.account,
+                    services,
+                )
+                .await
+            }
+            other => {
+                debug!("Ignoring GitHub installation event '{other}'.");
+                Ok(())
+            }
+        }
+    }
 }
 
 crate::register_job!(GitHubWebhook);
@@ -193,6 +227,13 @@ impl Job for GitHubWebhook {
             return Ok(());
         }
 
+        // GitHub reports installs and uninstalls directly, which keeps the
+        // registry accurate even when someone installs the App from GitHub
+        // rather than through the wizard.
+        if event_type == "installation" {
+            return Self::track_installation(job, services).await;
+        }
+
         let mut handled = false;
 
         if event_type == "pull_request" && github.auto_merge.is_some() {
@@ -237,6 +278,11 @@ pub struct GitHubPullRequestEvent {
     pub repository: GitHubWebhookRepository,
     #[serde(default)]
     pub sender: Option<GitHubWebhookUser>,
+
+    /// Present when the delivery came from a GitHub App installation, which is
+    /// what lets management calls authenticate as the App rather than a PAT.
+    #[serde(default)]
+    pub installation: Option<GitHubWebhookInstallation>,
 }
 
 impl Display for GitHubPullRequestEvent {
@@ -300,6 +346,30 @@ pub struct GitHubWebhookRepository {
 #[derive(Clone, Serialize, Deserialize)]
 pub struct GitHubWebhookUser {
     pub login: String,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+pub struct GitHubWebhookInstallation {
+    pub id: u64,
+}
+
+#[derive(Deserialize)]
+struct GitHubInstallationEvent {
+    action: String,
+    installation: GitHubInstallationDetail,
+}
+
+#[derive(Deserialize)]
+struct GitHubInstallationDetail {
+    id: u64,
+    account: GitHubInstallationAccount,
+}
+
+#[derive(Deserialize)]
+struct GitHubInstallationAccount {
+    login: String,
+    #[serde(rename = "type", default)]
+    type_: String,
 }
 
 /// What prompted a subject to need the user's attention.
@@ -1028,5 +1098,74 @@ mod tests {
 
         assert_eq!(dispatched(&services).await, 0);
         assert_eq!(refreshes(&services).await, 0);
+    }
+
+    #[tokio::test]
+    async fn installation_events_maintain_the_registry() {
+        let services = services_with("secret", None).await;
+
+        let payload = |action: &str| {
+            serde_json::json!({
+                "action": action,
+                "installation": {
+                    "id": 42,
+                    "account": { "login": "notheotherben", "type": "User" },
+                },
+            })
+            .to_string()
+        };
+
+        let deliver = async |body: String,
+                             services: &crate::services::ServicesContainer<
+            crate::db::SqliteDatabase,
+        >| {
+            let job = WebhookEvent {
+                body: body.clone(),
+                query: String::new(),
+                headers: [
+                    ("X-GitHub-Event".to_string(), "installation".to_string()),
+                    ("X-Hub-Signature-256".to_string(), sign("secret", &body)),
+                ]
+                .into_iter()
+                .collect::<HashMap<_, _>>(),
+            };
+
+            GitHubWebhook
+                .handle(
+                    JobContext::new(services.clone(), chrono::Utc::now(), None, None),
+                    &job,
+                )
+                .await
+                .expect("the installation event should be handled");
+        };
+
+        deliver(payload("created"), &services).await;
+
+        let recorded = services
+            .kv()
+            .get::<crate::services::GitHubInstallation>(
+                crate::integrations::github_app::INSTALLATIONS_PARTITION,
+                "notheotherben",
+            )
+            .await
+            .expect("read the registry")
+            .expect("the installation should be recorded");
+        assert_eq!(recorded.id, 42);
+        assert_eq!(recorded.account_type, "User");
+
+        deliver(payload("deleted"), &services).await;
+
+        assert!(
+            services
+                .kv()
+                .get::<crate::services::GitHubInstallation>(
+                    crate::integrations::github_app::INSTALLATIONS_PARTITION,
+                    "notheotherben",
+                )
+                .await
+                .expect("read the registry")
+                .is_none(),
+            "uninstalling should forget the account"
+        );
     }
 }

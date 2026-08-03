@@ -244,8 +244,34 @@ pub struct WorkflowConfigs {
 
 #[derive(Default, Clone, Deserialize)]
 pub struct GitHubConfig {
+    /// A classic personal access token. This cannot be replaced by the App: the
+    /// notifications API accepts classic PATs only, and the releases workflow
+    /// reads repositories no installation of ours covers.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub api_key: Option<String>,
+
+    /// The GitHub App used for management calls, so that writes are attributed
+    /// to the App and scoped to the repositories each installation grants.
+    #[serde(default)]
+    pub app: Option<GitHubAppConfig>,
+}
+
+#[derive(Clone, Deserialize)]
+pub struct GitHubAppConfig {
+    /// The App's numeric ID, from its settings page.
+    pub app_id: String,
+
+    /// The App's PEM-encoded private key, including its BEGIN and END lines.
+    pub private_key: String,
+
+    /// The App's URL slug, used to build the link the install wizard sends
+    /// people to.
+    pub slug: String,
+
+    /// Who may use the install wizard. Evaluated exactly like the OAuth2
+    /// providers' `acl`, and admin-gated when omitted.
+    #[serde(default)]
+    pub acl: Option<Filter>,
 }
 
 #[derive(Default, Clone, Deserialize)]

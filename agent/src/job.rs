@@ -23,6 +23,7 @@ where
 {
     services: S,
     scheduled_at: DateTime<Utc>,
+    key: Option<String>,
     #[allow(dead_code)]
     traceparent: Option<String>,
     #[allow(dead_code)]
@@ -42,9 +43,18 @@ where
         Self {
             services,
             scheduled_at,
+            key: None,
             traceparent,
             tracestate,
         }
+    }
+
+    /// Attaches the idempotency key the message was enqueued with. Only the job
+    /// consumer sets this; a context built for a test or for an inline dispatch
+    /// has no queued message behind it and so has no key.
+    pub fn with_key(mut self, key: Option<String>) -> Self {
+        self.key = key;
+        self
     }
 
     /// The application services available to the job.
@@ -56,6 +66,19 @@ where
     /// handler needs to pass owned services to a helper.
     pub fn into_services(self) -> S {
         self.services
+    }
+
+    /// The idempotency key this message was enqueued under, if the caller who
+    /// enqueued it chose one.
+    ///
+    /// This is deliberately `None` when the key was generated for the message,
+    /// because a random UUID identifies the row but says nothing about *what*
+    /// the message is. A recurring job that re-enqueues itself should prefer this
+    /// key when it is present, so that the identity it was given survives across
+    /// runs instead of being replaced by one the handler invents.
+    #[allow(dead_code)]
+    pub fn key(&self) -> Option<&str> {
+        self.key.as_deref()
     }
 
     /// The time at which the underlying message was originally enqueued.
@@ -411,7 +434,8 @@ impl JobHost {
             item.scheduled_at,
             item.traceparent.clone(),
             item.tracestate.clone(),
-        );
+        )
+        .with_key(item.idempotency_key.clone());
 
         match handler
             .handle(ctx, &item.payload)
@@ -504,6 +528,17 @@ mod tests {
             ctx.services()
                 .kv()
                 .set("test/dynamic-dispatch", job.id.clone(), job.value.clone())
+                .await?;
+
+            // Recorded so tests can assert what the consumer surfaced as the
+            // message's identity.
+            ctx.services()
+                .kv()
+                .set(
+                    "test/dynamic-dispatch",
+                    format!("{}/key", job.id),
+                    ctx.key().unwrap_or("<generated>").to_string(),
+                )
                 .await?;
             Ok(())
         }
@@ -647,6 +682,55 @@ mod tests {
             next.is_err(),
             "expected the queue to be empty after the job completed"
         );
+    }
+
+    /// The consumer surfaces the key a message was enqueued under, but only when
+    /// the enqueuer chose it — a generated UUID would be a misleading identity
+    /// for a recurring job to re-enqueue itself under.
+    #[tokio::test]
+    async fn test_consumer_surfaces_only_supplied_message_keys() {
+        static TEST_JOB: TestJob = TestJob;
+
+        let services = ServicesContainer::new_mock().await.unwrap();
+
+        for (id, key) in [("k4", Some("spotify-user".into())), ("k5", None)] {
+            services
+                .queue()
+                .enqueue(
+                    "test/dynamic-dispatch",
+                    TestPayload {
+                        id: id.into(),
+                        value: "v".into(),
+                    },
+                    key,
+                    None,
+                )
+                .await
+                .unwrap();
+        }
+
+        for _ in 0..2 {
+            let item = services
+                .queue()
+                .dequeue_any(chrono::Duration::seconds(60))
+                .await
+                .unwrap();
+            JobHost::process(&TEST_JOB, item, services.clone(), tracing::Span::none()).await;
+        }
+
+        let supplied: Option<String> = services
+            .kv()
+            .get("test/dynamic-dispatch", "k4/key")
+            .await
+            .unwrap();
+        assert_eq!(supplied.as_deref(), Some("spotify-user"));
+
+        let generated: Option<String> = services
+            .kv()
+            .get("test/dynamic-dispatch", "k5/key")
+            .await
+            .unwrap();
+        assert_eq!(generated.as_deref(), Some("<generated>"));
     }
 
     #[tokio::test]

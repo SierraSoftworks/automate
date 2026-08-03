@@ -72,21 +72,35 @@ Some workflows act on third-party accounts (for example Spotify) that you link
 by walking through an OAuth flow. The agent drives the confidential exchange
 server-side and stores the resulting refresh token.
 
-Admin-gated providers (the default) are launched from the **Connect** dropdown
+Every external service you connect — an OAuth2 provider, the GitHub App — goes
+through the same setup wizard, so what follows applies to all of them. The agent
+lists what is configured at `GET /api/v1/integrations`.
+
+Admin-gated integrations (the default) are launched from the **Connect** dropdown
 in the admin area's toolbar: the SPA calls the bearer-authenticated
-`POST /api/v1/oauth/<provider>/start`, which returns a provider authorization
-URL the SPA opens in a popup. The provider redirects back to the agent's
-server-rendered `/oauth/<provider>/callback`, which stores the token. A provider
-can instead opt into self-service access by setting its own `acl` under
-`[oauth2.<provider>]`, evaluated just like the admin ACL — for example
-`acl = 'true'` lets anyone connect their own account without signing in. A
-self-service provider can also be linked directly at `/oauth/<provider>/` as a
-top-level navigation (no admin bearer required); an admin-gated provider opened
-that way is directed to the admin area instead, except when OIDC is disabled, in
-which case the admin ACL is evaluated on the request directly as before. Each
-flow is bound to the browser that began it by a single-use `state` value (held
-in a transient cookie scoped to the provider's callback path) to prevent login
-CSRF.
+`POST /api/v1/integrations/<id>/setup/start`, which returns a provider
+authorization URL the SPA opens in a popup. The provider redirects back to the
+agent's server-rendered callback, which records the connection. An integration
+can instead opt into self-service access by setting its own `acl` — under
+`[oauth2.<provider>]` or `[connections.github.app]` — evaluated just like the
+admin ACL, so `acl = 'true'` lets anyone connect their own account without
+signing in. A self-service integration can also be linked directly at
+`/integrations/<id>/setup` as a top-level navigation (no admin bearer required);
+an admin-gated one opened that way is directed to the admin area instead, except
+when OIDC is disabled, in which case the admin ACL is evaluated on the request
+directly. Each flow is bound to the browser that began it by a single-use
+`state` value (held in a transient cookie scoped to the integration's callback
+path) to prevent login CSRF.
+
+The accounts connected to an integration are listed at
+`GET /api/v1/integrations/<id>/connections` and shown in the admin area, where
+each can be severed. Disconnecting is not undoable from Automate: for GitHub it
+uninstalls the App from the account, and for an OAuth2 provider it discards the
+stored credential.
+
+OAuth2 callbacks keep their original `/oauth/<provider>/callback` path, since the
+redirect URI is registered with each provider and cannot be moved without
+reconfiguring the provider's application.
 
 ## Project layout
 
@@ -118,8 +132,8 @@ Then, from the `ui/` directory, start the dev server with live reload:
 trunk serve
 ```
 
-`trunk serve` proxies `/api/v1` and `/oauth` to a locally running agent
-(see `ui/Trunk.toml`). To preview the interface **without** a backend,
+`trunk serve` proxies `/api/v1`, `/integrations` and `/oauth` to a locally
+running agent (see `ui/Trunk.toml`). To preview the interface **without** a backend,
 append `?demo` to the URL — the app then renders baked-in sample data.
 
 To produce the production bundle that the agent embeds:

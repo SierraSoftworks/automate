@@ -142,6 +142,10 @@ pub struct PeekedMessage<T> {
     pub reserved_by: Option<String>,
     pub traceparent: Option<String>,
     pub tracestate: Option<String>,
+    /// The idempotency key the message was enqueued with, if the caller supplied
+    /// one. `None` means [`Queue::enqueue`] generated the key, so it carries no
+    /// meaning beyond identifying the row.
+    pub idempotency_key: Option<String>,
 }
 
 #[allow(dead_code)]
@@ -179,6 +183,11 @@ pub struct QueueMessage<T> {
     pub scheduled_at: chrono::DateTime<chrono::Utc>,
     pub traceparent: Option<String>,
     pub tracestate: Option<String>,
+    /// The idempotency key the message was enqueued with, if the caller supplied
+    /// one. `None` means [`Queue::enqueue`] generated the key, so it carries no
+    /// meaning beyond identifying the row. Surfaced to handlers as
+    /// [`crate::job::JobContext::key`].
+    pub idempotency_key: Option<String>,
 }
 
 impl<T> OpenTelemetryPropagationExtractor for QueueMessage<T> {

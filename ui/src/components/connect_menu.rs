@@ -1,14 +1,15 @@
 //! The Connect menu: a themed dropdown shown beside the page's Refresh control
-//! that lists the agent's configured OAuth integration providers. Selecting a
-//! provider starts a bearer-authenticated request that mints a provider
-//! authorization URL, which is opened in a popup (the provider redirects back to
-//! the agent's server-rendered callback, which stores the resulting token). The
-//! main page is never navigated away from.
+//! that lists the integrations configured on the agent. Selecting one starts a
+//! bearer-authenticated request that mints a provider authorization URL, which
+//! is opened in a popup (the provider redirects back to the agent's
+//! server-rendered callback, which records the resulting connection). The main
+//! page is never navigated away from.
 
+use automate_api::IntegrationInfo;
 use wasm_bindgen_futures::spawn_local;
 use yew::prelude::*;
 
-use crate::api::{self, OAuthProvider};
+use crate::api;
 use crate::fixtures;
 
 /// A link/plug glyph shown on the trigger, echoing the "connect" action.
@@ -32,23 +33,36 @@ fn chevron_icon() -> Html {
     }
 }
 
+/// Emitted when a setup popup has been opened, so the surrounding page can
+/// refresh whatever it shows about connections once the user comes back.
+#[derive(Properties, PartialEq, Default)]
+pub struct ConnectMenuProps {
+    #[prop_or_default]
+    pub onstarted: Callback<()>,
+}
+
 /// A compact toolbar control that reveals a themed dropdown of the configured
-/// integration providers. Renders nothing when no providers are available (for
-/// example in demo mode, or when the caller lacks permission), so it never
-/// leaves an empty button in the toolbar.
+/// integrations. Renders nothing when none are configured (for example in demo
+/// mode), so it never leaves an empty button in the toolbar.
 #[function_component(ConnectMenu)]
-pub fn connect_menu() -> Html {
-    let providers = use_state(Vec::<OAuthProvider>::new);
+pub fn connect_menu(props: &ConnectMenuProps) -> Html {
+    let integrations = use_state(Vec::<IntegrationInfo>::new);
+    let error = use_state(|| Option::<String>::None);
     let open = use_state(|| false);
 
     {
-        let providers = providers.clone();
+        let integrations = integrations.clone();
+        let error = error.clone();
         use_effect_with((), move |_| {
             // The listing is admin-gated; in demo mode there is no agent to ask.
             if !fixtures::is_demo() {
                 spawn_local(async move {
-                    if let Ok(list) = api::list_oauth_providers().await {
-                        providers.set(list);
+                    match api::list_integrations().await {
+                        Ok(list) => integrations.set(list),
+                        // Worth saying out loud: an empty menu and a broken
+                        // endpoint look identical otherwise, which is how a
+                        // contract change can go unnoticed.
+                        Err(err) => error.set(Some(err.to_string())),
                     }
                 });
             }
@@ -56,9 +70,17 @@ pub fn connect_menu() -> Html {
         });
     }
 
-    // Nothing configured (or not permitted): render nothing rather than an empty
-    // control in the toolbar.
-    if providers.is_empty() {
+    if let Some(message) = (*error).clone() {
+        return html! {
+            <span class="connect-menu__error" role="status" title={message.clone()}>
+                { "Connect unavailable" }
+            </span>
+        };
+    }
+
+    // Nothing configured: render nothing rather than an empty control in the
+    // toolbar.
+    if integrations.is_empty() {
         return html! {};
     }
 
@@ -85,23 +107,31 @@ pub fn connect_menu() -> Html {
             Callback::from(move |_: MouseEvent| open.set(false))
         };
 
-        let items = providers
+        let items = integrations
             .iter()
-            .map(|provider| {
-                let key = provider.provider.clone();
+            .map(|integration| {
+                let id = integration.id.clone();
                 let open = open.clone();
+                let error = error.clone();
+                let onstarted = props.onstarted.clone();
                 let onclick = Callback::from(move |_: MouseEvent| {
-                    let key = key.clone();
+                    let id = id.clone();
+                    let error = error.clone();
+                    let onstarted = onstarted.clone();
                     open.set(false);
                     spawn_local(async move {
-                        if let Ok(url) = api::start_oauth(&key).await
-                            && let Some(window) = web_sys::window()
-                        {
-                            let _ = window.open_with_url_and_target_and_features(
-                                &url,
-                                "automate-connect",
-                                "popup,width=480,height=720",
-                            );
+                        match api::start_setup(&id).await {
+                            Ok(url) => {
+                                if let Some(window) = web_sys::window() {
+                                    let _ = window.open_with_url_and_target_and_features(
+                                        &url,
+                                        "automate-connect",
+                                        "popup,width=480,height=720",
+                                    );
+                                }
+                                onstarted.emit(());
+                            }
+                            Err(err) => error.set(Some(err.to_string())),
                         }
                     });
                 });
@@ -109,7 +139,7 @@ pub fn connect_menu() -> Html {
                 html! {
                     <li role="none">
                         <button class="connect-menu__item" role="menuitem" {onclick}>
-                            { &provider.name }
+                            { &integration.name }
                         </button>
                     </li>
                 }
