@@ -10,6 +10,7 @@ mod app_bar;
 mod connect_menu;
 mod connections_panel;
 mod entity;
+mod form;
 mod helpers;
 mod json_highlight;
 mod layout;
@@ -23,6 +24,10 @@ pub use app_bar::AppBar;
 pub use connect_menu::ConnectMenu;
 pub use connections_panel::ConnectionsPanel;
 pub use entity::{DbEntity, EntityMetadata};
+#[allow(unused_imports)]
+pub use form::{
+    Button, ButtonKind, Field, NumberInput, Select, SelectOption, Switch, TextArea, TextInput,
+};
 pub use helpers::Center;
 pub use json_highlight::JsonHighlight;
 pub use layout::Layout;

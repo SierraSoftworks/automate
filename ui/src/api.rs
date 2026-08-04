@@ -6,7 +6,9 @@
 //! handled separately via a popup (see [`crate::auth::begin_login`]). A `401` that survives a refresh
 //! is surfaced as [`ApiError::Unauthorized`] so callers can prompt for sign-in.
 
-use automate_api::{AdminUser, Connection, IntegrationInfo, KeyValueEntry, QueueMessage};
+use automate_api::{
+    AdminUser, Connection, ConnectionSummary, IntegrationInfo, KeyValueEntry, QueueMessage,
+};
 use gloo_net::http::{Request, Response};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -51,9 +53,11 @@ struct ServerError {
 /// The HTTP verbs used by the client. A small enum so a request can be rebuilt for the
 /// post-refresh retry.
 #[derive(Clone, Copy)]
+#[allow(dead_code)]
 enum Verb {
     Get,
     Post,
+    Patch,
     Delete,
 }
 
@@ -67,6 +71,7 @@ fn build<B: Serialize>(
     let builder = match verb {
         Verb::Get => Request::get(url),
         Verb::Post => Request::post(url),
+        Verb::Patch => Request::patch(url),
         Verb::Delete => Request::delete(url),
     };
     let builder = match token {
@@ -227,6 +232,54 @@ pub async fn delete_queue(partition: &str, key: &str) -> Result<(), ApiError> {
         urlencode(key)
     ))
     .await
+}
+
+/// The services this account has linked.
+pub async fn list_service_connections() -> Result<Vec<ConnectionSummary>, ApiError> {
+    get_json("/connections").await
+}
+
+/// Links a service using a token the user obtained from it.
+pub async fn create_service_connection(
+    provider: &str,
+    name: &str,
+    key: &str,
+) -> Result<ConnectionSummary, ApiError> {
+    let body = serde_json::json!({ "provider": provider, "name": name, "key": key });
+    let response = send(Verb::Post, "/connections", Some(&body)).await?;
+
+    if !response.ok() {
+        return Err(error_from_response(response).await);
+    }
+
+    response
+        .json::<ConnectionSummary>()
+        .await
+        .map_err(|err| ApiError::Server(err.to_string()))
+}
+
+/// Renames a linked service.
+#[allow(dead_code)]
+pub async fn rename_service_connection(
+    id: &str,
+    name: &str,
+) -> Result<ConnectionSummary, ApiError> {
+    let body = serde_json::json!({ "name": name });
+    let response = send(Verb::Patch, &format!("/connections/{}", urlencode(id)), Some(&body)).await?;
+
+    if !response.ok() {
+        return Err(error_from_response(response).await);
+    }
+
+    response
+        .json::<ConnectionSummary>()
+        .await
+        .map_err(|err| ApiError::Server(err.to_string()))
+}
+
+/// Unlinks a service.
+pub async fn delete_service_connection(id: &str) -> Result<(), ApiError> {
+    delete(&format!("/connections/{}", urlencode(id))).await
 }
 
 /// Lists the integrations configured on the agent.
