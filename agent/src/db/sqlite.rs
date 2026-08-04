@@ -3,20 +3,13 @@ use std::{borrow::Cow, collections::HashMap, sync::Arc};
 use human_errors::{self as errors};
 use tokio_rusqlite::{Connection, OptionalExtension};
 
+use super::{ADVICE_DB_ERROR, ADVICE_REPORT_DEV, AuditEntry, AuditQuery, AuditRecord, AuditStore};
 use crate::prelude::*;
 
 #[derive(Clone)]
 pub struct SqliteDatabase {
     connection: Arc<Connection>,
 }
-
-const ADVICE_DB_ERROR: &[&str] = &[
-    "Make sure that the database file is accessible and not corrupted.",
-    "If the problem persists, please report the issue to the development team via GitHub.",
-];
-
-const ADVICE_REPORT_DEV: &[&str] =
-    &["Please report this issue to the development team via GitHub."];
 
 const MIGRATIONS: &[&str] = &[
     "CREATE TABLE IF NOT EXISTS kv (
@@ -115,6 +108,26 @@ const MIGRATIONS: &[&str] = &[
      ALTER TABLE queues_migrated RENAME TO queues;
      CREATE INDEX idx_queues_tenant_partition_hidden ON queues (tenant, partition, hiddenUntil);
      CREATE INDEX idx_queues_hidden_scheduled ON queues (hiddenUntil, scheduledAt);",
+    // Migration 11: the audit log.
+    //
+    // Entries are ordered by id rather than by timestamp, because several
+    // commonly share a timestamp and only the id gives a total order that is
+    // stable across queries and usable as a pagination cursor. Both indexes
+    // descend for the same reason: every query wants the most recent first.
+    "CREATE TABLE audit_log (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        tenant TEXT NOT NULL,
+        occurredAt DATETIME NOT NULL,
+        category TEXT NOT NULL,
+        action TEXT NOT NULL,
+        outcome TEXT NOT NULL,
+        subject TEXT,
+        actor TEXT,
+        message TEXT,
+        detail TEXT
+    );
+     CREATE INDEX idx_audit_tenant ON audit_log (tenant, id DESC);
+     CREATE INDEX idx_audit_subject ON audit_log (tenant, subject, id DESC);",
 ];
 
 impl SqliteDatabase {
@@ -278,6 +291,28 @@ impl SqliteDatabase {
             .or_system_err(ADVICE_DB_ERROR)
             .map(|names| names.iter().map(TenantId::from_storage).collect())
     }
+
+    /// Reads audit entries across every tenant.
+    ///
+    /// The tenant-scoped handle can only see its own history; this is the
+    /// administrative view, and is deliberately only reachable from the root.
+    #[allow(dead_code)]
+    pub async fn audit_all(
+        &self,
+        query: super::AuditQuery,
+    ) -> Result<Vec<super::AuditRecord>, errors::Error> {
+        super::audit::audit(&self.connection, None, query).await
+    }
+
+    /// Trims the audit log back to the configured retention.
+    #[allow(dead_code)]
+    pub async fn prune_audit_log(
+        &self,
+        retain_for: chrono::Duration,
+        max_per_tenant: usize,
+    ) -> Result<usize, errors::Error> {
+        super::audit::prune(&self.connection, retain_for, max_per_tenant).await
+    }
 }
 
 /// A handle to the database scoped to a single tenant.
@@ -297,6 +332,19 @@ impl TenantDb {
     #[allow(dead_code)]
     pub fn tenant(&self) -> &TenantId {
         &self.tenant
+    }
+}
+
+#[async_trait::async_trait]
+impl AuditStore for TenantDb {
+    #[instrument("db.sqlite.audit_record", skip(self, entry), fields(otel.kind=?OpenTelemetrySpanKind::Client, audit.category = entry.category_of().as_str(), audit.outcome = entry.outcome_of().as_str()), err(Display))]
+    async fn record(&self, entry: AuditEntry) -> Result<(), errors::Error> {
+        super::audit::record(&self.connection, &self.tenant, entry).await
+    }
+
+    #[instrument("db.sqlite.audit_read", skip(self, query), fields(otel.kind=?OpenTelemetrySpanKind::Client), err(Display))]
+    async fn audit(&self, query: AuditQuery) -> Result<Vec<AuditRecord>, errors::Error> {
+        super::audit::audit(&self.connection, Some(&self.tenant), query).await
     }
 }
 
@@ -823,7 +871,7 @@ impl Queue for TenantDb {
 
 #[cfg(test)]
 mod tests {
-    use crate::db::QueueMessage;
+    use crate::db::{AuditCategory, AuditOutcome, QueueMessage};
 
     use super::*;
 
@@ -1128,6 +1176,235 @@ mod tests {
                 "unexpected primary key on '{table}'"
             );
         }
+    }
+
+    #[tokio::test]
+    async fn audit_entries_are_returned_most_recent_first() {
+        let db = SqliteDatabase::open_in_memory().await.unwrap();
+        let alice_db = db.tenant(alice());
+
+        for action in ["first", "second", "third"] {
+            alice_db
+                .record(AuditEntry::new(
+                    AuditCategory::WorkflowRun,
+                    action,
+                    AuditOutcome::Success,
+                ))
+                .await
+                .unwrap();
+        }
+
+        let entries = alice_db.audit(AuditQuery::recent(10)).await.unwrap();
+        let actions: Vec<&str> = entries.iter().map(|e| e.action.as_str()).collect();
+
+        // Ordered by id rather than timestamp, which matters precisely here:
+        // all three entries land within the same second.
+        assert_eq!(actions, vec!["third", "second", "first"]);
+    }
+
+    #[tokio::test]
+    async fn a_tenant_only_sees_its_own_audit_history() {
+        let db = SqliteDatabase::open_in_memory().await.unwrap();
+
+        db.tenant(alice())
+            .record(AuditEntry::new(
+                AuditCategory::WorkflowRun,
+                "ran",
+                AuditOutcome::Success,
+            ))
+            .await
+            .unwrap();
+        db.tenant(bob())
+            .record(AuditEntry::new(
+                AuditCategory::Authentication,
+                "signed-in",
+                AuditOutcome::Success,
+            ))
+            .await
+            .unwrap();
+
+        let alice_entries = db
+            .tenant(alice())
+            .audit(AuditQuery::recent(10))
+            .await
+            .unwrap();
+        assert_eq!(alice_entries.len(), 1);
+        assert_eq!(alice_entries[0].action, "ran");
+
+        // The administrative view spans everyone, and is only reachable from
+        // the root handle.
+        let everyone = db.audit_all(AuditQuery::recent(10)).await.unwrap();
+        assert_eq!(everyone.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn audit_entries_round_trip_their_full_detail() {
+        let db = SqliteDatabase::open_in_memory().await.unwrap();
+        let alice_db = db.tenant(alice());
+
+        alice_db
+            .record(
+                AuditEntry::new(
+                    AuditCategory::WebhookDelivery,
+                    "signature-rejected",
+                    AuditOutcome::Denied,
+                )
+                .subject("copper-tiger-canyon")
+                .actor("admin")
+                .message("The delivery signature did not match the configured secret.")
+                .detail(serde_json::json!({ "source": "grafana" })),
+            )
+            .await
+            .unwrap();
+
+        let entry = alice_db
+            .audit(AuditQuery::recent(1))
+            .await
+            .unwrap()
+            .pop()
+            .unwrap();
+
+        assert_eq!(entry.tenant, alice());
+        assert_eq!(entry.category, AuditCategory::WebhookDelivery);
+        assert_eq!(entry.outcome, AuditOutcome::Denied);
+        assert_eq!(entry.subject.as_deref(), Some("copper-tiger-canyon"));
+        assert_eq!(entry.actor.as_deref(), Some("admin"));
+        assert_eq!(entry.detail.unwrap()["source"], "grafana");
+        assert!(entry.occurred_at <= chrono::Utc::now());
+    }
+
+    #[tokio::test]
+    async fn audit_entries_can_be_narrowed_and_paged() {
+        let db = SqliteDatabase::open_in_memory().await.unwrap();
+        let alice_db = db.tenant(alice());
+
+        for i in 0..5 {
+            alice_db
+                .record(
+                    AuditEntry::new(AuditCategory::WorkflowRun, "ran", AuditOutcome::Success)
+                        .subject(if i % 2 == 0 {
+                            "workflow-a"
+                        } else {
+                            "workflow-b"
+                        }),
+                )
+                .await
+                .unwrap();
+        }
+        alice_db
+            .record(AuditEntry::new(
+                AuditCategory::Connection,
+                "created",
+                AuditOutcome::Success,
+            ))
+            .await
+            .unwrap();
+
+        let runs = alice_db
+            .audit(AuditQuery::recent(10).in_category(AuditCategory::WorkflowRun))
+            .await
+            .unwrap();
+        assert_eq!(runs.len(), 5);
+
+        let about_a = alice_db
+            .audit(AuditQuery::about("workflow-a", 10))
+            .await
+            .unwrap();
+        assert_eq!(about_a.len(), 3);
+
+        // Paging backwards from a returned id yields the next page without
+        // repeating or skipping an entry.
+        let first_page = alice_db.audit(AuditQuery::recent(2)).await.unwrap();
+        let second_page = alice_db
+            .audit(AuditQuery::recent(2).before(first_page.last().unwrap().id))
+            .await
+            .unwrap();
+
+        assert_eq!(second_page.len(), 2);
+        assert!(second_page[0].id < first_page[1].id);
+    }
+
+    #[tokio::test]
+    async fn pruning_applies_both_an_age_and_a_per_tenant_limit() {
+        let db = SqliteDatabase::open_in_memory().await.unwrap();
+
+        for tenant in [alice(), bob()] {
+            for _ in 0..5 {
+                db.tenant(tenant.clone())
+                    .record(AuditEntry::new(
+                        AuditCategory::WorkflowRun,
+                        "ran",
+                        AuditOutcome::Success,
+                    ))
+                    .await
+                    .unwrap();
+            }
+        }
+
+        // The count limit is per tenant, so one noisy user cannot evict
+        // everybody else's history.
+        db.prune_audit_log(chrono::Duration::days(30), 2)
+            .await
+            .unwrap();
+
+        for tenant in [alice(), bob()] {
+            assert_eq!(
+                db.tenant(tenant)
+                    .audit(AuditQuery::recent(10))
+                    .await
+                    .unwrap()
+                    .len(),
+                2
+            );
+        }
+
+        // A zero-length retention window expires everything regardless of count.
+        db.prune_audit_log(chrono::Duration::zero(), 1000)
+            .await
+            .unwrap();
+        assert!(
+            db.audit_all(AuditQuery::recent(10))
+                .await
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[tokio::test]
+    async fn adding_the_audit_log_leaves_existing_records_untouched() {
+        // The audit log arrived after tenancy, so an installation upgrading
+        // across both must come through with its data intact.
+        let mut db = SqliteDatabase::open_in_memory_at_migration(PRE_TENANT_MIGRATION)
+            .await
+            .unwrap();
+
+        db.connection
+            .call(|c| {
+                c.execute_batch(
+                    "INSERT INTO kv (partition, key, value) VALUES \
+                     ('rss/feed', 'https://example.com/feed', '{\"published\":\"2024-04-15T12:00:00Z\"}');",
+                )
+            })
+            .await
+            .unwrap();
+
+        db.upgrade().await.unwrap();
+
+        let local = db.tenant(TenantId::local());
+        assert!(
+            local
+                .get::<serde_json::Value>("rss/feed", "https://example.com/feed")
+                .await
+                .unwrap()
+                .is_some()
+        );
+        assert!(
+            local
+                .audit(AuditQuery::recent(10))
+                .await
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[tokio::test]
