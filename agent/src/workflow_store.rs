@@ -21,11 +21,6 @@
 //! The number of partitions is the number of trigger kinds, so the scan is over
 //! a handful of lists rather than a growing one.
 
-// The reconciler reads through this store, but nothing in the running program
-// creates or edits a workflow yet; that arrives with the API endpoints. The
-// write paths are exercised by the tests below in the meantime.
-#![allow(dead_code)]
-
 use chrono::{DateTime, Utc};
 
 use automate_api::{Workflow, WorkflowId, WorkflowTrigger};
@@ -312,6 +307,12 @@ impl<S: Services> WorkflowStore<S> {
             .kv()
             .remove(Self::partition_for(&existing.type_id)?, id.to_string())
             .await
+    }
+
+    /// Turns a stored record into what the API returns, for the callers that
+    /// already hold one.
+    pub fn present_record(&self, record: WorkflowRecord) -> Result<Workflow, Error> {
+        self.present(record)
     }
 
     /// Turns a stored record into what the API returns, working out the parts

@@ -21,11 +21,6 @@
 //! at least deserializes, so a run can fail on the network or the far end but
 //! not on its own configuration.
 
-// The store and the API endpoints are wired onto this registry in the commits
-// that follow; it is written as a complete registry rather than grown one
-// caller at a time, so that the invariants below are enforced from the start.
-#![allow(dead_code)]
-
 use std::collections::HashMap;
 use std::sync::LazyLock;
 

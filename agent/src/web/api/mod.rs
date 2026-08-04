@@ -34,6 +34,7 @@ mod kv;
 mod queue;
 pub mod scope;
 mod user;
+mod workflows;
 
 pub use scope::Scoped;
 
@@ -107,6 +108,12 @@ pub fn configure() -> actix_web::Scope<
                     "/connections/{connection}/options/{source}",
                     web::get().to(connections::options),
                 )
+                .route("/workflow-types", web::get().to(workflows::types))
+                .route("/workflows", web::get().to(workflows::list))
+                .route("/workflows", web::post().to(workflows::create))
+                .route("/workflows/{workflow}", web::get().to(workflows::get))
+                .route("/workflows/{workflow}", web::put().to(workflows::update))
+                .route("/workflows/{workflow}", web::delete().to(workflows::delete))
                 // Installation-wide endpoints. These take the `Administrative`
                 // extractor, which refuses a request from anyone who is not an
                 // administrator, so the guard cannot be lost by remounting them.
