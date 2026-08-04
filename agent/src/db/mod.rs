@@ -8,7 +8,7 @@ mod sqlite;
 
 use crate::prelude::*;
 pub use partition::Partition;
-pub use sqlite::SqliteDatabase;
+pub use sqlite::{SqliteDatabase, TenantDb};
 
 #[allow(dead_code)]
 #[async_trait::async_trait]

@@ -776,7 +776,7 @@ mod tests {
     async fn services_with(
         secret: &str,
         auto_merge: Option<GitHubAutoMergeConfig>,
-    ) -> crate::services::ServicesContainer<crate::db::SqliteDatabase> {
+    ) -> crate::services::ServicesContainer<crate::db::TenantDb> {
         let secret = secret.to_string();
         crate::services::ServicesContainer::new_custom_mock(move |config, _| {
             config.webhooks.github = GitHubWebhookConfig {
@@ -1115,29 +1115,28 @@ mod tests {
             .to_string()
         };
 
-        let deliver = async |body: String,
-                             services: &crate::services::ServicesContainer<
-            crate::db::SqliteDatabase,
-        >| {
-            let job = WebhookEvent {
-                body: body.clone(),
-                query: String::new(),
-                headers: [
-                    ("X-GitHub-Event".to_string(), "installation".to_string()),
-                    ("X-Hub-Signature-256".to_string(), sign("secret", &body)),
-                ]
-                .into_iter()
-                .collect::<HashMap<_, _>>(),
-            };
+        let deliver =
+            async |body: String,
+                   services: &crate::services::ServicesContainer<crate::db::TenantDb>| {
+                let job = WebhookEvent {
+                    body: body.clone(),
+                    query: String::new(),
+                    headers: [
+                        ("X-GitHub-Event".to_string(), "installation".to_string()),
+                        ("X-Hub-Signature-256".to_string(), sign("secret", &body)),
+                    ]
+                    .into_iter()
+                    .collect::<HashMap<_, _>>(),
+                };
 
-            GitHubWebhook
-                .handle(
-                    JobContext::new(services.clone(), chrono::Utc::now(), None, None),
-                    &job,
-                )
-                .await
-                .expect("the installation event should be handled");
-        };
+                GitHubWebhook
+                    .handle(
+                        JobContext::new(services.clone(), chrono::Utc::now(), None, None),
+                        &job,
+                    )
+                    .await
+                    .expect("the installation event should be handled");
+            };
 
         deliver(payload("created"), &services).await;
 

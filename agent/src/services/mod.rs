@@ -18,7 +18,12 @@ use tracing_batteries::Session;
 /// Individual job handlers remain generic over the [`Services`] trait so they
 /// can be unit-tested with mocks, but the dynamic job dispatch registry needs a
 /// single concrete type to remain object-safe.
-pub type AppServices = ServicesContainer<crate::db::SqliteDatabase>;
+///
+/// The storage handle it carries is scoped to a single tenant, so anything
+/// holding an `AppServices` can only reach that tenant's records. Widening the
+/// scope requires the root [`crate::db::SqliteDatabase`], which only
+/// installation-level code holds.
+pub type AppServices = ServicesContainer<crate::db::TenantDb>;
 
 /// The user agent applied to the shared HTTP client used across collectors and
 /// publishers.
@@ -91,9 +96,11 @@ where
 }
 
 #[cfg(test)]
-impl ServicesContainer<crate::db::SqliteDatabase> {
+impl ServicesContainer<crate::db::TenantDb> {
     pub async fn new_mock() -> Result<Self, human_errors::Error> {
-        let database = crate::db::SqliteDatabase::open_in_memory().await?;
+        let database = crate::db::SqliteDatabase::open_in_memory()
+            .await?
+            .tenant(automate_api::TenantId::local());
         let config = Config::default();
         let session = Arc::new(
             Session::new("automate", "0.0.0-test").with_battery(tracing_batteries::Testing),
@@ -102,9 +109,11 @@ impl ServicesContainer<crate::db::SqliteDatabase> {
     }
 
     pub async fn new_custom_mock(
-        f: impl Sized + FnOnce(&mut Config, &crate::db::SqliteDatabase),
+        f: impl Sized + FnOnce(&mut Config, &crate::db::TenantDb),
     ) -> Result<Self, human_errors::Error> {
-        let database = crate::db::SqliteDatabase::open_in_memory().await?;
+        let database = crate::db::SqliteDatabase::open_in_memory()
+            .await?
+            .tenant(automate_api::TenantId::local());
         let mut config = Config::default();
         f(&mut config, &database);
         let session = Arc::new(

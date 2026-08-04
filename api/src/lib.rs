@@ -9,6 +9,7 @@ pub mod ids;
 mod integration;
 mod kv;
 mod queue;
+mod tenant;
 mod user;
 mod wordlist;
 
@@ -16,4 +17,5 @@ pub use ids::{ConnectionId, WordId, WordIdError, WorkflowId};
 pub use integration::{Connection, IntegrationInfo};
 pub use kv::KeyValueEntry;
 pub use queue::{QueueMessage, QueueStatus};
+pub use tenant::{TenantId, TenantIdError};
 pub use user::AdminUser;

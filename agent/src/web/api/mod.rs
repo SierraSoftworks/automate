@@ -196,12 +196,12 @@ mod tests {
     use actix_web::http::StatusCode;
     use actix_web::{App, test, web};
 
-    use crate::db::SqliteDatabase;
+    use crate::db::TenantDb;
     use crate::filter::Filter;
     use crate::services::ServicesContainer;
 
     /// Builds a services container with OIDC disabled and the given admin ACL.
-    async fn service_with_acl(acl: &str) -> ServicesContainer<SqliteDatabase> {
+    async fn service_with_acl(acl: &str) -> ServicesContainer<TenantDb> {
         ServicesContainer::new_custom_mock(|c, _| c.web.admin.acl = Filter::new(acl).unwrap())
             .await
             .unwrap()

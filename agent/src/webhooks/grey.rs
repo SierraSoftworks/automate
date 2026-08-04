@@ -749,7 +749,7 @@ mod tests {
     /// `Default` (zero) because the `#[serde(default = "…")]` fallbacks only apply when
     /// deserializing, so the delayed alert, recovery window, and noise threshold would all collapse
     /// to zero and never exercise the debounce behaviour.
-    async fn mock_services() -> crate::services::ServicesContainer<crate::db::SqliteDatabase> {
+    async fn mock_services() -> crate::services::ServicesContainer<crate::db::TenantDb> {
         crate::services::ServicesContainer::new_custom_mock(|config, _db| {
             config.webhooks.grey.alert_delay = chrono::Duration::minutes(5);
             config.webhooks.grey.recovery_delay = chrono::Duration::hours(1);

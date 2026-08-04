@@ -235,7 +235,7 @@ mod tests {
 
     async fn services_with(
         attention: GitHubAttentionConfig,
-    ) -> crate::services::ServicesContainer<crate::db::SqliteDatabase> {
+    ) -> crate::services::ServicesContainer<crate::db::TenantDb> {
         crate::services::ServicesContainer::new_custom_mock(move |config, _| {
             config.webhooks.github = GitHubWebhookConfig {
                 secret: "secret".to_string(),

@@ -68,6 +68,53 @@ const MIGRATIONS: &[&str] = &[
     // without mistaking a generated UUID for a meaningful one. Rows written
     // before this migration are left NULL, i.e. treated as generated.
     "ALTER TABLE queues ADD COLUMN idempotencyKey TEXT",
+    // Migration 9: namespace the key/value store by tenant.
+    //
+    // The tenant has to join the primary key rather than sit beside it, so that
+    // two users can hold the same key in the same partition without colliding.
+    // SQLite cannot alter a primary key in place, so the table is rebuilt.
+    // Existing rows belong to the local tenant, which is what an installation
+    // with no identity provider configured uses, so a single-tenant install
+    // carries on unchanged.
+    "CREATE TABLE kv_migrated (
+        tenant TEXT NOT NULL,
+        partition TEXT NOT NULL,
+        key TEXT NOT NULL,
+        value TEXT NOT NULL,
+        PRIMARY KEY (tenant, partition, key)
+    );
+     INSERT INTO kv_migrated (tenant, partition, key, value)
+        SELECT '!local', partition, key, value FROM kv;
+     DROP TABLE kv;
+     ALTER TABLE kv_migrated RENAME TO kv;",
+    // Migration 10: namespace the queues by tenant, as above.
+    //
+    // Two indexes replace the single partition index. The tenant-leading one
+    // serves a scoped consumer, while the second serves the shared worker's
+    // cross-tenant dequeue, which orders by scheduling time across everyone.
+    "CREATE TABLE queues_migrated (
+        tenant TEXT NOT NULL,
+        partition TEXT NOT NULL,
+        key TEXT NOT NULL,
+        payload TEXT,
+        scheduledAt DATETIME DEFAULT CURRENT_TIMESTAMP,
+        hiddenUntil DATETIME DEFAULT CURRENT_TIMESTAMP,
+        reservedBy TEXT,
+        traceparent TEXT,
+        tracestate TEXT,
+        idempotencyKey TEXT,
+        PRIMARY KEY (tenant, partition, key)
+    );
+     INSERT INTO queues_migrated (
+        tenant, partition, key, payload, scheduledAt, hiddenUntil, reservedBy,
+        traceparent, tracestate, idempotencyKey
+     )
+        SELECT '!local', partition, key, payload, scheduledAt, hiddenUntil, reservedBy,
+               traceparent, tracestate, idempotencyKey FROM queues;
+     DROP TABLE queues;
+     ALTER TABLE queues_migrated RENAME TO queues;
+     CREATE INDEX idx_queues_tenant_partition_hidden ON queues (tenant, partition, hiddenUntil);
+     CREATE INDEX idx_queues_hidden_scheduled ON queues (hiddenUntil, scheduledAt);",
 ];
 
 impl SqliteDatabase {
@@ -97,6 +144,49 @@ impl SqliteDatabase {
         db.initialize().await?;
 
         Ok(db)
+    }
+
+    /// Opens a database frozen partway through the migration history.
+    ///
+    /// Lets a test stand up the schema as an older release left it, populate it,
+    /// and then run the remaining migrations against realistic data — which is
+    /// the only way to catch a migration that works on an empty table but loses
+    /// or corrupts rows on a real one.
+    #[cfg(test)]
+    pub async fn open_in_memory_at_migration(version: usize) -> Result<Self, errors::Error> {
+        let connection = Connection::open_in_memory().await.or_system_err(&[
+            "Make sure that there is enough memory available to create an in-memory database.",
+        ])?;
+
+        connection
+            .call(move |c| {
+                c.execute(
+                    "CREATE TABLE IF NOT EXISTS migrations (id INTEGER PRIMARY KEY)",
+                    [],
+                )?;
+
+                for (i, migration) in MIGRATIONS.iter().enumerate().take(version) {
+                    c.execute_batch(migration)?;
+                    c.execute("INSERT INTO migrations (id) VALUES (?1)", [i + 1])?;
+                }
+
+                Ok::<_, tokio_rusqlite::Error>(())
+            })
+            .await
+            .wrap_system_err(
+                "Failed to build a database at a historical migration.",
+                ADVICE_REPORT_DEV,
+            )?;
+
+        Ok(Self {
+            connection: Arc::new(connection),
+        })
+    }
+
+    /// Runs any migrations the database has not yet had applied.
+    #[cfg(test)]
+    pub async fn upgrade(&mut self) -> Result<(), errors::Error> {
+        self.initialize().await
     }
 
     async fn initialize(&mut self) -> Result<(), errors::Error> {
@@ -146,25 +236,88 @@ impl SqliteDatabase {
 
         Ok(())
     }
+
+    /// A view of the database restricted to a single tenant.
+    ///
+    /// The returned handle is the only way to reach the storage traits, and it
+    /// carries no method that names a tenant. Anything holding one — every job
+    /// handler, and every request handler acting on a user's behalf — is
+    /// therefore structurally unable to read or write another tenant's records,
+    /// rather than merely being expected not to.
+    pub fn tenant(&self, tenant: TenantId) -> TenantDb {
+        TenantDb {
+            connection: self.connection.clone(),
+            tenant,
+        }
+    }
+
+    /// Every tenant with at least one stored record.
+    ///
+    /// Used by startup reconciliation, which has to visit each tenant in turn
+    /// because the scoped handles above cannot enumerate their peers.
+    #[allow(dead_code)]
+    pub async fn tenants(&self) -> Result<Vec<TenantId>, errors::Error> {
+        self.connection
+            .call(|c| {
+                let mut stmt = c
+                    .prepare(
+                        "SELECT tenant FROM kv \
+                         UNION SELECT tenant FROM queues \
+                         ORDER BY tenant ASC",
+                    )
+                    .or_system_err(ADVICE_DB_ERROR)?;
+
+                let iter = stmt
+                    .query_map([], |row| row.get::<_, String>(0))
+                    .or_system_err(ADVICE_DB_ERROR)?;
+
+                iter.collect::<Result<Vec<_>, _>>()
+                    .or_system_err(ADVICE_DB_ERROR)
+            })
+            .await
+            .or_system_err(ADVICE_DB_ERROR)
+            .map(|names| names.iter().map(TenantId::from_storage).collect())
+    }
+}
+
+/// A handle to the database scoped to a single tenant.
+///
+/// Every statement it issues is constrained to [`TenantDb::tenant`], and the
+/// type deliberately exposes no way to change or widen that scope. Isolation is
+/// therefore a property of the type rather than of the discipline of each call
+/// site.
+#[derive(Clone)]
+pub struct TenantDb {
+    connection: Arc<Connection>,
+    tenant: TenantId,
+}
+
+impl TenantDb {
+    /// The tenant this handle is scoped to.
+    #[allow(dead_code)]
+    pub fn tenant(&self) -> &TenantId {
+        &self.tenant
+    }
 }
 
 #[async_trait::async_trait]
-impl KeyValueStore for SqliteDatabase {
+impl KeyValueStore for TenantDb {
     #[instrument("db.sqlite.get", skip(self, partition, key), fields(otel.kind=?OpenTelemetrySpanKind::Client), err(Display))]
     async fn get<T: DeserializeOwned + Send + 'static>(
         &self,
         partition: impl Into<Cow<'static, str>> + Send,
         key: impl Into<Cow<'static, str>> + Send,
     ) -> std::result::Result<Option<T>, errors::Error> {
-        let key = key.into();
-        let partition = partition.into();
+        let key = key.into().into_owned();
+        let partition = partition.into().into_owned();
+        let tenant = self.tenant.to_string();
 
         Ok(self
             .connection
             .call(|c| {
                 c.query_one(
-                    "SELECT value FROM kv WHERE partition = ?1 AND key = ?2",
-                    [partition, key],
+                    "SELECT value FROM kv WHERE tenant = ?1 AND partition = ?2 AND key = ?3",
+                    (tenant, partition, key),
                     |r| {
                         let value: String = r.get(0)?;
                         let deserialized: T = serde_json::from_str(&value).map_err(|e| {
@@ -189,14 +342,15 @@ impl KeyValueStore for SqliteDatabase {
         partition: impl Into<Cow<'static, str>> + Send,
     ) -> std::result::Result<Vec<(String, T)>, errors::Error> {
         let partition = partition.into();
+        let tenant = self.tenant.to_string();
         self.connection
             .call(move |c| {
                 let mut stmt = c
-                    .prepare("SELECT key, value FROM kv WHERE partition = ?1")
+                    .prepare("SELECT key, value FROM kv WHERE tenant = ?1 AND partition = ?2")
                     .or_system_err(ADVICE_DB_ERROR)?;
 
                 let query_iter = stmt
-                    .query_map([&partition], |r| {
+                    .query_map((&tenant, &*partition), |r| {
                         let key: String = r.get(0)?;
                         let value: String = r.get(1)?;
                         let deserialized: T = serde_json::from_str(&value).map_err(|e| {
@@ -230,15 +384,16 @@ impl KeyValueStore for SqliteDatabase {
             ADVICE_REPORT_DEV,
         )?;
 
-        let partition = partition.into();
-        let key = key.into();
+        let partition = partition.into().into_owned();
+        let key = key.into().into_owned();
+        let tenant = self.tenant.to_string();
 
         self.connection
             .call(move |c| {
                 c.execute(
-                    "INSERT INTO kv (partition, key, value) VALUES (?1, ?2, ?3)
-             ON CONFLICT(partition, key) DO UPDATE SET value = excluded.value",
-                    (partition, key, serialized),
+                    "INSERT INTO kv (tenant, partition, key, value) VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT(tenant, partition, key) DO UPDATE SET value = excluded.value",
+                    (tenant, partition, key, serialized),
                 )
             })
             .await
@@ -252,14 +407,15 @@ impl KeyValueStore for SqliteDatabase {
         partition: impl Into<Cow<'static, str>> + Send,
         key: impl Into<Cow<'static, str>> + Send,
     ) -> std::result::Result<(), errors::Error> {
-        let partition = partition.into();
-        let key = key.into();
+        let partition = partition.into().into_owned();
+        let key = key.into().into_owned();
+        let tenant = self.tenant.to_string();
 
         self.connection
             .call(move |c| {
                 c.execute(
-                    "DELETE FROM kv WHERE partition = ?1 AND key = ?2",
-                    (partition, key),
+                    "DELETE FROM kv WHERE tenant = ?1 AND partition = ?2 AND key = ?3",
+                    (tenant, partition, key),
                 )
             })
             .await
@@ -269,14 +425,15 @@ impl KeyValueStore for SqliteDatabase {
 
     #[instrument("db.sqlite.kv_partitions", skip(self), fields(otel.kind=?OpenTelemetrySpanKind::Client), err(Display))]
     async fn partitions(&self) -> std::result::Result<Vec<String>, errors::Error> {
+        let tenant = self.tenant.to_string();
         self.connection
-            .call(|c| {
+            .call(move |c| {
                 let mut stmt = c
-                    .prepare("SELECT DISTINCT partition FROM kv ORDER BY partition ASC")
+                    .prepare("SELECT DISTINCT partition FROM kv WHERE tenant = ?1 ORDER BY partition ASC")
                     .or_system_err(ADVICE_DB_ERROR)?;
 
                 let iter = stmt
-                    .query_map([], |row| row.get(0))
+                    .query_map([&tenant], |row| row.get(0))
                     .or_system_err(ADVICE_DB_ERROR)?;
 
                 iter.collect::<Result<Vec<_>, _>>()
@@ -290,17 +447,18 @@ impl KeyValueStore for SqliteDatabase {
     async fn scan<T: DeserializeOwned + Send + 'static>(
         &self,
     ) -> std::result::Result<Vec<(String, String, T)>, errors::Error> {
+        let tenant = self.tenant.to_string();
         self.connection
-            .call(|c| {
+            .call(move |c| {
                 let mut stmt = c
                     .prepare(
-                        "SELECT partition, key, value FROM kv \
+                        "SELECT partition, key, value FROM kv WHERE tenant = ?1 \
                          ORDER BY partition ASC, key ASC",
                     )
                     .or_system_err(ADVICE_DB_ERROR)?;
 
                 let iter = stmt
-                    .query_map([], |row| {
+                    .query_map([&tenant], |row| {
                         let partition: String = row.get(0)?;
                         let key: String = row.get(1)?;
                         let value_str: String = row.get(2)?;
@@ -324,7 +482,7 @@ impl KeyValueStore for SqliteDatabase {
 }
 
 #[async_trait::async_trait]
-impl Queue for SqliteDatabase {
+impl Queue for TenantDb {
     #[instrument("db.sqlite.enqueue", skip(self, partition, job, idempotency_key, delay), fields(otel.kind=?OpenTelemetrySpanKind::Producer, job.kind=std::any::type_name::<T>()
     ), err(Display))]
     async fn enqueue<P: Into<Cow<'static, str>> + Send, T: serde::Serialize + Send + 'static>(
@@ -339,7 +497,8 @@ impl Queue for SqliteDatabase {
             p.inject_context(&Span::current().context(), &mut trace_headers);
         });
 
-        let partition = partition.into();
+        let partition = partition.into().into_owned();
+        let tenant = self.tenant.to_string();
         let serialized = serde_json::to_string(&job).wrap_system_err(
             "Failed to serialize the queue message for storage.",
             ADVICE_REPORT_DEV,
@@ -358,11 +517,11 @@ impl Queue for SqliteDatabase {
         self.connection
             .call(move |c| {
                 c.execute(
-                    "INSERT INTO queues (partition, key, payload, hiddenUntil, traceparent, tracestate, idempotencyKey) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
-                        ON CONFLICT (partition, key)
+                    "INSERT INTO queues (tenant, partition, key, payload, hiddenUntil, traceparent, tracestate, idempotencyKey) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+                        ON CONFLICT (tenant, partition, key)
                         DO UPDATE
-                        SET payload = ?3, hiddenUntil = ?4, scheduledAt = CURRENT_TIMESTAMP, reservedBy = NULL, traceparent = ?5, tracestate = ?6, idempotencyKey = ?7",
-                    (partition, &key, &serialized, &hidden_until, trace_headers.get("traceparent"), trace_headers.get("tracestate"), idempotency_key.as_deref()),
+                        SET payload = ?4, hiddenUntil = ?5, scheduledAt = CURRENT_TIMESTAMP, reservedBy = NULL, traceparent = ?6, tracestate = ?7, idempotencyKey = ?8",
+                    (tenant, partition, &key, &serialized, &hidden_until, trace_headers.get("traceparent"), trace_headers.get("tracestate"), idempotency_key.as_deref()),
                 )
             })
             .await
@@ -379,16 +538,18 @@ impl Queue for SqliteDatabase {
         reserve_for: chrono::Duration,
     ) -> std::result::Result<super::QueueMessage<T>, errors::Error> {
         let partition = partition.into();
+        let tenant = self.tenant.to_string();
 
         loop {
             let reservation_id = uuid::Uuid::new_v4().to_string();
             let reserved_until = chrono::Utc::now() + reserve_for;
 
             let partition = partition.clone();
+            let tenant = tenant.clone();
             let message = self.connection.call(move |c| {
                 let tx = c.transaction().or_system_err(ADVICE_DB_ERROR)?;
 
-                let message = tx.query_one("SELECT key, payload, scheduledAt, traceparent, tracestate, idempotencyKey FROM queues WHERE partition = ?1 AND hiddenUntil < CURRENT_TIMESTAMP LIMIT 1", [&partition], |row| {
+                let message = tx.query_one("SELECT key, payload, scheduledAt, traceparent, tracestate, idempotencyKey FROM queues WHERE tenant = ?1 AND partition = ?2 AND hiddenUntil < CURRENT_TIMESTAMP LIMIT 1", (&tenant, &*partition), |row| {
                     let key: String = row.get(0)?;
                     let payload_str: String = row.get(1)?;
                     let scheduled_at: chrono::DateTime<chrono::Utc> = row.get(2)?;
@@ -420,8 +581,8 @@ impl Queue for SqliteDatabase {
                     tx.execute(
                         "UPDATE queues
                         SET reservedBy = ?1, hiddenUntil = ?2
-                        WHERE partition = ?3 AND key = ?4",
-                        (&reservation_id, &reserved_until, &partition, &msg.key),
+                        WHERE tenant = ?3 AND partition = ?4 AND key = ?5",
+                        (&reservation_id, &reserved_until, &tenant, &partition, &msg.key),
                     ).or_system_err(ADVICE_DB_ERROR)?;
                 }
 
@@ -443,16 +604,19 @@ impl Queue for SqliteDatabase {
         &self,
         reserve_for: chrono::Duration,
     ) -> std::result::Result<super::QueueMessage<serde_json::Value>, errors::Error> {
+        let tenant = self.tenant.to_string();
+
         loop {
             let reservation_id = uuid::Uuid::new_v4().to_string();
             let reserved_until = chrono::Utc::now() + reserve_for;
+            let tenant = tenant.clone();
 
             let message = self.connection.call(move |c| {
                 let tx = c.transaction().or_system_err(ADVICE_DB_ERROR)?;
 
                 let message = tx.query_one(
-                    "SELECT partition, key, payload, scheduledAt, traceparent, tracestate, idempotencyKey FROM queues WHERE hiddenUntil < CURRENT_TIMESTAMP ORDER BY scheduledAt LIMIT 1",
-                    [],
+                    "SELECT partition, key, payload, scheduledAt, traceparent, tracestate, idempotencyKey FROM queues WHERE tenant = ?1 AND hiddenUntil < CURRENT_TIMESTAMP ORDER BY scheduledAt LIMIT 1",
+                    [&tenant],
                     |row| {
                         let partition: String = row.get(0)?;
                         let key: String = row.get(1)?;
@@ -487,8 +651,8 @@ impl Queue for SqliteDatabase {
                     tx.execute(
                         "UPDATE queues
                         SET reservedBy = ?1, hiddenUntil = ?2
-                        WHERE partition = ?3 AND key = ?4",
-                        (&reservation_id, &reserved_until, &msg.partition, &msg.key),
+                        WHERE tenant = ?3 AND partition = ?4 AND key = ?5",
+                        (&reservation_id, &reserved_until, &tenant, &msg.partition, &msg.key),
                     ).or_system_err(ADVICE_DB_ERROR)?;
                 }
 
@@ -511,12 +675,13 @@ impl Queue for SqliteDatabase {
         partition: P,
         msg: super::QueueMessage<T>,
     ) -> std::result::Result<(), errors::Error> {
-        let partition = partition.into();
+        let partition = partition.into().into_owned();
+        let tenant = self.tenant.to_string();
         self.connection
             .call(move |c| {
                 c.execute(
-                    "DELETE FROM queues WHERE partition = ?1 AND key = ?2 AND reservedBy = ?3",
-                    (partition, &msg.key, &msg.reservation_id),
+                    "DELETE FROM queues WHERE tenant = ?1 AND partition = ?2 AND key = ?3 AND reservedBy = ?4",
+                    (tenant, partition, &msg.key, &msg.reservation_id),
                 )
             })
             .await
@@ -539,14 +704,15 @@ impl Queue for SqliteDatabase {
         let partition = partition.into().into_owned();
         let key = key.into().into_owned();
         let reservation_id = reservation_id.into().into_owned();
+        let tenant = self.tenant.to_string();
         let reserved_until = chrono::Utc::now() + reserve_for;
         self.connection
             .call(move |c| {
                 c.execute(
                     "UPDATE queues
                     SET hiddenUntil = ?1
-                    WHERE partition = ?2 AND key = ?3 AND reservedBy = ?4",
-                    (&reserved_until, &partition, &key, &reservation_id),
+                    WHERE tenant = ?2 AND partition = ?3 AND key = ?4 AND reservedBy = ?5",
+                    (&reserved_until, &tenant, &partition, &key, &reservation_id),
                 )
             })
             .await
@@ -562,19 +728,20 @@ impl Queue for SqliteDatabase {
         max_items: usize,
     ) -> std::result::Result<Vec<super::PeekedMessage<T>>, errors::Error> {
         let partition = partition.into();
+        let tenant = self.tenant.to_string();
         self.connection
             .call(move |c| {
                 let mut stmt = c
                     .prepare(
                         "SELECT key, payload, scheduledAt, hiddenUntil, reservedBy, \
                          traceparent, tracestate, idempotencyKey \
-                         FROM queues WHERE partition = ?1 \
-                         ORDER BY scheduledAt ASC LIMIT ?2",
+                         FROM queues WHERE tenant = ?1 AND partition = ?2 \
+                         ORDER BY scheduledAt ASC LIMIT ?3",
                     )
                     .or_system_err(ADVICE_DB_ERROR)?;
 
                 let iter = stmt
-                    .query_map((&*partition, max_items as i64), |row| {
+                    .query_map((&tenant, &*partition, max_items as i64), |row| {
                         let key: String = row.get(0)?;
                         let payload_str: String = row.get(1)?;
                         let scheduled_at: chrono::DateTime<chrono::Utc> = row.get(2)?;
@@ -618,13 +785,14 @@ impl Queue for SqliteDatabase {
         partition: P,
         key: K,
     ) -> std::result::Result<(), errors::Error> {
-        let partition = partition.into();
-        let key = key.into();
+        let partition = partition.into().into_owned();
+        let key = key.into().into_owned();
+        let tenant = self.tenant.to_string();
         self.connection
             .call(move |c| {
                 c.execute(
-                    "DELETE FROM queues WHERE partition = ?1 AND key = ?2",
-                    (partition, key),
+                    "DELETE FROM queues WHERE tenant = ?1 AND partition = ?2 AND key = ?3",
+                    (tenant, partition, key),
                 )
             })
             .await
@@ -634,14 +802,15 @@ impl Queue for SqliteDatabase {
 
     #[instrument("db.sqlite.queue_partitions", skip(self), fields(otel.kind=?OpenTelemetrySpanKind::Client), err(Display))]
     async fn partitions(&self) -> std::result::Result<Vec<String>, errors::Error> {
+        let tenant = self.tenant.to_string();
         self.connection
-            .call(|c| {
+            .call(move |c| {
                 let mut stmt = c
-                    .prepare("SELECT DISTINCT partition FROM queues ORDER BY partition ASC")
+                    .prepare("SELECT DISTINCT partition FROM queues WHERE tenant = ?1 ORDER BY partition ASC")
                     .or_system_err(ADVICE_DB_ERROR)?;
 
                 let iter = stmt
-                    .query_map([], |row| row.get(0))
+                    .query_map([&tenant], |row| row.get(0))
                     .or_system_err(ADVICE_DB_ERROR)?;
 
                 iter.collect::<Result<Vec<_>, _>>()
@@ -658,9 +827,315 @@ mod tests {
 
     use super::*;
 
+    /// The migration index at which the tenant column was introduced, i.e. the
+    /// schema as the last single-tenant release left it.
+    const PRE_TENANT_MIGRATION: usize = 8;
+
+    fn alice() -> TenantId {
+        TenantId::new("alice").unwrap()
+    }
+
+    fn bob() -> TenantId {
+        TenantId::new("bob").unwrap()
+    }
+
+    /// The columns and indexes of a table, used to compare schemas.
+    async fn schema_of(db: &SqliteDatabase, table: &'static str) -> (Vec<String>, Vec<String>) {
+        db.connection
+            .call(move |c| {
+                let mut columns = c
+                    .prepare(&format!("SELECT name FROM pragma_table_info('{table}')"))?
+                    .query_map([], |r| r.get::<_, String>(0))?
+                    .collect::<Result<Vec<_>, _>>()?;
+                columns.sort();
+
+                let mut indexes = c
+                    .prepare(
+                        "SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = ?1 AND name NOT LIKE 'sqlite_%'",
+                    )?
+                    .query_map([table], |r| r.get::<_, String>(0))?
+                    .collect::<Result<Vec<_>, _>>()?;
+                indexes.sort();
+
+                Ok::<_, tokio_rusqlite::Error>((columns, indexes))
+            })
+            .await
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn tenants_cannot_read_each_others_records() {
+        let db = SqliteDatabase::open_in_memory().await.unwrap();
+        let (alice_db, bob_db) = (db.tenant(alice()), db.tenant(bob()));
+
+        // Deliberately the same partition and key: the whole point is that
+        // these are different records.
+        alice_db
+            .set("notes", "shared", "alice's value")
+            .await
+            .unwrap();
+        bob_db.set("notes", "shared", "bob's value").await.unwrap();
+
+        assert_eq!(
+            alice_db.get::<String>("notes", "shared").await.unwrap(),
+            Some("alice's value".into())
+        );
+        assert_eq!(
+            bob_db.get::<String>("notes", "shared").await.unwrap(),
+            Some("bob's value".into())
+        );
+    }
+
+    #[tokio::test]
+    async fn listing_and_scanning_never_cross_tenants() {
+        let db = SqliteDatabase::open_in_memory().await.unwrap();
+        let (alice_db, bob_db) = (db.tenant(alice()), db.tenant(bob()));
+
+        alice_db.set("notes", "a", "alice").await.unwrap();
+        bob_db.set("notes", "b", "bob").await.unwrap();
+        bob_db.set("secrets", "b", "bob").await.unwrap();
+
+        let listed = alice_db.list::<String>("notes").await.unwrap();
+        assert_eq!(listed, vec![("a".to_string(), "alice".to_string())]);
+
+        let scanned = alice_db.scan::<String>().await.unwrap();
+        assert_eq!(
+            scanned.len(),
+            1,
+            "scan leaked another tenant's records: {scanned:?}"
+        );
+
+        // A partition only exists for the tenants that have written to it.
+        assert_eq!(
+            KeyValueStore::partitions(&alice_db).await.unwrap(),
+            vec!["notes"]
+        );
+        assert_eq!(
+            KeyValueStore::partitions(&bob_db).await.unwrap(),
+            vec!["notes", "secrets"]
+        );
+    }
+
+    #[tokio::test]
+    async fn removing_a_record_leaves_the_other_tenants_copy_alone() {
+        let db = SqliteDatabase::open_in_memory().await.unwrap();
+        let (alice_db, bob_db) = (db.tenant(alice()), db.tenant(bob()));
+
+        alice_db.set("notes", "shared", "alice").await.unwrap();
+        bob_db.set("notes", "shared", "bob").await.unwrap();
+
+        alice_db.remove("notes", "shared").await.unwrap();
+
+        assert_eq!(
+            alice_db.get::<String>("notes", "shared").await.unwrap(),
+            None
+        );
+        assert_eq!(
+            bob_db.get::<String>("notes", "shared").await.unwrap(),
+            Some("bob".into())
+        );
+    }
+
+    #[tokio::test]
+    async fn queued_messages_are_only_visible_to_their_own_tenant() {
+        let db = SqliteDatabase::open_in_memory().await.unwrap();
+        let (alice_db, bob_db) = (db.tenant(alice()), db.tenant(bob()));
+
+        // The same idempotency key in the same partition: two distinct messages.
+        alice_db
+            .enqueue("work", "alice's job", Some("shared".into()), None)
+            .await
+            .unwrap();
+        bob_db
+            .enqueue("work", "bob's job", Some("shared".into()), None)
+            .await
+            .unwrap();
+
+        let peeked = alice_db.peek::<_, String>("work", 10).await.unwrap();
+        assert_eq!(peeked.len(), 1);
+        assert_eq!(peeked[0].payload, "alice's job");
+
+        let dequeued = alice_db
+            .dequeue::<_, String>("work", chrono::Duration::minutes(1))
+            .await
+            .unwrap();
+        assert_eq!(dequeued.payload, "alice's job");
+
+        // Bob's message is untouched by Alice's consumer.
+        assert_eq!(bob_db.peek::<_, String>("work", 10).await.unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn completing_and_purging_cannot_reach_another_tenants_message() {
+        let db = SqliteDatabase::open_in_memory().await.unwrap();
+        let (alice_db, bob_db) = (db.tenant(alice()), db.tenant(bob()));
+
+        alice_db
+            .enqueue("work", "alice's job", Some("shared".into()), None)
+            .await
+            .unwrap();
+        bob_db
+            .enqueue("work", "bob's job", Some("shared".into()), None)
+            .await
+            .unwrap();
+
+        // Purging by a key that exists for both tenants must only affect ours.
+        alice_db.purge("work", "shared").await.unwrap();
+
+        assert!(
+            alice_db
+                .peek::<_, String>("work", 10)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(bob_db.peek::<_, String>("work", 10).await.unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn every_tenant_holding_records_is_enumerable_from_the_root() {
+        // Startup reconciliation has to visit each tenant in turn, and the
+        // scoped handles deliberately cannot enumerate their peers.
+        let db = SqliteDatabase::open_in_memory().await.unwrap();
+
+        db.tenant(alice()).set("notes", "a", "a").await.unwrap();
+        db.tenant(bob())
+            .enqueue("work", "b", None, None)
+            .await
+            .unwrap();
+
+        let tenants = db.tenants().await.unwrap();
+        assert_eq!(tenants, vec![alice(), bob()]);
+    }
+
+    #[tokio::test]
+    async fn upgrading_a_single_tenant_database_preserves_its_records() {
+        let mut db = SqliteDatabase::open_in_memory_at_migration(PRE_TENANT_MIGRATION)
+            .await
+            .unwrap();
+
+        // Guard against this test quietly becoming a no-op if the migration
+        // list grows and PRE_TENANT_MIGRATION is not moved with it.
+        let (columns, _) = schema_of(&db, "kv").await;
+        assert!(
+            !columns.contains(&"tenant".to_string()),
+            "the fixture should start from the schema as it was before tenancy"
+        );
+
+        // Data as the last single-tenant release would have left it.
+        db.connection
+            .call(|c| {
+                c.execute_batch(
+                    "INSERT INTO kv (partition, key, value) VALUES \
+                       ('rss/feed', 'https://example.com/feed', '{\"published\":\"2024-04-15T12:00:00Z\"}'), \
+                       ('todoist/task', 'calendar/1', '{\"id\":\"7\",\"hash\":\"abc\"}'); \
+                     INSERT INTO queues (partition, key, payload, idempotencyKey) VALUES \
+                       ('cron', 'rss/Example', '{\"kind\":\"rss/todoist\"}', 'rss/Example'), \
+                       ('todoist/create-task', 'abc123', '{\"title\":\"Hello\"}', NULL);",
+                )
+            })
+            .await
+            .unwrap();
+
+        db.upgrade().await.unwrap();
+
+        // Everything must survive, and belong to the tenant a single-tenant
+        // install continues to run as.
+        let local = db.tenant(TenantId::local());
+
+        let watermark: serde_json::Value = local
+            .get("rss/feed", "https://example.com/feed")
+            .await
+            .unwrap()
+            .expect("the collector watermark should survive the upgrade");
+        assert_eq!(watermark["published"], "2024-04-15T12:00:00Z");
+
+        let task: serde_json::Value = local
+            .get("todoist/task", "calendar/1")
+            .await
+            .unwrap()
+            .expect("the task mapping should survive the upgrade");
+        assert_eq!(task["id"], "7");
+
+        let queued = local
+            .peek::<_, serde_json::Value>("cron", 10)
+            .await
+            .unwrap();
+        assert_eq!(queued.len(), 1);
+        assert_eq!(queued[0].key, "rss/Example");
+        assert_eq!(
+            queued[0].idempotency_key.as_deref(),
+            Some("rss/Example"),
+            "the caller-supplied key must not be lost in the table rebuild"
+        );
+
+        let created = local
+            .peek::<_, serde_json::Value>("todoist/create-task", 10)
+            .await
+            .unwrap();
+        assert_eq!(created.len(), 1);
+        assert_eq!(created[0].payload["title"], "Hello");
+        assert_eq!(
+            created[0].idempotency_key, None,
+            "a generated key must stay distinguishable from a caller-supplied one"
+        );
+
+        assert_eq!(db.tenants().await.unwrap(), vec![TenantId::local()]);
+    }
+
+    #[tokio::test]
+    async fn an_upgraded_database_has_the_same_schema_as_a_fresh_one() {
+        // Schema drift between fresh installs and upgraded ones produces bugs
+        // that only ever reproduce on somebody else's machine.
+        let fresh = SqliteDatabase::open_in_memory().await.unwrap();
+
+        let mut upgraded = SqliteDatabase::open_in_memory_at_migration(PRE_TENANT_MIGRATION)
+            .await
+            .unwrap();
+        upgraded.upgrade().await.unwrap();
+
+        for table in ["kv", "queues"] {
+            assert_eq!(
+                schema_of(&fresh, table).await,
+                schema_of(&upgraded, table).await,
+                "the '{table}' table differs between a fresh and an upgraded database"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn the_tenant_column_joins_the_primary_key() {
+        // If the tenant sat beside the key rather than within it, two users
+        // could not hold the same key in the same partition.
+        let db = SqliteDatabase::open_in_memory().await.unwrap();
+
+        for table in ["kv", "queues"] {
+            let key_columns: Vec<String> = db
+                .connection
+                .call(move |c| {
+                    c.prepare(&format!(
+                        "SELECT name FROM pragma_table_info('{table}') WHERE pk > 0 ORDER BY pk"
+                    ))?
+                    .query_map([], |r| r.get::<_, String>(0))?
+                    .collect::<Result<Vec<_>, _>>()
+                })
+                .await
+                .unwrap();
+
+            assert_eq!(
+                key_columns,
+                vec!["tenant", "partition", "key"],
+                "unexpected primary key on '{table}'"
+            );
+        }
+    }
+
     #[tokio::test]
     async fn test_key_value_store_basic() {
-        let db = SqliteDatabase::open_in_memory().await.unwrap();
+        let db = SqliteDatabase::open_in_memory()
+            .await
+            .unwrap()
+            .tenant(TenantId::local());
 
         assert_eq!(
             Option::<String>::None,
@@ -684,7 +1159,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_key_value_store_json() {
-        let db = SqliteDatabase::open_in_memory().await.unwrap();
+        let db = SqliteDatabase::open_in_memory()
+            .await
+            .unwrap()
+            .tenant(TenantId::local());
 
         #[derive(serde::Serialize, serde::Deserialize, PartialEq, Debug, Clone)]
         struct TestStruct {
@@ -706,7 +1184,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_queue_basic() {
-        let db = SqliteDatabase::open_in_memory().await.unwrap();
+        let db = SqliteDatabase::open_in_memory()
+            .await
+            .unwrap()
+            .tenant(TenantId::local());
 
         let _session = tracing_batteries::Session::new("automate", "0.0.1-test")
             .with_battery(tracing_batteries::Testing);
@@ -761,7 +1242,10 @@ mod tests {
     /// key is only the row key, and must not be mistaken for a meaningful one.
     #[tokio::test]
     async fn test_queue_distinguishes_supplied_keys_from_generated_ones() {
-        let db = SqliteDatabase::open_in_memory().await.unwrap();
+        let db = SqliteDatabase::open_in_memory()
+            .await
+            .unwrap()
+            .tenant(TenantId::local());
 
         db.enqueue("test_queue", "explicit", Some("my-key".into()), None)
             .await
@@ -802,7 +1286,10 @@ mod tests {
     /// than clearing it, since the upsert path rewrites every other column.
     #[tokio::test]
     async fn test_queue_upsert_preserves_the_supplied_key() {
-        let db = SqliteDatabase::open_in_memory().await.unwrap();
+        let db = SqliteDatabase::open_in_memory()
+            .await
+            .unwrap()
+            .tenant(TenantId::local());
 
         db.enqueue("test_queue", "first", Some("my-key".into()), None)
             .await
@@ -820,7 +1307,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_queue_purge() {
-        let db = SqliteDatabase::open_in_memory().await.unwrap();
+        let db = SqliteDatabase::open_in_memory()
+            .await
+            .unwrap()
+            .tenant(TenantId::local());
 
         db.enqueue("test_queue", "job1", Some("key1".into()), None)
             .await
@@ -842,7 +1332,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_queue_reserve_adjusts_visibility() {
-        let db = SqliteDatabase::open_in_memory().await.unwrap();
+        let db = SqliteDatabase::open_in_memory()
+            .await
+            .unwrap()
+            .tenant(TenantId::local());
 
         db.enqueue("test_queue", "job1", Some("key1".into()), None)
             .await
@@ -907,7 +1400,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_migration_wraps_legacy_watermarks() {
-        let db = SqliteDatabase::open_in_memory().await.unwrap();
+        let db = SqliteDatabase::open_in_memory()
+            .await
+            .unwrap()
+            .tenant(TenantId::local());
 
         // Simulate data written before the watermark format change: bare RFC 3339
         // date strings in the affected partitions, an unaffected partition, and a
@@ -916,11 +1412,11 @@ mod tests {
         db.connection
             .call(|c| {
                 c.execute_batch(
-                    "INSERT INTO kv (partition, key, value) VALUES \
-                     ('rss/feed', 'https://example.com/feed', '\"2024-04-15T12:00:00Z\"'), \
-                     ('github/releases', 'https://api.github.com', '\"2024-03-01T10:00:00Z\"'), \
-                     ('calendar/ics', 'https://example.com/cal', '\"2024-01-01T00:00:00Z\"'), \
-                     ('rss/feed', 'https://migrated.example.com/feed', '{\"published\":\"2024-02-02T02:02:02Z\"}');",
+                    "INSERT INTO kv (tenant, partition, key, value) VALUES \
+                     ('!local', 'rss/feed', 'https://example.com/feed', '\"2024-04-15T12:00:00Z\"'), \
+                     ('!local', 'github/releases', 'https://api.github.com', '\"2024-03-01T10:00:00Z\"'), \
+                     ('!local', 'calendar/ics', 'https://example.com/cal', '\"2024-01-01T00:00:00Z\"'), \
+                     ('!local', 'rss/feed', 'https://migrated.example.com/feed', '{\"published\":\"2024-02-02T02:02:02Z\"}');",
                 )
             })
             .await
