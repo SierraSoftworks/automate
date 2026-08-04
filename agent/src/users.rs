@@ -86,9 +86,6 @@ pub struct UserRegistry<S: Services> {
     services: S,
 }
 
-// The administrative half of this surface is consumed by the admin API; the
-// registry is deliberately complete rather than grown one endpoint at a time.
-#[allow(dead_code)]
 impl<S: Services> UserRegistry<S> {
     /// Wraps services that must already be scoped to [`TenantId::SYSTEM`].
     pub fn new(system_services: S) -> Self {
@@ -193,6 +190,12 @@ impl<S: Services> UserRegistry<S> {
 
     /// Removes an account from the registry.
     ///
+    /// Exposed ahead of the endpoint that will call it, because forgetting and
+    /// renaming are the two halves of the recovery path for an account renamed
+    /// at the identity provider, and splitting them across releases would leave
+    /// that path half-built.
+    #[allow(dead_code)]
+    ///
     /// Deliberately leaves the records the account owns in place: forgetting who
     /// somebody was should not destroy their workflows, and the two are separate
     /// decisions.
@@ -204,6 +207,7 @@ impl<S: Services> UserRegistry<S> {
     }
 
     /// Moves a registry entry from one account name to another.
+    #[allow(dead_code)]
     ///
     /// Only the registry entry; moving the records the account owns is a
     /// separate step, because it spans every table and belongs to the database

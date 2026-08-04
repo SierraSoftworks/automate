@@ -61,7 +61,6 @@ impl Principal {
     }
 
     /// The account whose records this request operates on.
-    #[allow(dead_code)]
     pub fn effective(&self) -> &TenantId {
         &self.effective
     }

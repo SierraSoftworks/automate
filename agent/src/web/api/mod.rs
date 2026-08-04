@@ -27,9 +27,11 @@ use crate::web::helpers::oidc::{
 };
 use crate::web::helpers::request::client_ip;
 
+mod admin;
 mod auth;
 mod kv;
 mod queue;
+mod scope;
 mod user;
 
 /// The header by which an administrator asks to act as another user.
@@ -78,14 +80,24 @@ pub fn configure() -> actix_web::Scope<
             web::scope("")
                 .wrap(from_fn(api_auth::<S>))
                 .route("/me", web::get().to(user::me))
-                .route("/kv", web::get().to(kv::list::<S>))
-                .route("/kv/{partition}", web::delete().to(kv::delete::<S>))
-                .route("/queue", web::get().to(queue::list::<S>))
+                // Everything below operates on the account the request is acting
+                // for, which is the impersonated one when an administrator is
+                // acting as somebody else. The `Scoped` extractor in each
+                // handler's signature is what enforces that.
+                .route("/kv", web::get().to(kv::list))
+                .route("/kv/{partition}", web::delete().to(kv::delete))
+                .route("/queue", web::get().to(queue::list))
+                .route("/queue/{partition}/trigger", web::post().to(queue::trigger))
+                .route("/queue/{partition}", web::delete().to(queue::delete))
+                // Installation-wide endpoints. These take the `Administrative`
+                // extractor, which refuses a request from anyone who is not an
+                // administrator, so the guard cannot be lost by remounting them.
+                .route("/admin/users", web::get().to(admin::list_users))
                 .route(
-                    "/queue/{partition}/trigger",
-                    web::post().to(queue::trigger::<S>),
+                    "/admin/users/{username}",
+                    web::patch().to(admin::update_user),
                 )
-                .route("/queue/{partition}", web::delete().to(queue::delete::<S>))
+                .route("/admin/audit", web::get().to(admin::audit))
                 // The setup wizard is launched from the admin SPA: list the
                 // configured integrations, mint a popup authorization URL, and
                 // manage the resulting connections. All admin-gated by
@@ -708,6 +720,185 @@ mod tests {
                 .unwrap()
                 .is_empty()
         );
+    }
+
+    #[actix_web::test]
+    async fn a_handler_reads_the_records_of_the_account_being_acted_for() {
+        use crate::db::KeyValueStore;
+
+        let context = context("true", "true").await;
+        register(&context, "alice", false).await;
+
+        // The same partition and key for both accounts, so a handler that
+        // ignored the tenant would return the wrong one rather than nothing.
+        context
+            .tenant(TenantId::local())
+            .kv()
+            .set("notes", "shared", "the administrator's note")
+            .await
+            .unwrap();
+        context
+            .tenant(TenantId::new("alice").unwrap())
+            .kv()
+            .set("notes", "shared", "alice's note")
+            .await
+            .unwrap();
+
+        let app = app!(context);
+
+        let own: serde_json::Value = test::call_and_read_body_json(
+            &app,
+            test::TestRequest::get().uri("/api/v1/kv").to_request(),
+        )
+        .await;
+        assert_eq!(own[0]["payload"], "the administrator's note");
+
+        // While impersonating, the administrator sees exactly what that user
+        // would see.
+        let impersonated: serde_json::Value = test::call_and_read_body_json(
+            &app,
+            test::TestRequest::get()
+                .uri("/api/v1/kv")
+                .insert_header((IMPERSONATE_HEADER, "alice"))
+                .to_request(),
+        )
+        .await;
+        assert_eq!(impersonated[0]["payload"], "alice's note");
+    }
+
+    #[actix_web::test]
+    async fn a_write_lands_on_the_impersonated_account_not_the_administrators() {
+        use crate::db::KeyValueStore;
+
+        let context = context("true", "true").await;
+        register(&context, "alice", false).await;
+
+        for tenant in [TenantId::local(), TenantId::new("alice").unwrap()] {
+            context
+                .tenant(tenant)
+                .kv()
+                .set("notes", "shared", "present")
+                .await
+                .unwrap();
+        }
+
+        let app = app!(context);
+
+        test::call_service(
+            &app,
+            test::TestRequest::delete()
+                .uri("/api/v1/kv/notes?key=shared")
+                .insert_header((IMPERSONATE_HEADER, "alice"))
+                .to_request(),
+        )
+        .await;
+
+        assert_eq!(
+            context
+                .tenant(TenantId::new("alice").unwrap())
+                .kv()
+                .get::<String>("notes", "shared")
+                .await
+                .unwrap(),
+            None
+        );
+        assert!(
+            context
+                .tenant(TenantId::local())
+                .kv()
+                .get::<String>("notes", "shared")
+                .await
+                .unwrap()
+                .is_some(),
+            "the administrator's own record should be untouched"
+        );
+    }
+
+    #[actix_web::test]
+    async fn installation_wide_endpoints_are_refused_to_non_administrators() {
+        let app = app!(context("true", "false").await);
+
+        for uri in ["/api/v1/admin/users", "/api/v1/admin/audit"] {
+            let resp =
+                test::call_service(&app, test::TestRequest::get().uri(uri).to_request()).await;
+
+            assert_eq!(
+                resp.status(),
+                StatusCode::FORBIDDEN,
+                "{uri} should be refused to a non-administrator"
+            );
+        }
+    }
+
+    #[actix_web::test]
+    async fn an_administrator_can_list_and_suspend_accounts() {
+        let context = context("true", "true").await;
+        register(&context, "alice", false).await;
+        let app = app!(context);
+
+        let users: Vec<serde_json::Value> = test::call_and_read_body_json(
+            &app,
+            test::TestRequest::get()
+                .uri("/api/v1/admin/users")
+                .to_request(),
+        )
+        .await;
+        assert!(users.iter().any(|u| u["username"] == "alice"));
+
+        let resp = test::call_service(
+            &app,
+            test::TestRequest::patch()
+                .uri("/api/v1/admin/users/alice")
+                .set_json(serde_json::json!({ "disabled": true }))
+                .to_request(),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        assert!(
+            UserRegistry::new(context.tenant(TenantId::system()))
+                .get(&TenantId::new("alice").unwrap())
+                .await
+                .unwrap()
+                .unwrap()
+                .disabled
+        );
+    }
+
+    #[actix_web::test]
+    async fn suspending_an_unknown_account_is_reported() {
+        let app = app!(context("true", "true").await);
+
+        let resp = test::call_service(
+            &app,
+            test::TestRequest::patch()
+                .uri("/api/v1/admin/users/nobody")
+                .set_json(serde_json::json!({ "disabled": true }))
+                .to_request(),
+        )
+        .await;
+
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[actix_web::test]
+    async fn impersonation_cannot_be_used_to_reach_administrative_endpoints() {
+        // Administrator status belongs to whoever signed in, so acting as an
+        // administrator must not confer it.
+        let context = context("true", "false").await;
+        register(&context, "alice", false).await;
+        let app = app!(context);
+
+        let resp = test::call_service(
+            &app,
+            test::TestRequest::get()
+                .uri("/api/v1/admin/users")
+                .insert_header((IMPERSONATE_HEADER, "alice"))
+                .to_request(),
+        )
+        .await;
+
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
     }
 
     #[actix_web::test]

@@ -3,6 +3,7 @@
 use actix_web::{HttpResponse, web};
 
 use super::json_error;
+use super::scope::Scoped;
 use crate::db::Queue;
 use crate::prelude::*;
 
@@ -21,7 +22,7 @@ pub struct TriggerRequest {
 
 /// `GET /api/v1/queue` — returns the queued messages across all partitions,
 /// sorted by their scheduled time.
-pub async fn list<S: Services>(services: web::Data<S>) -> HttpResponse {
+pub async fn list(services: Scoped) -> HttpResponse {
     let partitions = match services.queue().partitions().await {
         Ok(partitions) => partitions,
         Err(err) => {
@@ -84,8 +85,8 @@ pub async fn list<S: Services>(services: web::Data<S>) -> HttpResponse {
 
 /// `POST /api/v1/queue/{partition}/trigger` — re-enqueues a message so it
 /// becomes immediately available for processing.
-pub async fn trigger<S: Services>(
-    services: web::Data<S>,
+pub async fn trigger(
+    services: Scoped,
     partition: web::Path<String>,
     body: web::Json<TriggerRequest>,
 ) -> HttpResponse {
@@ -107,8 +108,8 @@ pub async fn trigger<S: Services>(
 }
 
 /// `DELETE /api/v1/queue/{partition}?key=...` — removes a queued message.
-pub async fn delete<S: Services>(
-    services: web::Data<S>,
+pub async fn delete(
+    services: Scoped,
     partition: web::Path<String>,
     query: web::Query<DeleteQuery>,
 ) -> HttpResponse {

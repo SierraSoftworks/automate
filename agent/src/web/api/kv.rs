@@ -3,6 +3,7 @@
 use actix_web::{HttpResponse, web};
 
 use super::json_error;
+use super::scope::Scoped;
 use crate::db::KeyValueStore;
 use crate::prelude::*;
 
@@ -12,8 +13,8 @@ pub struct DeleteQuery {
     pub key: String,
 }
 
-/// `GET /api/v1/kv` — returns every entry across all partitions.
-pub async fn list<S: Services>(services: web::Data<S>) -> HttpResponse {
+/// `GET /api/v1/kv` — returns every entry the signed-in account owns.
+pub async fn list(services: Scoped) -> HttpResponse {
     let entries = match services.kv().scan::<serde_json::Value>().await {
         Ok(entries) => entries,
         Err(err) => {
@@ -34,8 +35,8 @@ pub async fn list<S: Services>(services: web::Data<S>) -> HttpResponse {
 }
 
 /// `DELETE /api/v1/kv/{partition}?key=...` — removes a single entry.
-pub async fn delete<S: Services>(
-    services: web::Data<S>,
+pub async fn delete(
+    services: Scoped,
     partition: web::Path<String>,
     query: web::Query<DeleteQuery>,
 ) -> HttpResponse {
