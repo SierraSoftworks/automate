@@ -15,6 +15,7 @@ mod users;
 mod web;
 mod webhooks;
 mod workflow_store;
+mod workflow_toml;
 mod workflows;
 
 #[cfg(test)]

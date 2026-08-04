@@ -111,6 +111,10 @@ pub fn configure() -> actix_web::Scope<
                 .route("/workflow-types", web::get().to(workflows::types))
                 .route("/workflows", web::get().to(workflows::list))
                 .route("/workflows", web::post().to(workflows::create))
+                // Ahead of the `{workflow}` routes, so that these names are not
+                // read as identifiers.
+                .route("/workflows/export", web::get().to(workflows::export))
+                .route("/workflows/import", web::post().to(workflows::import))
                 .route("/workflows/{workflow}", web::get().to(workflows::get))
                 .route("/workflows/{workflow}", web::put().to(workflows::update))
                 .route("/workflows/{workflow}", web::delete().to(workflows::delete))

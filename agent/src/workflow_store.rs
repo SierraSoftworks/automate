@@ -205,6 +205,68 @@ impl<S: Services> WorkflowStore<S> {
         Ok(workflows)
     }
 
+    /// Every stored record this tenant owns, as written down.
+    ///
+    /// Unlike [`WorkflowStore::list`] this keeps the records whose type is no
+    /// longer registered, because the callers that want records rather than
+    /// presentable workflows — export, and pruning — need to see everything
+    /// that is actually there.
+    pub async fn records(&self) -> Result<Vec<WorkflowRecord>, Error> {
+        let mut records = Vec::new();
+
+        for partition in Self::partitions() {
+            let stored: Vec<(String, WorkflowRecord)> = self.services.kv().list(partition).await?;
+            records.extend(stored.into_iter().map(|(_, record)| record));
+        }
+
+        records.sort_by_key(|record| std::cmp::Reverse(record.created_at));
+        Ok(records)
+    }
+
+    /// Stores a workflow under an identifier the caller chose.
+    ///
+    /// Used when applying a file, where the file names the workflow and
+    /// applying it to an empty installation has to reproduce what it described
+    /// rather than a fresh copy of it. Creation timestamps are preserved where
+    /// the workflow already existed, so re-applying a file does not make
+    /// everything look newly made.
+    pub async fn upsert(&self, id: WorkflowId, draft: WorkflowDraft) -> Result<Workflow, Error> {
+        let schedule = Self::vet(&draft)?;
+        let partition = Self::partition_for(&draft.type_id)?;
+        let existing = self.find(id).await?;
+
+        if let Some(existing) = &existing
+            && existing.type_id != draft.type_id
+        {
+            return Err(human_errors::user(
+                format!(
+                    "'{id}' is already a '{}' workflow, so it cannot be replaced by a '{}'.",
+                    existing.type_id, draft.type_id
+                ),
+                &["Give the new workflow a different id, or remove the existing one first."],
+            ));
+        }
+
+        let now = Utc::now();
+        let record = WorkflowRecord {
+            id,
+            type_id: draft.type_id,
+            config: draft.config,
+            schedule,
+            enabled: draft.enabled,
+            created_at: existing.as_ref().map(|e| e.created_at).unwrap_or(now),
+            updated_at: now,
+            last_run: existing.as_ref().and_then(|e| e.last_run),
+        };
+
+        self.services
+            .kv()
+            .set(partition, id.to_string(), record.clone())
+            .await?;
+
+        self.present(record)
+    }
+
     /// Finds a workflow by identifier, wherever it is stored.
     pub async fn find(&self, id: WorkflowId) -> Result<Option<WorkflowRecord>, Error> {
         for partition in Self::partitions() {

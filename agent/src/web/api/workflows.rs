@@ -211,6 +211,71 @@ pub async fn delete(services: Scoped, id: web::Path<String>) -> HttpResponse {
     }
 }
 
+/// How a file should be applied.
+#[derive(serde::Deserialize)]
+pub struct ImportQuery {
+    /// Whether workflows absent from the file should be deleted.
+    ///
+    /// Off unless asked for, because the common case is a file describing part
+    /// of an installation and the surprising outcome is losing the rest.
+    #[serde(default)]
+    pub prune: bool,
+}
+
+/// `GET /api/v1/workflows/export` — this account's workflows as TOML.
+pub async fn export(services: Scoped) -> HttpResponse {
+    let store = WorkflowStore::new(services.clone());
+
+    let records = match store.records().await {
+        Ok(records) => records,
+        Err(err) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, err.description()),
+    };
+
+    match crate::workflow_toml::export(&records) {
+        Ok(document) => HttpResponse::Ok()
+            .content_type("application/toml; charset=utf-8")
+            .insert_header((
+                "Content-Disposition",
+                "attachment; filename=\"workflows.toml\"",
+            ))
+            .body(document),
+        Err(err) => json_error(StatusCode::INTERNAL_SERVER_ERROR, err.description()),
+    }
+}
+
+/// `POST /api/v1/workflows/import` — applies a TOML document to this account.
+pub async fn import(
+    services: Scoped,
+    query: web::Query<ImportQuery>,
+    body: String,
+) -> HttpResponse {
+    let store = WorkflowStore::new(services.clone());
+
+    match crate::workflow_toml::import(&store, &body, query.prune).await {
+        Ok(summary) => {
+            reconcile(&services).await;
+
+            let entry = AuditEntry::new(
+                AuditCategory::WorkflowConfig,
+                "imported",
+                AuditOutcome::Success,
+            )
+            .message(format!(
+                "Applied a workflow file: {} created, {} updated, {} deleted.",
+                summary.created, summary.updated, summary.deleted
+            ));
+            if let Err(err) = services.audit().record(entry).await {
+                warn!(error = %err, "Failed to record a workflow import in the audit log.");
+            }
+
+            HttpResponse::Ok().json(summary)
+        }
+        // A file that will not apply is the file's problem, and the message says
+        // which workflow in it is at fault.
+        Err(err) => json_error(StatusCode::BAD_REQUEST, err.description()),
+    }
+}
+
 /// Brings this account's schedules into line with the change just made.
 ///
 /// A failure here is logged rather than returned: the record has already been
@@ -465,6 +530,98 @@ mod tests {
             test::call_service(&app, req).await.status(),
             StatusCode::NOT_FOUND,
         );
+    }
+
+    #[actix_web::test]
+    async fn workflows_can_be_taken_out_as_a_file_and_put_back() {
+        let app = app!(context().await);
+
+        let req = test::TestRequest::post()
+            .uri("/api/v1/workflows")
+            .set_json(valid_body())
+            .to_request();
+        let created: Workflow = test::call_and_read_body_json(&app, req).await;
+
+        let req = test::TestRequest::get()
+            .uri("/api/v1/workflows/export")
+            .to_request();
+        let resp = test::call_service(&app, req).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        let document = String::from_utf8(test::read_body(resp).await.to_vec()).unwrap();
+        assert!(
+            document.contains(&created.id.to_string()),
+            "an exported workflow should carry its identifier, or applying the file would make a second copy: {document}",
+        );
+
+        // Applying it back changes nothing, because everything in it is already
+        // there under the identifier it names.
+        let req = test::TestRequest::post()
+            .uri("/api/v1/workflows/import")
+            .insert_header(("Content-Type", "text/plain"))
+            .set_payload(document)
+            .to_request();
+        let summary: serde_json::Value = test::call_and_read_body_json(&app, req).await;
+
+        assert_eq!(summary["created"], 0);
+        assert_eq!(summary["updated"], 1);
+        assert_eq!(summary["deleted"], 0);
+    }
+
+    #[actix_web::test]
+    async fn an_imported_workflow_is_scheduled_without_a_restart() {
+        let context = context().await;
+        let app = app!(context);
+
+        let req = test::TestRequest::post()
+            .uri("/api/v1/workflows/import")
+            .insert_header(("Content-Type", "text/plain"))
+            .set_payload(
+                r#"
+                [[workflows.rss]]
+                name = "From a file"
+                url = "https://example.com/rss/"
+                homepage = "https://example.com/"
+                cron = "@daily"
+                "#,
+            )
+            .to_request();
+        assert_eq!(test::call_service(&app, req).await.status(), StatusCode::OK);
+
+        assert_eq!(
+            armed(&context).await.len(),
+            1,
+            "applying a file should leave its workflows scheduled, like any other way of creating one",
+        );
+    }
+
+    #[actix_web::test]
+    async fn a_file_that_will_not_apply_is_the_files_problem() {
+        let app = app!(context().await);
+
+        let req = test::TestRequest::post()
+            .uri("/api/v1/workflows/import")
+            .insert_header(("Content-Type", "text/plain"))
+            .set_payload("this is not toml")
+            .to_request();
+
+        assert_eq!(
+            test::call_service(&app, req).await.status(),
+            StatusCode::BAD_REQUEST,
+        );
+    }
+
+    #[actix_web::test]
+    async fn export_is_not_mistaken_for_a_workflow_called_export() {
+        // The route is a sibling of /workflows/{workflow}, so it has to be
+        // matched first or it would be read as an identifier and refused.
+        let app = app!(context().await);
+
+        let req = test::TestRequest::get()
+            .uri("/api/v1/workflows/export")
+            .to_request();
+
+        assert_eq!(test::call_service(&app, req).await.status(), StatusCode::OK);
     }
 
     #[actix_web::test]
