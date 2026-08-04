@@ -4,13 +4,8 @@ use super::{
     Connection, Integration, IntegrationContext, IntegrationInfo, SetupComplete, SetupRedirect,
 };
 use crate::config::Config;
+use crate::connections::{ConnectionSecret, ConnectionStore};
 use crate::prelude::*;
-use crate::web::OAuth2RefreshToken;
-
-/// How many connections we are willing to list for one provider. Far more than
-/// anyone is likely to link, but bounded so a runaway queue cannot produce an
-/// unbounded response.
-const MAX_CONNECTIONS: usize = 100;
 
 pub struct OAuth2Integration;
 
@@ -48,8 +43,16 @@ impl Integration for OAuth2Integration {
         id: &str,
         ctx: IntegrationContext<'_>,
     ) -> Result<SetupRedirect, human_errors::Error> {
-        let provider = ctx.services.config().get_oauth2(id)?;
+        let services = ctx.services();
+        let provider = services.config().get_oauth2(id)?;
         let (url, state) = provider.get_login_url(ctx.callback_url(self, id))?;
+
+        // Recorded before the visitor leaves, so the callback can establish
+        // whose authorisation it is completing without trusting anything the
+        // request tells it.
+        ctx.pending()
+            .begin(&state, ctx.initiator.clone(), id)
+            .await?;
 
         Ok(SetupRedirect {
             url: url.to_string(),
@@ -63,7 +66,7 @@ impl Integration for OAuth2Integration {
         ctx: IntegrationContext<'_>,
         query: &HashMap<String, String>,
     ) -> Result<SetupComplete, human_errors::Error> {
-        let provider = ctx.services.config().get_oauth2(id)?;
+        let provider = ctx.context.config().get_oauth2(id)?;
 
         let code = query.get("code").ok_or_else(|| {
             human_errors::user(
@@ -72,25 +75,63 @@ impl Integration for OAuth2Integration {
             )
         })?;
 
+        let state = query.get("state").ok_or_else(|| {
+            human_errors::user(
+                "The provider did not return the state we sent it.",
+                &["Start connecting the service again from this application."],
+            )
+        })?;
+
+        // Whose authorisation this is comes from what we recorded when the flow
+        // began, never from the request: a callback arrives from the provider,
+        // so nothing in it can be trusted to name an account.
+        let owner = ctx.pending().claim(state, id).await?.tenant;
+
         let token = provider
             .handle_callback(
                 ctx.callback_url(self, id),
                 code.clone(),
-                &ctx.services.http_client(),
+                &ctx.services().http_client(),
             )
             .await?;
 
-        // Deliberately enqueued without a key. We do not yet know whose account
-        // this is, so anything we invented here would be meaningless; the job's
-        // first run replaces it with an account-derived key (see
-        // `JobContext::key`), which is also what collapses a repeat connection of
-        // the same account onto the existing one.
-        for partition in provider.jobs.iter().cloned() {
-            ctx.services
-                .queue()
-                .enqueue(partition, token.clone(), None, None)
-                .await?;
-        }
+        let connections = ConnectionStore::new(ctx.for_tenant(owner.clone()), owner.clone());
+        let secret = ConnectionSecret::OAuth2 {
+            access_token: token.access_token().to_string(),
+            refresh_token: token.refresh_token().to_string(),
+            expires_at: token.expires_at(),
+        };
+
+        // Re-authorising an account we already hold refreshes it in place, so
+        // somebody reconnecting after an expiry is not left with two entries
+        // they cannot tell apart.
+        let connection = match connections.find_by_account(id, owner.as_str()).await? {
+            Some(existing) => {
+                let refreshed = connections.update_secret(existing.id, secret).await?;
+                info!(
+                    connection.id = %existing.id,
+                    oauth.provider = id,
+                    "Refreshed an existing connection after re-authorisation."
+                );
+                refreshed.unwrap_or(existing)
+            }
+            None => {
+                let created = connections
+                    .create(id, provider.name.clone(), Some(owner.to_string()), secret)
+                    .await?;
+                info!(
+                    connection.id = %created.id,
+                    oauth.provider = id,
+                    "Linked a new account."
+                );
+                created
+            }
+        };
+
+        // Start whatever this provider drives. Keyed by the connection, so
+        // re-authorising an account that is already running does not leave two
+        // schedules chasing each other.
+        start_provider_workflows(id, connection.id, &ctx.for_tenant(owner)).await?;
 
         Ok(SetupComplete {
             heading: "Login complete".to_string(),
@@ -101,82 +142,113 @@ impl Integration for OAuth2Integration {
         })
     }
 
-    /// An OAuth2 provider holds each connection's credential as a queued job
-    /// payload rather than in a registry, so the queue is the register of who is
-    /// connected.
-    ///
-    /// The provider's first job partition is authoritative: every partition is
-    /// seeded from the same callback, so they start out in step. They can drift
-    /// once the jobs re-key themselves, which is why [`Self::disconnect`] clears
-    /// the key from all of them rather than only this one.
+    /// The accounts linked to this provider by whoever is asking.
     async fn connections(
         &self,
         id: &str,
         ctx: IntegrationContext<'_>,
     ) -> Result<Vec<Connection>, human_errors::Error> {
-        let provider = ctx.services.config().get_oauth2(id)?;
+        let store = ConnectionStore::new(ctx.services(), ctx.initiator.clone());
 
-        let Some(partition) = provider.jobs.first().cloned() else {
-            return Ok(vec![]);
-        };
-
-        Ok(ctx
-            .services
-            .queue()
-            .peek::<_, OAuth2RefreshToken>(partition, MAX_CONNECTIONS)
+        Ok(store
+            .list_for_provider(id)
             .await?
             .into_iter()
-            .map(|message| {
-                // The token itself must never leave the agent; only when it next
-                // needs renewing is useful to an administrator.
-                Connection::new(message.key.clone(), message.key)
-                    .with_kind(provider.name.clone())
-                    .with_detail(format!(
+            .map(|connection| {
+                // The credential itself never leaves the agent. When it next
+                // needs renewing is useful to show; the token is not.
+                let mut summary = Connection::new(connection.id.to_string(), connection.name)
+                    .with_kind(connection.kind.as_str().to_string());
+
+                if let Some(expires_at) = connection.expires_at {
+                    summary = summary.with_detail(format!(
                         "Renews {}",
-                        message.payload.expires_at().format("%Y-%m-%d %H:%M UTC")
-                    ))
+                        expires_at.format("%Y-%m-%d %H:%M UTC")
+                    ));
+                }
+
+                summary
             })
             .collect())
     }
 
-    /// Drops the connection's credential, which is what stops the provider's
-    /// jobs from running for that account.
+    /// Removes the stored credential, which is what stops this provider's
+    /// workflows running for that account.
     async fn disconnect(
         &self,
         id: &str,
         connection: &str,
         ctx: IntegrationContext<'_>,
     ) -> Result<(), human_errors::Error> {
-        let provider = ctx.services.config().get_oauth2(id)?;
+        let store = ConnectionStore::new(ctx.services(), ctx.initiator.clone());
 
-        for partition in provider.jobs.iter().cloned() {
-            ctx.services
-                .queue()
-                .purge(partition, connection.to_string())
-                .await?;
+        let connection_id = connection.parse().map_err(|err| {
+            human_errors::user(
+                format!("'{connection}' is not a connection identifier. {err}"),
+                &["Use the identifier shown against the connection you want to remove."],
+            )
+        })?;
+
+        // Checking the provider stops a connection being removed through another
+        // integration's endpoint, which would otherwise let the wrong wizard
+        // delete it.
+        match store.get(connection_id).await? {
+            Some(existing) if existing.provider == id => {
+                store.delete(connection_id).await?;
+                info!("Disconnected '{connection}' from the '{id}' integration.");
+            }
+            _ => {
+                return Err(human_errors::user(
+                    format!("There is no '{id}' connection named '{connection}'."),
+                    &["It may already have been removed."],
+                ));
+            }
         }
-
-        info!("Disconnected '{connection}' from the '{id}' integration.");
 
         Ok(())
     }
 }
 
+/// Kicks off the workflows a newly linked account drives.
+///
+/// The set is keyed off the provider rather than configured, because a provider
+/// and the work it enables are decided together in code; making it configurable
+/// would only invite the two to disagree.
+async fn start_provider_workflows(
+    provider: &str,
+    connection: automate_api::ConnectionId,
+    services: &crate::services::AppServices,
+) -> Result<(), human_errors::Error> {
+    if provider == "spotify" {
+        crate::jobs::SpotifyYearlyPlaylistWorkflow::dispatch(
+            crate::jobs::SpotifyYearlyPlaylistTask { connection },
+            Some(connection.to_string().into()),
+            services,
+        )
+        .await?;
+    }
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::services::{AppServices, ServicesContainer};
+    use crate::services::AppContext;
     use crate::web::OAuth2Config;
+    use automate_api::ConnectionId;
 
-    const PARTITION: &str = "spotify/yearly-playlist";
+    fn alice() -> TenantId {
+        TenantId::new("alice").unwrap()
+    }
 
-    async fn services() -> AppServices {
-        ServicesContainer::new_custom_mock(|config, _| {
+    async fn context() -> AppContext {
+        AppContext::new_mock(|config| {
             config.oauth2.insert(
                 "spotify".to_string(),
                 OAuth2Config {
                     name: "Spotify".to_string(),
-                    jobs: vec![PARTITION.to_string(), "spotify/other".to_string()],
+                    deprecated_jobs: Vec::new(),
                     acl: None,
                     client_id: "client".to_string(),
                     client_secret: "secret".to_string(),
@@ -191,139 +263,220 @@ mod tests {
         .unwrap()
     }
 
-    fn ctx(services: &AppServices) -> IntegrationContext<'_> {
+    fn ctx(context: &AppContext, initiator: TenantId) -> IntegrationContext<'_> {
         IntegrationContext {
-            services,
+            context,
+            initiator,
             base_url: "https://automate.example.com",
         }
     }
 
-    async fn connect(services: &AppServices, key: &str) {
-        let token: OAuth2RefreshToken = serde_json::from_value(serde_json::json!({
-            "access_token": "at",
-            "refresh_token": "rt",
-            "expires_at": "2030-01-01T00:00:00Z",
-        }))
-        .unwrap();
+    /// Links an account directly, standing in for a completed authorisation.
+    async fn connect(context: &AppContext, tenant: TenantId, account: &str) -> ConnectionId {
+        let store = ConnectionStore::new(context.tenant(tenant.clone()), tenant);
 
-        for partition in [PARTITION, "spotify/other"] {
-            services
-                .queue()
-                .enqueue(partition, token.clone(), Some(key.to_string().into()), None)
-                .await
-                .unwrap();
-        }
+        store
+            .create(
+                "spotify",
+                "Spotify",
+                Some(account.to_string()),
+                ConnectionSecret::OAuth2 {
+                    access_token: "access-tYqR9".into(),
+                    refresh_token: "refresh-Kx3Lm".into(),
+                    expires_at: "2030-01-01T00:00:00Z".parse().unwrap(),
+                },
+            )
+            .await
+            .unwrap()
+            .id
     }
 
-    /// Each queued credential is one connected account. Collapsing them into a
-    /// single "connected" entry would leave a second account invisible, and give
+    /// Each linked account is its own connection. Collapsing them into a single
+    /// "connected" entry would leave a second account invisible, and give
     /// `disconnect` nothing to address.
     #[tokio::test]
-    async fn every_queued_credential_is_reported_as_its_own_connection() {
-        let services = services().await;
-        connect(&services, "alice").await;
-        connect(&services, "bob").await;
+    async fn every_linked_account_is_reported_as_its_own_connection() {
+        let context = context().await;
+        connect(&context, alice(), "alice-personal").await;
+        connect(&context, alice(), "alice-work").await;
 
-        let mut connections = OAuth2Integration
-            .connections("spotify", ctx(&services))
+        let connections = OAuth2Integration
+            .connections("spotify", ctx(&context, alice()))
             .await
             .unwrap();
-        connections.sort_by(|a, b| a.id.cmp(&b.id));
 
-        assert_eq!(
-            connections
-                .iter()
-                .map(|c| c.id.as_str())
-                .collect::<Vec<_>>(),
-            vec!["alice", "bob"]
-        );
-        assert_eq!(connections[0].kind.as_deref(), Some("Spotify"));
+        assert_eq!(connections.len(), 2);
+        assert_eq!(connections[0].kind.as_deref(), Some("oauth2"));
     }
 
     /// The tokens themselves must never leave the agent; only when they next need
-    /// renewing is useful to an administrator.
+    /// renewing is useful to show.
     #[tokio::test]
     async fn a_connection_never_carries_the_credential() {
-        let services = services().await;
-        connect(&services, "alice").await;
+        let context = context().await;
+        connect(&context, alice(), "alice-personal").await;
 
         let connections = OAuth2Integration
-            .connections("spotify", ctx(&services))
+            .connections("spotify", ctx(&context, alice()))
             .await
             .unwrap();
 
         let serialized = serde_json::to_string(&connections).unwrap();
-        assert!(!serialized.contains("at"), "leaked an access token");
-        assert!(!serialized.contains("rt"), "leaked a refresh token");
+        assert!(
+            !serialized.contains("access-tYqR9"),
+            "leaked an access token"
+        );
+        assert!(
+            !serialized.contains("refresh-Kx3Lm"),
+            "leaked a refresh token"
+        );
         assert!(serialized.contains("Renews 2030-01-01"));
     }
 
     #[tokio::test]
-    async fn a_provider_with_no_jobs_has_nothing_to_report() {
-        let services = ServicesContainer::new_custom_mock(|config, _| {
-            config.oauth2.insert(
-                "spotify".to_string(),
-                OAuth2Config {
-                    name: "Spotify".to_string(),
-                    jobs: vec![],
-                    acl: None,
-                    client_id: "c".to_string(),
-                    client_secret: "s".to_string(),
-                    auth_url: "https://accounts.spotify.com/authorize".to_string(),
-                    token_url: "https://accounts.spotify.com/api/token".to_string(),
-                    scopes: vec![],
-                    todoist: Default::default(),
-                },
-            );
-        })
-        .await
-        .unwrap();
+    async fn an_account_with_nothing_linked_has_nothing_to_report() {
+        let context = context().await;
 
         assert!(
             OAuth2Integration
-                .connections("spotify", ctx(&services))
+                .connections("spotify", ctx(&context, alice()))
                 .await
                 .unwrap()
                 .is_empty()
         );
     }
 
-    /// A credential is seeded into every one of the provider's partitions, so
-    /// disconnecting has to clear all of them — leaving one behind would keep the
-    /// account running under a job the operator thought they had revoked.
     #[tokio::test]
-    async fn disconnecting_clears_the_credential_from_every_partition() {
-        let services = services().await;
-        connect(&services, "alice").await;
-        connect(&services, "bob").await;
+    async fn one_accounts_connections_are_invisible_to_another() {
+        let context = context().await;
+        let bob = TenantId::new("bob").unwrap();
 
-        OAuth2Integration
-            .disconnect("spotify", "alice", ctx(&services))
-            .await
-            .unwrap();
+        connect(&context, alice(), "alice-personal").await;
 
-        for partition in [PARTITION, "spotify/other"] {
-            let remaining = services
-                .queue()
-                .peek::<_, serde_json::Value>(partition, 10)
+        assert!(
+            OAuth2Integration
+                .connections("spotify", ctx(&context, bob))
                 .await
-                .unwrap();
-            assert_eq!(
-                remaining.iter().map(|m| m.key.as_str()).collect::<Vec<_>>(),
-                vec!["bob"],
-                "'{partition}' should only have bob left"
-            );
-        }
+                .unwrap()
+                .is_empty()
+        );
     }
 
-    /// Disconnecting something already gone is how a stale entry gets cleaned up,
-    /// so it must not be an error.
     #[tokio::test]
-    async fn disconnecting_an_unknown_connection_is_not_an_error() {
-        let services = services().await;
+    async fn disconnecting_removes_the_stored_credential() {
+        let context = context().await;
+        let id = connect(&context, alice(), "alice-personal").await;
+
         OAuth2Integration
-            .disconnect("spotify", "nobody", ctx(&services))
+            .disconnect("spotify", &id.to_string(), ctx(&context, alice()))
             .await
             .unwrap();
+
+        assert!(
+            OAuth2Integration
+                .connections("spotify", ctx(&context, alice()))
+                .await
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[tokio::test]
+    async fn one_account_cannot_disconnect_anothers_credential() {
+        let context = context().await;
+        let bob = TenantId::new("bob").unwrap();
+        let id = connect(&context, alice(), "alice-personal").await;
+
+        assert!(
+            OAuth2Integration
+                .disconnect("spotify", &id.to_string(), ctx(&context, bob))
+                .await
+                .is_err()
+        );
+
+        assert_eq!(
+            OAuth2Integration
+                .connections("spotify", ctx(&context, alice()))
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn a_connection_cannot_be_removed_through_another_providers_wizard() {
+        // Otherwise the wrong wizard could delete a credential it has no
+        // business knowing about.
+        let context = context().await;
+        let id = connect(&context, alice(), "alice-personal").await;
+
+        assert!(
+            OAuth2Integration
+                .disconnect("todoist", &id.to_string(), ctx(&context, alice()))
+                .await
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn beginning_setup_records_who_started_it() {
+        // The callback arrives from the provider, so this record is the only
+        // trustworthy statement of whose authorisation it completes.
+        let context = context().await;
+
+        let redirect = OAuth2Integration
+            .begin_setup("spotify", ctx(&context, alice()))
+            .await
+            .unwrap();
+
+        let pending = ctx(&context, alice())
+            .pending()
+            .claim(&redirect.state, "spotify")
+            .await
+            .unwrap();
+
+        assert_eq!(pending.tenant, alice());
+        assert_eq!(pending.integration, "spotify");
+    }
+
+    #[tokio::test]
+    async fn a_callback_without_a_recognised_state_is_refused() {
+        // Reaching the provider's token endpoint before establishing whose
+        // authorisation this is would let an unsolicited callback mint a
+        // credential against an account of the attacker's choosing.
+        let context = context().await;
+
+        let outcome = OAuth2Integration
+            .complete_setup(
+                "spotify",
+                ctx(&context, alice()),
+                &HashMap::from([
+                    ("code".to_string(), "abc".to_string()),
+                    ("state".to_string(), "never-issued".to_string()),
+                ]),
+            )
+            .await;
+
+        let Err(err) = outcome else {
+            panic!("an unrecognised state should be refused");
+        };
+        assert!(err.to_string().contains("could not match"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn a_callback_without_a_state_is_refused() {
+        let context = context().await;
+
+        assert!(
+            OAuth2Integration
+                .complete_setup(
+                    "spotify",
+                    ctx(&context, alice()),
+                    &HashMap::from([("code".to_string(), "abc".to_string())]),
+                )
+                .await
+                .is_err()
+        );
     }
 }

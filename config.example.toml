@@ -47,7 +47,10 @@ api_key = "${{ env.ALPHAVANTAGE_API_KEY }}"
 
 [oauth2.spotify]
 name = "Spotify"
-jobs = ["spotify/yearly-playlist"]
+# `jobs` is no longer needed and is ignored if present. Completing an
+# authorisation now stores a connection and starts whatever that provider
+# drives, which is decided in code alongside the provider so the two cannot
+# drift apart.
 # The provider key doubles as the integration id, so this is set up at
 # /integrations/spotify/setup and its callback stays at /oauth/spotify/callback
 # (the redirect URI registered with Spotify).

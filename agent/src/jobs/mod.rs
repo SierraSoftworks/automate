@@ -26,6 +26,7 @@ pub use oauth_reauthorization::{
     OAuth2ReauthorizationRequiredConfig, OAuth2ReauthorizationRequiredWorkflow,
 };
 pub use rss::RssWorkflow;
+pub use spotify_yearly_playlist::{SpotifyYearlyPlaylistTask, SpotifyYearlyPlaylistWorkflow};
 pub use xkcd::XkcdWorkflow;
 pub use ynab_stocks::YnabStocksWorkflow;
 pub use youtube::YouTubeWorkflow;

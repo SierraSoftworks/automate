@@ -32,8 +32,10 @@ mod auth;
 mod connections;
 mod kv;
 mod queue;
-mod scope;
+pub mod scope;
 mod user;
+
+pub use scope::Scoped;
 
 /// The header by which an administrator asks to act as another user.
 pub const IMPERSONATE_HEADER: &str = "x-impersonate-user";

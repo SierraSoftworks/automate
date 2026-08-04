@@ -58,8 +58,8 @@ impl GitHubAppIntegration {
     }
 
     fn client(ctx: &IntegrationContext<'_>) -> Result<GitHubAppClient, human_errors::Error> {
-        let config = ctx.services.config();
-        GitHubAppClient::new(Self::config(&config)?, ctx.services.http_client())
+        let config = ctx.context.config();
+        GitHubAppClient::new(Self::config(&config)?, ctx.services().http_client())
     }
 }
 
@@ -94,7 +94,7 @@ impl Integration for GitHubAppIntegration {
         _id: &str,
         ctx: IntegrationContext<'_>,
     ) -> Result<SetupRedirect, human_errors::Error> {
-        let config = ctx.services.config();
+        let config = ctx.context.config();
         let app = Self::config(&config)?;
 
         let state = CsrfToken::new_random().secret().clone();
@@ -141,7 +141,7 @@ impl Integration for GitHubAppIntegration {
                 )
             })?;
 
-        record_installation(&installation, ctx.services).await?;
+        record_installation(&installation, &ctx.services()).await?;
 
         info!(
             "Recorded GitHub App installation {} for '{}'.",
@@ -163,7 +163,7 @@ impl Integration for GitHubAppIntegration {
         ctx: IntegrationContext<'_>,
     ) -> Result<Vec<Connection>, human_errors::Error> {
         Ok(ctx
-            .services
+            .services()
             .kv()
             .list::<GitHubInstallation>(INSTALLATIONS_PARTITION)
             .await?
@@ -199,14 +199,14 @@ impl Integration for GitHubAppIntegration {
         // uninstall was a no-op. Doing it unconditionally is safe: the webhook
         // removes by account, and this removes the same entry by lookup.
         if let Some((account, _)) = ctx
-            .services
+            .services()
             .kv()
             .list::<GitHubInstallation>(INSTALLATIONS_PARTITION)
             .await?
             .into_iter()
             .find(|(_, installation)| installation.id == installation_id)
         {
-            forget_installation(&account, ctx.services).await?;
+            forget_installation(&account, &ctx.services()).await?;
         }
 
         info!("Uninstalled GitHub App installation {installation_id}.");

@@ -153,7 +153,7 @@ mod tests {
     fn spotify_oauth_config() -> OAuth2Config {
         OAuth2Config {
             name: "Spotify".into(),
-            jobs: Vec::new(),
+            deprecated_jobs: Vec::new(),
             acl: None,
             client_id: "client-id".into(),
             client_secret: "client-secret".into(),

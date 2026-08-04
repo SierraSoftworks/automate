@@ -153,11 +153,14 @@ pub struct ConnectionStore<S: Services> {
 
 impl<S: Services> ConnectionStore<S> {
     /// Wraps services already scoped to `tenant`.
-    ///
-    /// The tenant is passed separately because it forms part of the context each
-    /// credential is sealed against, and the scoped services deliberately do not
-    /// reveal which tenant they belong to.
     pub fn new(services: S, tenant: TenantId) -> Self {
+        Self { services, tenant }
+    }
+
+    /// Wraps services, taking the account from them.
+    pub fn for_services(services: S) -> Self {
+        let tenant = services.tenant().clone();
+
         Self { services, tenant }
     }
 

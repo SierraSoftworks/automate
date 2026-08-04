@@ -73,7 +73,8 @@ impl AppContext {
     pub fn tenant(&self, tenant: TenantId) -> AppServices {
         ServicesContainer {
             config: self.config.clone(),
-            database: self.database.tenant(tenant),
+            database: self.database.tenant(tenant.clone()),
+            tenant,
             secrets: self.secrets.clone(),
             http_client: self.http_client.clone(),
             session: self.session.clone(),
@@ -119,6 +120,14 @@ where
     #[allow(dead_code)]
     fn secrets(&self) -> &SecretStore;
 
+    /// The account these services act for.
+    ///
+    /// Knowing your own name is not the same as being able to use somebody
+    /// else's: there is still no way to obtain a handle to another account. This
+    /// exists because the stores built on top need the name to reconstruct the
+    /// context their credentials are sealed against.
+    fn tenant(&self) -> &TenantId;
+
     fn kv(&self) -> impl crate::db::KeyValueStore + Clone + Send + Sync + 'static;
     fn queue(&self) -> impl crate::db::Queue + Clone + Send + Sync + 'static;
     fn cache(&self) -> impl crate::db::Cache + Clone + Send + Sync + 'static;
@@ -134,11 +143,62 @@ where
     fn http_client(&self) -> reqwest::Client;
 }
 
+/// Lets a borrowed handle stand in for an owned one.
+///
+/// Job handlers receive `&impl Services` from their context, while the stores
+/// built on top take ownership. Without this every call site would have to clone
+/// first, which says nothing useful and is easy to get wrong.
+impl<S: Services> Services for &S {
+    fn config(&self) -> Arc<Config> {
+        (*self).config()
+    }
+
+    fn session(&self) -> &Session {
+        (*self).session()
+    }
+
+    fn tenant(&self) -> &TenantId {
+        (*self).tenant()
+    }
+
+    fn secrets(&self) -> &SecretStore {
+        (*self).secrets()
+    }
+
+    fn kv(&self) -> impl crate::db::KeyValueStore + Clone + Send + Sync + 'static {
+        (*self).kv()
+    }
+
+    fn queue(&self) -> impl crate::db::Queue + Clone + Send + Sync + 'static {
+        (*self).queue()
+    }
+
+    fn cache(&self) -> impl crate::db::Cache + Clone + Send + Sync + 'static {
+        (*self).cache()
+    }
+
+    fn audit(&self) -> impl crate::db::AuditStore + Clone + Send + Sync + 'static {
+        (*self).audit()
+    }
+
+    fn http_client(&self) -> reqwest::Client {
+        (*self).http_client()
+    }
+}
+
 pub struct ServicesContainer<
     D: crate::db::KeyValueStore + crate::db::Queue + crate::db::Cache + crate::db::AuditStore,
 > {
     pub config: Arc<Config>,
     pub database: D,
+
+    /// The account these services act for.
+    ///
+    /// Held here rather than asked of the storage handle so that the trait bound
+    /// stays about storage, and so a mock backed by something else still has an
+    /// account.
+    pub tenant: TenantId,
+
     pub secrets: Arc<SecretStore>,
     pub http_client: reqwest::Client,
     pub session: Arc<Session>,
@@ -152,6 +212,7 @@ impl<
         Self {
             config: self.config.clone(),
             database: self.database.clone(),
+            tenant: self.tenant.clone(),
             secrets: self.secrets.clone(),
             http_client: self.http_client.clone(),
             session: self.session.clone(),
@@ -232,6 +293,10 @@ where
 
     fn session(&self) -> &Session {
         &self.session
+    }
+
+    fn tenant(&self) -> &TenantId {
+        &self.tenant
     }
 
     fn secrets(&self) -> &SecretStore {
