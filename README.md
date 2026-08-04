@@ -66,6 +66,63 @@ proxy is trusted, since these headers can otherwise be spoofed. The same flag
 governs whether `X-Forwarded-For` is trusted when the admin `acl` evaluates
 `client_ip`.
 
+### Accounts and isolation
+
+Every stored record belongs to an **account**, named by the OIDC username
+claim (`preferred_username` by default; set `username_claim` under
+`[web.auth.oidc]` to use a different one). Accounts are isolated at the
+storage layer rather than by convention: the handle a job or request
+handler holds is scoped to one account and has no method that names
+another, so reaching across accounts is not something code can express.
+
+Two account names are reserved for the installation itself and cannot be
+claimed by a person: `!system`, which holds the user registry and the
+caches that map an inbound webhook to its owner, and `!local`.
+
+`[web.auth]` supersedes `[web.admin]` and splits the single old gate in
+two:
+
+- `user_acl` decides who may sign in at all.
+- `admin_acl` decides who may administer the installation, which includes
+  acting as another user.
+
+Both are evaluated on every request against the same filter surface, so a
+change takes effect immediately. Where either is omitted it falls back to
+`[web.admin] acl`, which under the old model granted full access on its
+own — so an existing configuration keeps behaving exactly as it did.
+
+An administrator can act as another user by sending
+`X-Impersonate-User: {username}`. Permission checks and audit entries
+continue to name the administrator, so administrator status never follows
+the impersonated account and any change made this way is recorded against
+the account it affected.
+
+### Encryption of stored credentials
+
+API tokens, OAuth refresh tokens and webhook signing secrets are
+encrypted with AES-256-GCM before being stored. Each value is bound to
+the record holding it, so a ciphertext moved to another account's record
+will not decrypt.
+
+If you do not set `secret_key` under `[web.auth]`, a key is generated on
+first run into `<database>.key` with owner-only permissions. **Back that
+file up** — without it, stored credentials cannot be recovered. To manage
+the key yourself, generate one with `openssl rand -base64 32` and set
+`secret_key`. When rotating, move the old key into
+`previous_secret_keys` and leave it there until every record that used it
+has been rewritten.
+
+### Upgrading an existing installation
+
+Schema migrations run automatically when the agent starts. Existing
+records are assigned to the `!local` account, which is what an
+installation with no identity provider configured continues to run as, so
+a single-user install keeps working with no configuration changes.
+
+If you later adopt an identity provider, set `local_user` under
+`[web.auth]` to the username you will sign in as **before** enabling it,
+so your existing workflows are already filed under the right account.
+
 ### OAuth setup wizard
 
 Some workflows act on third-party accounts (for example Spotify) that you link
