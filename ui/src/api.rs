@@ -315,6 +315,34 @@ pub async fn create_workflow(
     json_response(send(Verb::Post, "/workflows", Some(&body)).await?).await
 }
 
+/// Replaces a workflow's configuration.
+///
+/// Sends the whole configuration rather than the parts that changed, because
+/// the agent cannot otherwise tell a field that was cleared from one that was
+/// simply not mentioned.
+pub async fn update_workflow(
+    id: &str,
+    config: &serde_json::Value,
+    schedule: Option<&str>,
+    enabled: bool,
+) -> Result<Workflow, ApiError> {
+    let body = serde_json::json!({
+        "config": config,
+        "schedule": schedule,
+        "enabled": enabled,
+    });
+
+    json_response(
+        send(
+            Verb::Put,
+            &format!("/workflows/{}", urlencode(id)),
+            Some(&body),
+        )
+        .await?,
+    )
+    .await
+}
+
 /// Removes a workflow.
 pub async fn delete_workflow(id: &str) -> Result<(), ApiError> {
     delete(&format!("/workflows/{}", urlencode(id))).await

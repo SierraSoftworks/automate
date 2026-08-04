@@ -1253,12 +1253,29 @@ footer {
 
 .workflow {
   display: flex;
-  align-items: center;
-  gap: 1rem;
+  flex-direction: column;
+  gap: 0.75rem;
   padding: 0.75rem 1rem;
   border: 1px solid $border-lighter;
   border-radius: $radius;
   background: $bg-white;
+
+  &__summary {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+  }
+
+  // Shown where an upgrade removed the workflow type this was created from.
+  &__orphaned {
+    margin: 0;
+    padding: 0.6rem 0.75rem;
+    font-size: 0.8125rem;
+    color: $text-secondary;
+    background: $fill-light;
+    border-left: 3px solid $border-light;
+    border-radius: $radius-sm;
+  }
 
   &__detail {
     flex: 1;
@@ -1294,6 +1311,21 @@ footer {
       background: $fill-light;
       border: 1px solid $border-light;
     }
+  }
+}
+
+// The editing form, shown inline beneath the workflow it belongs to.
+.workflow-form {
+  padding: 1rem;
+  background: $fill-lighter;
+  border: 1px solid $border-lighter;
+  border-radius: $radius;
+
+  &__actions {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin-top: 0.5rem;
   }
 }
 
