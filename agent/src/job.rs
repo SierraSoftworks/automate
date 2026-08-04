@@ -304,16 +304,35 @@ impl JobHost {
             registry.len()
         );
 
-        // Run one-time startup wiring for every registered job (for example,
-        // scheduling recurring cron tasks) before we begin processing work.
+        // Run one-time startup wiring for every registered job before we begin
+        // processing work.
         //
-        // Scheduling is still driven by the configuration file, which describes
-        // a single installation, so it is seeded against the local tenant. Once
-        // workflows are stored per user this becomes a reconciliation pass over
-        // every tenant instead.
+        // This still seeds the schedules described by the configuration file,
+        // which describes a single installation, so it runs against the local
+        // tenant.
         let setup_services = context.tenant(TenantId::local());
         for handler in registry.values() {
             handler.setup(setup_services.clone()).await?;
+        }
+
+        // Bring every tenant's schedules into line with the workflows they have
+        // stored. Unlike the setup above this is a comparison rather than a
+        // push, so it also removes the schedules of workflows that were deleted
+        // while the agent was not running.
+        //
+        // A tenant whose reconciliation fails is logged and skipped rather than
+        // taken as fatal: one person's unreadable workflow is not a reason for
+        // nobody's workflows to run.
+        for tenant in context.database().tenants().await? {
+            let services = context.tenant(tenant.clone());
+            if let Err(err) = crate::jobs::CronJob::reconcile(&services).await {
+                error!(
+                    tenant = %tenant,
+                    error = %err,
+                    "Failed to reconcile schedules for a tenant; its workflows may not run until this is fixed: {err}",
+                );
+                services.session().record_human_error(&err);
+            }
         }
 
         // Reserve dequeued messages for at least as long as the slowest job may

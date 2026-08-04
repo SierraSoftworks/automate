@@ -21,9 +21,9 @@
 //! The number of partitions is the number of trigger kinds, so the scan is over
 //! a handful of lists rather than a growing one.
 
-// The API endpoints and the reconciler are wired onto this store in the commits
-// that follow; it is written as a complete store rather than grown one caller at
-// a time, and its behaviour is pinned by the tests below in the meantime.
+// The reconciler reads through this store, but nothing in the running program
+// creates or edits a workflow yet; that arrives with the API endpoints. The
+// write paths are exercised by the tests below in the meantime.
 #![allow(dead_code)]
 
 use chrono::{DateTime, Utc};
