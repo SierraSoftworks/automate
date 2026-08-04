@@ -14,6 +14,7 @@ mod services;
 mod users;
 mod web;
 mod webhooks;
+mod workflow_store;
 mod workflows;
 
 #[cfg(test)]
