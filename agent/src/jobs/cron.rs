@@ -30,7 +30,7 @@ where
 
 /// A schedule, as it sits in the queue waiting for its next fire time.
 ///
-/// # Two shapes, for as long as it takes
+/// # Two shapes, for two different things
 ///
 /// A schedule used to carry the whole configuration it was going to run, which
 /// worked while configurations came from a file that only changed on restart.
@@ -38,10 +38,15 @@ where
 /// copy that goes stale; `workflow` names the record instead, and the
 /// configuration is read at the moment it is needed.
 ///
-/// `task` is what the copied form used, and is still populated for the workflow
-/// types that have not been converted to stored records yet. Both are accepted
-/// so that an installation upgrades without its existing schedules being
-/// dropped on the floor. When the last type is converted, `task` goes.
+/// `task` is the older form, and was expected to disappear once every workflow
+/// type had been converted. It has not, because not everything on this queue is
+/// somebody's workflow: the installation schedules its own housekeeping, which
+/// has no record to name because nobody configured it and nobody should be able
+/// to. Those keep carrying their configuration inline, which for a job with no
+/// settings is a very small thing to carry.
+///
+/// Accepting both is also what lets an installation upgrade without its existing
+/// schedules being dropped on the floor.
 #[derive(serde::Deserialize, serde::Serialize, Clone)]
 pub struct CronJobTask {
     pub cron: croner::Cron,

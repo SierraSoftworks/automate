@@ -24,6 +24,42 @@ impl Display for YnabStocksConfig {
 pub struct YnabStocksWorkflow;
 
 crate::register_job!(YnabStocksWorkflow);
+crate::register_workflow_type!(YnabStocksWorkflow);
+
+impl crate::workflows::ConfigurableWorkflow for YnabStocksWorkflow {
+    fn type_id() -> &'static str {
+        "ynab-stocks"
+    }
+
+    fn describe(config: &Self::JobType) -> String {
+        format!("Stocks in {}", config.budget)
+    }
+
+    fn descriptor() -> automate_api::WorkflowTypeDescriptor {
+        use automate_api::{FieldDescriptor, FieldKind, WorkflowTrigger, WorkflowTypeDescriptor};
+
+        WorkflowTypeDescriptor {
+            id: <Self as crate::workflows::ConfigurableWorkflow>::type_id().to_string(),
+            name: "YNAB Stock Prices".to_string(),
+            description: "Keeps the value of stock accounts in a YNAB budget up to date."
+                .to_string(),
+            trigger: WorkflowTrigger::Cron {
+                default_schedule: "@daily".to_string(),
+            },
+            fields: [FieldDescriptor::new(
+                crate::config_path!(YnabStocksConfig: budget),
+                "Budget",
+                FieldKind::Text {
+                    placeholder: Some("00000000-0000-0000-0000-000000000000".into()),
+                },
+            )
+            .with_help("The identifier of the YNAB budget, which appears in its URL.")
+            .required()]
+            .into_iter()
+            .collect(),
+        }
+    }
+}
 
 /// The persisted synchronisation state for a single budget. The account mirror
 /// allows us to fetch only the changes since our last run by supplying the

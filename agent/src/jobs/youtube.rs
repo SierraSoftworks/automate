@@ -31,6 +31,65 @@ impl Display for YouTubeConfig {
 pub struct YouTubeWorkflow;
 
 crate::register_job!(YouTubeWorkflow);
+crate::register_workflow_type!(YouTubeWorkflow);
+
+impl crate::workflows::ConfigurableWorkflow for YouTubeWorkflow {
+    fn type_id() -> &'static str {
+        "youtube"
+    }
+
+    fn describe(config: &Self::JobType) -> String {
+        config.name.clone()
+    }
+
+    fn descriptor() -> automate_api::WorkflowTypeDescriptor {
+        use automate_api::{FieldDescriptor, FieldKind, WorkflowTrigger, WorkflowTypeDescriptor};
+
+        WorkflowTypeDescriptor {
+            id: <Self as crate::workflows::ConfigurableWorkflow>::type_id().to_string(),
+            name: "YouTube Channel".to_string(),
+            description: "Files a task for each new video on a channel.".to_string(),
+            trigger: WorkflowTrigger::Cron {
+                default_schedule: "@daily".to_string(),
+            },
+            fields: [
+                FieldDescriptor::new(
+                    crate::config_path!(YouTubeConfig: name),
+                    "Name",
+                    FieldKind::Text {
+                        placeholder: Some("Technology Connections".into()),
+                    },
+                )
+                .with_help("Used to label the tasks this creates.")
+                .required(),
+                FieldDescriptor::new(
+                    crate::config_path!(YouTubeConfig: channel_id),
+                    "Channel ID",
+                    FieldKind::Text {
+                        placeholder: Some("UCy0tKL1T7wFoYcxCe0xjN6Q".into()),
+                    },
+                )
+                .with_help("The channel's identifier, which appears in its URL and starts with UC.")
+                .required(),
+                FieldDescriptor::new(
+                    crate::config_path!(YouTubeConfig: filter),
+                    "Filter",
+                    FieldKind::Filter {
+                        fields: vec!["channel".into(), "title".into(), "link".into()],
+                    },
+                )
+                .with_help("Only file videos matching this. Leave it empty to file every video."),
+            ]
+            .into_iter()
+            .chain(crate::todoist_target_fields!(
+                YouTubeConfig,
+                project = Some("Hobbies"),
+                section = Some("Watching")
+            ))
+            .collect(),
+        }
+    }
+}
 
 impl Job for YouTubeWorkflow {
     type JobType = YouTubeConfig;

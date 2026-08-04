@@ -33,6 +33,79 @@ impl Display for CalendarWorkflowConfig {
 pub struct CalendarWorkflow;
 
 crate::register_job!(CalendarWorkflow);
+crate::register_workflow_type!(CalendarWorkflow);
+
+impl crate::workflows::ConfigurableWorkflow for CalendarWorkflow {
+    fn type_id() -> &'static str {
+        "calendar"
+    }
+
+    fn describe(config: &Self::JobType) -> String {
+        config.name.clone()
+    }
+
+    fn descriptor() -> automate_api::WorkflowTypeDescriptor {
+        use automate_api::{FieldDescriptor, FieldKind, WorkflowTrigger, WorkflowTypeDescriptor};
+
+        WorkflowTypeDescriptor {
+            id: <Self as crate::workflows::ConfigurableWorkflow>::type_id().to_string(),
+            name: "Calendar".to_string(),
+            description: "Files a task for each event in a calendar feed.".to_string(),
+            trigger: WorkflowTrigger::Cron {
+                default_schedule: "@hourly".to_string(),
+            },
+            fields: [
+                FieldDescriptor::new(
+                    crate::config_path!(CalendarWorkflowConfig: name),
+                    "Name",
+                    FieldKind::Text { placeholder: Some("Work".into()) },
+                )
+                .with_help("Used to label the tasks this creates.")
+                .required(),
+                FieldDescriptor::new(
+                    crate::config_path!(CalendarWorkflowConfig: url),
+                    "Calendar URL",
+                    FieldKind::Url { placeholder: Some("https://example.com/calendar.ics".into()) },
+                )
+                .with_help("The address of the iCalendar feed, which most calendars offer as a secret link.")
+                .required(),
+                FieldDescriptor::new(
+                    crate::config_path!(CalendarWorkflowConfig: priority),
+                    "Priority",
+                    FieldKind::Number {
+                        min: Some(1.0),
+                        max: Some(4.0),
+                        step: Some(1.0),
+                    },
+                )
+                .with_help("The Todoist priority to give these tasks, from 1 (lowest) to 4 (highest)."),
+                FieldDescriptor::new(
+                    crate::config_path!(CalendarWorkflowConfig: filter),
+                    "Filter",
+                    FieldKind::Filter {
+                        fields: vec![
+                            "summary".into(),
+                            "description".into(),
+                            "status".into(),
+                            "busy_status".into(),
+                            "start".into(),
+                            "end".into(),
+                            "duration_minutes".into(),
+                        ],
+                    },
+                )
+                .with_help("Only file events matching this. Leave it empty to file every event."),
+            ]
+            .into_iter()
+            .chain(crate::todoist_target_fields!(
+                CalendarWorkflowConfig,
+                project = Some("Work"),
+                section = None::<&str>
+            ))
+            .collect(),
+        }
+    }
+}
 
 impl Job for CalendarWorkflow {
     type JobType = CalendarWorkflowConfig;

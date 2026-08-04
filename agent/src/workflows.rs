@@ -393,18 +393,51 @@ mod tests {
         }
     }
 
-    /// Builds a value the given control could plausibly have collected.
+    /// Builds a value the given field could plausibly have collected.
     ///
-    /// The point is not realism but type-correctness: each kind produces the
-    /// shape the matching field is declared to hold, so that a configuration
-    /// assembled from a descriptor is one the handler's own type should accept.
-    fn synthetic_value(kind: &automate_api::FieldKind) -> serde_json::Value {
+    /// The default is tried first and the placeholder second, because both are
+    /// things the descriptor is already claiming a person could enter — so a
+    /// default or an example that the handler would reject is itself the bug,
+    /// and this notices. Only when a field offers neither does the kind decide,
+    /// and then only its shape matters rather than its realism.
+    fn synthetic_value(field: &automate_api::FieldDescriptor) -> serde_json::Value {
+        if let Some(default) = &field.default {
+            return default.clone();
+        }
+
+        if let Some(placeholder) = placeholder_of(&field.kind) {
+            return serde_json::json!(placeholder);
+        }
+
+        kind_shaped_value(&field.kind)
+    }
+
+    /// The example a control shows when it is empty, where it has one.
+    fn placeholder_of(kind: &automate_api::FieldKind) -> Option<&str> {
+        use automate_api::FieldKind;
+
+        match kind {
+            FieldKind::Text { placeholder }
+            | FieldKind::TextArea { placeholder }
+            | FieldKind::Url { placeholder } => placeholder.as_deref(),
+            _ => None,
+        }
+    }
+
+    /// A value of the right shape for a control that offered no example.
+    fn kind_shaped_value(kind: &automate_api::FieldKind) -> serde_json::Value {
         use automate_api::FieldKind;
 
         match kind {
             FieldKind::Text { .. } | FieldKind::TextArea { .. } => serde_json::json!("example"),
             FieldKind::Url { .. } => serde_json::json!("https://example.com/"),
-            FieldKind::Number { min, .. } => serde_json::json!(min.unwrap_or(1.0)),
+            // Emitted as an integer when it is a whole number, since that is
+            // what a field stored as one will accept and a field stored as a
+            // decimal will accept too.
+            FieldKind::Number { min, .. } => match min.unwrap_or(1.0) {
+                value if value.fract() == 0.0 => serde_json::json!(value as i64),
+                value => serde_json::json!(value),
+            },
             FieldKind::Boolean => serde_json::json!(false),
             FieldKind::Select { options } => options
                 .first()
@@ -450,7 +483,7 @@ mod tests {
             if required_only && !field.required {
                 continue;
             }
-            insert_at(&mut config, &field.name, synthetic_value(&field.kind));
+            insert_at(&mut config, &field.name, synthetic_value(field));
         }
         config
     }
@@ -488,6 +521,44 @@ mod tests {
                     "'{type_id}' has a field its handler requires but its form does not mark required: {err}\nconfiguration was: {config:#}",
                 );
             }
+        }
+    }
+
+    #[test]
+    fn the_workflows_a_person_would_want_to_create_are_all_offered() {
+        // Named individually rather than counted, so that removing one is a
+        // decision somebody has to make here rather than a number quietly going
+        // down.
+        for expected in [
+            "rss",
+            "calendar",
+            "youtube",
+            "github-releases",
+            "xkcd",
+            "ynab-stocks",
+        ] {
+            assert!(
+                registry().contains_key(expected),
+                "'{expected}' is not offered, so nobody could create one",
+            );
+        }
+    }
+
+    #[test]
+    fn the_installations_own_maintenance_is_not_offered_as_something_to_create() {
+        // These run on a schedule the installation decides, and exist so that
+        // records the other workflows leave behind get tidied up. Offering them
+        // would invite somebody to configure away their own housekeeping, and
+        // there is nothing about them a person would sensibly choose.
+        for internal in [
+            "todoist-cleanup",
+            "github-notifications-cleanup",
+            "github-notifications",
+        ] {
+            assert!(
+                !registry().contains_key(internal),
+                "'{internal}' is the installation's own work and should not be offered as a workflow",
+            );
         }
     }
 

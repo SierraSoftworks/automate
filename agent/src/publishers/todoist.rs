@@ -370,6 +370,57 @@ impl TodoistDueDate {
     }
 }
 
+/// The form fields that let somebody say where a workflow files its tasks.
+///
+/// Every workflow that publishes to Todoist asks the same three questions, so
+/// they are declared once. The type is a parameter rather than a fixed one
+/// because [`crate::config_path!`] checks each path against the configuration
+/// that actually holds it — a workflow whose target lives somewhere else, or is
+/// not called `todoist`, will not compile against this.
+///
+/// The project and section defaults differ per workflow, since where a comic
+/// belongs is not where a calendar event does.
+#[macro_export]
+macro_rules! todoist_target_fields {
+    ($ty:ty, project = $project:expr, section = $section:expr) => {{
+        let connection = automate_api::FieldDescriptor::new(
+            $crate::config_path!($ty: todoist.connection),
+            "Todoist account",
+            automate_api::FieldKind::Connection {
+                provider: $crate::publishers::TODOIST_PROVIDER.to_string(),
+            },
+        )
+        .with_help("Which linked account the tasks are created in.")
+        .required();
+
+        let mut project = automate_api::FieldDescriptor::new(
+            $crate::config_path!($ty: todoist.project),
+            "Project",
+            automate_api::FieldKind::Options {
+                source: "projects".into(),
+                depends_on: $crate::config_path!($ty: todoist.connection).into(),
+            },
+        );
+        if let Some(default) = $project {
+            project = project.with_default(default);
+        }
+
+        let mut section = automate_api::FieldDescriptor::new(
+            $crate::config_path!($ty: todoist.section),
+            "Section",
+            automate_api::FieldKind::Options {
+                source: "sections".into(),
+                depends_on: $crate::config_path!($ty: todoist.connection).into(),
+            },
+        );
+        if let Some(default) = $section {
+            section = section.with_default(default);
+        }
+
+        [connection, project, section]
+    }};
+}
+
 #[cfg(test)]
 mod target_tests {
     use super::*;

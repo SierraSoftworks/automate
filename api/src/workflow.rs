@@ -102,6 +102,12 @@ pub enum FieldKind {
         min: Option<f64>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         max: Option<f64>,
+        /// The increment the control steps by, and so what counts as a whole
+        /// value. A field stored as an integer says `1` here; without it the
+        /// control would happily collect `1.5` for a priority and the save
+        /// would fail on something the form had encouraged.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        step: Option<f64>,
     },
 
     /// A yes or no.
@@ -331,6 +337,7 @@ mod tests {
             FieldKind::Number {
                 min: None,
                 max: None,
+                step: None,
             },
             FieldKind::Boolean,
             FieldKind::Select { options: vec![] },

@@ -27,6 +27,63 @@ impl Display for GitHubReleasesConfig {
 pub struct GitHubReleasesWorkflow;
 
 crate::register_job!(GitHubReleasesWorkflow);
+crate::register_workflow_type!(GitHubReleasesWorkflow);
+
+impl crate::workflows::ConfigurableWorkflow for GitHubReleasesWorkflow {
+    fn type_id() -> &'static str {
+        "github-releases"
+    }
+
+    fn describe(config: &Self::JobType) -> String {
+        config.repository.clone()
+    }
+
+    fn descriptor() -> automate_api::WorkflowTypeDescriptor {
+        use automate_api::{FieldDescriptor, FieldKind, WorkflowTrigger, WorkflowTypeDescriptor};
+
+        WorkflowTypeDescriptor {
+            id: <Self as crate::workflows::ConfigurableWorkflow>::type_id().to_string(),
+            name: "GitHub Releases".to_string(),
+            description: "Files a task for each new release of a repository.".to_string(),
+            trigger: WorkflowTrigger::Cron {
+                default_schedule: "@daily".to_string(),
+            },
+            fields: [
+                FieldDescriptor::new(
+                    crate::config_path!(GitHubReleasesConfig: repository),
+                    "Repository",
+                    FieldKind::Text {
+                        placeholder: Some("SierraSoftworks/automate".into()),
+                    },
+                )
+                .with_help("The repository to watch, as owner/name.")
+                .required(),
+                FieldDescriptor::new(
+                    crate::config_path!(GitHubReleasesConfig: filter),
+                    "Filter",
+                    FieldKind::Filter {
+                        fields: vec![
+                            "tag".into(),
+                            "name".into(),
+                            "published".into(),
+                            "link".into(),
+                            "draft".into(),
+                            "prerelease".into(),
+                        ],
+                    },
+                )
+                .with_help("Only file releases matching this, such as `prerelease == false`."),
+            ]
+            .into_iter()
+            .chain(crate::todoist_target_fields!(
+                GitHubReleasesConfig,
+                project = Some("Software"),
+                section = Some("Updates")
+            ))
+            .collect(),
+        }
+    }
+}
 
 impl Job for GitHubReleasesWorkflow {
     type JobType = GitHubReleasesConfig;

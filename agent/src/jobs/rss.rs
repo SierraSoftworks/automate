@@ -61,7 +61,7 @@ impl crate::workflows::ConfigurableWorkflow for RssWorkflow {
             trigger: WorkflowTrigger::Cron {
                 default_schedule: "@daily".to_string(),
             },
-            fields: vec![
+            fields: [
                 FieldDescriptor::new(
                     crate::config_path!(RssConfig: name),
                     "Name",
@@ -101,34 +101,14 @@ impl crate::workflows::ConfigurableWorkflow for RssWorkflow {
                     },
                 )
                 .with_help("Only file entries matching this. Leave it empty to file every entry."),
-                FieldDescriptor::new(
-                    crate::config_path!(RssConfig: todoist.connection),
-                    "Todoist account",
-                    FieldKind::Connection {
-                        provider: crate::publishers::TODOIST_PROVIDER.to_string(),
-                    },
-                )
-                .with_help("Which linked account the tasks are created in.")
-                .required(),
-                FieldDescriptor::new(
-                    crate::config_path!(RssConfig: todoist.project),
-                    "Project",
-                    FieldKind::Options {
-                        source: "projects".into(),
-                        depends_on: "todoist.connection".into(),
-                    },
-                )
-                .with_default("Hobbies"),
-                FieldDescriptor::new(
-                    crate::config_path!(RssConfig: todoist.section),
-                    "Section",
-                    FieldKind::Options {
-                        source: "sections".into(),
-                        depends_on: "todoist.connection".into(),
-                    },
-                )
-                .with_default("Reading"),
-            ],
+            ]
+            .into_iter()
+            .chain(crate::todoist_target_fields!(
+                RssConfig,
+                project = Some("Hobbies"),
+                section = Some("Reading")
+            ))
+            .collect(),
         }
     }
 }

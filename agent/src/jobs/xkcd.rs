@@ -30,6 +30,41 @@ impl Display for XkcdConfig {
 pub struct XkcdWorkflow;
 
 crate::register_job!(XkcdWorkflow);
+crate::register_workflow_type!(XkcdWorkflow);
+
+impl crate::workflows::ConfigurableWorkflow for XkcdWorkflow {
+    fn type_id() -> &'static str {
+        "xkcd"
+    }
+
+    fn descriptor() -> automate_api::WorkflowTypeDescriptor {
+        use automate_api::{FieldDescriptor, FieldKind, WorkflowTrigger, WorkflowTypeDescriptor};
+
+        WorkflowTypeDescriptor {
+            id: <Self as crate::workflows::ConfigurableWorkflow>::type_id().to_string(),
+            name: "XKCD".to_string(),
+            description: "Files a task for each new XKCD comic.".to_string(),
+            trigger: WorkflowTrigger::Cron {
+                default_schedule: "@daily".to_string(),
+            },
+            fields: [FieldDescriptor::new(
+                crate::config_path!(XkcdConfig: filter),
+                "Filter",
+                FieldKind::Filter {
+                    fields: vec!["title".into(), "url".into(), "has_image".into()],
+                },
+            )
+            .with_help("Only file comics matching this. Leave it empty to file every comic.")]
+            .into_iter()
+            .chain(crate::todoist_target_fields!(
+                XkcdConfig,
+                project = Some("Hobbies"),
+                section = Some("Reading")
+            ))
+            .collect(),
+        }
+    }
+}
 
 impl Job for XkcdWorkflow {
     type JobType = XkcdConfig;
