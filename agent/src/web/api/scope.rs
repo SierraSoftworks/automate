@@ -19,6 +19,9 @@ use std::ops::Deref;
 use actix_web::http::StatusCode;
 use actix_web::{FromRequest, HttpMessage, HttpRequest, dev::Payload, web};
 
+use automate_api::TenantId;
+
+use crate::connections::ConnectionStore;
 use crate::services::{AppContext, AppServices};
 use crate::web::Principal;
 
@@ -29,13 +32,37 @@ use super::json_error;
 /// While an administrator is impersonating somebody, this is the impersonated
 /// account — which is the point: the administrator sees exactly what that user
 /// would see.
-pub struct Scoped(AppServices);
+pub struct Scoped {
+    services: AppServices,
+
+    /// Carried alongside the services because the scoped handle deliberately
+    /// does not reveal which account it belongs to, and the stores built from it
+    /// need the name to reconstruct the context their credentials are sealed
+    /// against.
+    tenant: TenantId,
+}
+
+impl Scoped {
+    /// The account this request is acting for.
+    ///
+    /// Needed by the OAuth wizard, which has to bind an in-flight authorisation
+    /// to the account that started it.
+    #[allow(dead_code)]
+    pub fn tenant(&self) -> &TenantId {
+        &self.tenant
+    }
+
+    /// This account's linked service credentials.
+    pub fn connections(&self) -> ConnectionStore<AppServices> {
+        ConnectionStore::new(self.services.clone(), self.tenant.clone())
+    }
+}
 
 impl Deref for Scoped {
     type Target = AppServices;
 
     fn deref(&self) -> &Self::Target {
-        &self.0
+        &self.services
     }
 }
 
@@ -44,10 +71,14 @@ impl FromRequest for Scoped {
     type Future = Ready<Result<Self, Self::Error>>;
 
     fn from_request(req: &HttpRequest, _: &mut Payload) -> Self::Future {
-        ready(
-            resolve(req)
-                .map(|(context, principal)| Scoped(context.tenant(principal.effective().clone()))),
-        )
+        ready(resolve(req).map(|(context, principal)| {
+            let tenant = principal.effective().clone();
+
+            Scoped {
+                services: context.tenant(tenant.clone()),
+                tenant,
+            }
+        }))
     }
 }
 

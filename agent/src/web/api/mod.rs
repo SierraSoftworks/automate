@@ -29,6 +29,7 @@ use crate::web::helpers::request::client_ip;
 
 mod admin;
 mod auth;
+mod connections;
 mod kv;
 mod queue;
 mod scope;
@@ -89,6 +90,17 @@ pub fn configure() -> actix_web::Scope<
                 .route("/queue", web::get().to(queue::list))
                 .route("/queue/{partition}/trigger", web::post().to(queue::trigger))
                 .route("/queue/{partition}", web::delete().to(queue::delete))
+                .route("/connections", web::get().to(connections::list))
+                .route("/connections", web::post().to(connections::create))
+                .route("/connections/{connection}", web::get().to(connections::get))
+                .route(
+                    "/connections/{connection}",
+                    web::patch().to(connections::update),
+                )
+                .route(
+                    "/connections/{connection}",
+                    web::delete().to(connections::delete),
+                )
                 // Installation-wide endpoints. These take the `Administrative`
                 // extractor, which refuses a request from anyone who is not an
                 // administrator, so the guard cannot be lost by remounting them.
@@ -899,6 +911,169 @@ mod tests {
         .await;
 
         assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[actix_web::test]
+    async fn a_connection_can_be_created_listed_renamed_and_removed() {
+        let app = app!(context("true", "true").await);
+
+        let created: serde_json::Value = test::call_and_read_body_json(
+            &app,
+            test::TestRequest::post()
+                .uri("/api/v1/connections")
+                .set_json(serde_json::json!({
+                    "provider": "todoist",
+                    "name": "Personal",
+                    "key": "tok-Zx91",
+                }))
+                .to_request(),
+        )
+        .await;
+
+        let id = created["id"].as_str().unwrap().to_string();
+        assert_eq!(created["provider"], "todoist");
+        assert_eq!(created["kind"], "api_key");
+        assert_eq!(created["status"], "ok");
+
+        let listed: Vec<serde_json::Value> = test::call_and_read_body_json(
+            &app,
+            test::TestRequest::get()
+                .uri("/api/v1/connections")
+                .to_request(),
+        )
+        .await;
+        assert_eq!(listed.len(), 1);
+
+        let renamed: serde_json::Value = test::call_and_read_body_json(
+            &app,
+            test::TestRequest::patch()
+                .uri(&format!("/api/v1/connections/{id}"))
+                .set_json(serde_json::json!({ "name": "Work" }))
+                .to_request(),
+        )
+        .await;
+        assert_eq!(renamed["name"], "Work");
+
+        let resp = test::call_service(
+            &app,
+            test::TestRequest::delete()
+                .uri(&format!("/api/v1/connections/{id}"))
+                .to_request(),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+
+        let resp = test::call_service(
+            &app,
+            test::TestRequest::get()
+                .uri(&format!("/api/v1/connections/{id}"))
+                .to_request(),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[actix_web::test]
+    async fn the_api_never_returns_a_stored_credential() {
+        let app = app!(context("true", "true").await);
+
+        test::call_service(
+            &app,
+            test::TestRequest::post()
+                .uri("/api/v1/connections")
+                .set_json(serde_json::json!({ "provider": "todoist", "key": "tok-Zx91" }))
+                .to_request(),
+        )
+        .await;
+
+        for uri in ["/api/v1/connections", "/api/v1/kv"] {
+            let body =
+                test::call_and_read_body(&app, test::TestRequest::get().uri(uri).to_request())
+                    .await;
+
+            assert!(
+                !String::from_utf8_lossy(&body).contains("tok-Zx91"),
+                "{uri} returned the stored credential"
+            );
+        }
+    }
+
+    #[actix_web::test]
+    async fn connections_belong_to_the_account_being_acted_for() {
+        let context = context("true", "true").await;
+        register(&context, "alice", false).await;
+        let app = app!(context);
+
+        // Created while acting as alice, so it is hers rather than the
+        // administrator's.
+        test::call_service(
+            &app,
+            test::TestRequest::post()
+                .uri("/api/v1/connections")
+                .insert_header((IMPERSONATE_HEADER, "alice"))
+                .set_json(serde_json::json!({ "provider": "todoist", "key": "tok" }))
+                .to_request(),
+        )
+        .await;
+
+        let own: Vec<serde_json::Value> = test::call_and_read_body_json(
+            &app,
+            test::TestRequest::get()
+                .uri("/api/v1/connections")
+                .to_request(),
+        )
+        .await;
+        assert!(
+            own.is_empty(),
+            "the administrator should have no connections"
+        );
+
+        let hers: Vec<serde_json::Value> = test::call_and_read_body_json(
+            &app,
+            test::TestRequest::get()
+                .uri("/api/v1/connections")
+                .insert_header((IMPERSONATE_HEADER, "alice"))
+                .to_request(),
+        )
+        .await;
+        assert_eq!(hers.len(), 1);
+    }
+
+    #[actix_web::test]
+    async fn a_mistyped_connection_identifier_says_which_word_was_wrong() {
+        let app = app!(context("true", "true").await);
+
+        let body = test::call_and_read_body(
+            &app,
+            test::TestRequest::get()
+                .uri("/api/v1/connections/abandon-notaword")
+                .to_request(),
+        )
+        .await;
+
+        let body = String::from_utf8_lossy(&body);
+        assert!(body.contains("notaword"), "unhelpful error: {body}");
+    }
+
+    #[actix_web::test]
+    async fn creating_a_connection_without_a_credential_is_refused() {
+        let app = app!(context("true", "true").await);
+
+        for body in [
+            serde_json::json!({ "provider": "todoist", "key": "   " }),
+            serde_json::json!({ "provider": "  ", "key": "tok" }),
+        ] {
+            let resp = test::call_service(
+                &app,
+                test::TestRequest::post()
+                    .uri("/api/v1/connections")
+                    .set_json(body)
+                    .to_request(),
+            )
+            .await;
+
+            assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        }
     }
 
     #[actix_web::test]
