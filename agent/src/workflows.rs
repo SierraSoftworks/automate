@@ -1,0 +1,379 @@
+//! The registry of workflow types that can be created from the API.
+//!
+//! A workflow type is a [`Job`] that additionally knows how to describe itself:
+//! what it is called, what it does, and what it needs to be told. That
+//! description is what lets a browser offer "add an RSS feed" without anybody
+//! having written an RSS form, and it is why adding a workflow type is a change
+//! to this crate alone.
+//!
+//! # Validation comes from the job, not a second schema
+//!
+//! [`WorkflowType::validate`] checks a submitted configuration by deserializing
+//! it into the very type the handler is given. It deliberately does not consult
+//! the descriptor. A descriptor is a description of a form; the handler's type
+//! is the thing that actually has to hold the value, so it is the only
+//! authority worth having. Checking against the descriptor instead would create
+//! a second schema that agrees with the first right up until somebody edits one
+//! of them.
+//!
+//! The consequence worth stating plainly: a configuration is rejected when it is
+//! saved rather than when it runs. A workflow that is stored is a workflow that
+//! at least deserializes, so a run can fail on the network or the far end but
+//! not on its own configuration.
+
+// The store and the API endpoints are wired onto this registry in the commits
+// that follow; it is written as a complete registry rather than grown one
+// caller at a time, so that the invariants below are enforced from the start.
+#![allow(dead_code)]
+
+use std::collections::HashMap;
+use std::sync::LazyLock;
+
+use automate_api::WorkflowTypeDescriptor;
+use human_errors::Error;
+
+use crate::job::Job;
+
+/// A [`Job`] that a user can create instances of from the API.
+pub trait ConfigurableWorkflow: Job {
+    /// The stable identifier this type is stored under, e.g. `rss`.
+    ///
+    /// Distinct from [`Job::partition`] because a partition is a routing detail
+    /// that has been renamed before (see migration 6) whereas this ends up
+    /// inside stored records, where a rename is a migration.
+    fn type_id() -> &'static str;
+
+    /// The form that configures one of these.
+    fn descriptor() -> WorkflowTypeDescriptor;
+
+    /// What to call a particular instance, drawn from its configuration.
+    ///
+    /// Defaults to the type's own name, which suits the workflows that can only
+    /// sensibly exist once.
+    fn describe(config: &Self::JobType) -> String {
+        let _ = config;
+        Self::descriptor().name
+    }
+}
+
+/// The type-erased view of a workflow type, so that the registry can hold every
+/// type in one map without knowing any of their configuration types.
+pub trait WorkflowType: Send + Sync {
+    fn type_id(&self) -> &'static str;
+
+    fn descriptor(&self) -> WorkflowTypeDescriptor;
+
+    /// The queue partition an instance of this type is dispatched into.
+    fn partition(&self) -> &'static str;
+
+    /// Whether this configuration is one the handler could actually run.
+    fn validate(&self, config: &serde_json::Value) -> Result<(), Error>;
+
+    /// What to call the instance this configuration describes.
+    fn describe(&self, config: &serde_json::Value) -> Result<String, Error>;
+}
+
+impl<W> WorkflowType for W
+where
+    W: ConfigurableWorkflow + Send + Sync + 'static,
+{
+    fn type_id(&self) -> &'static str {
+        <W as ConfigurableWorkflow>::type_id()
+    }
+
+    fn descriptor(&self) -> WorkflowTypeDescriptor {
+        <W as ConfigurableWorkflow>::descriptor()
+    }
+
+    fn partition(&self) -> &'static str {
+        <W as Job>::partition()
+    }
+
+    fn validate(&self, config: &serde_json::Value) -> Result<(), Error> {
+        self.deserialize(config).map(|_| ())
+    }
+
+    fn describe(&self, config: &serde_json::Value) -> Result<String, Error> {
+        Ok(<W as ConfigurableWorkflow>::describe(
+            &self.deserialize(config)?,
+        ))
+    }
+}
+
+/// Shared by [`WorkflowType::validate`] and [`WorkflowType::describe`], so that
+/// the two cannot disagree about what a valid configuration is.
+trait DeserializeConfig: ConfigurableWorkflow {
+    fn deserialize(&self, config: &serde_json::Value) -> Result<Self::JobType, Error> {
+        <Self::JobType as serde::Deserialize>::deserialize(config).map_err(|err| {
+            // serde's message names the offending field, which is the one thing
+            // somebody fixing this actually needs, so it is passed through
+            // rather than replaced with something tidier and less useful.
+            human_errors::user(
+                format!(
+                    "This {} workflow is not configured correctly: {err}",
+                    Self::type_id()
+                ),
+                &[
+                    "Check that every required field has been filled in.",
+                    "Check that each field holds the kind of value it asks for.",
+                ],
+            )
+        })
+    }
+}
+
+impl<W: ConfigurableWorkflow> DeserializeConfig for W {}
+
+/// A registration entry for a [`WorkflowType`], collected by [`inventory`].
+/// Use [`register_workflow_type!`] to submit one.
+pub struct WorkflowTypeRegistration(&'static dyn WorkflowType);
+
+impl WorkflowTypeRegistration {
+    pub const fn new<T: WorkflowType>(workflow: &'static T) -> Self {
+        Self(workflow)
+    }
+
+    pub fn workflow(&self) -> &'static dyn WorkflowType {
+        self.0
+    }
+}
+
+inventory::collect!(WorkflowTypeRegistration);
+
+/// Registers a [`ConfigurableWorkflow`] so that it can be created from the API.
+///
+/// This is separate from [`crate::register_job!`] because the two answer
+/// different questions: that one says work of this kind can be run, this one
+/// says work of this kind can be asked for. Plenty of jobs are only ever
+/// dispatched by other jobs and have no business appearing in a menu.
+#[macro_export]
+macro_rules! register_workflow_type {
+    ($workflow:expr) => {
+        inventory::submit! { $crate::workflows::WorkflowTypeRegistration::new(&$workflow) }
+    };
+}
+
+/// Every registered workflow type, keyed by its identifier.
+///
+/// Built once. A duplicate identifier is a programming error that would
+/// otherwise silently shadow one type with another, so it panics here rather
+/// than surfacing later as a workflow that saves and never runs.
+pub fn registry() -> &'static HashMap<&'static str, &'static dyn WorkflowType> {
+    static REGISTRY: LazyLock<HashMap<&'static str, &'static dyn WorkflowType>> = LazyLock::new(
+        || {
+            let mut registry: HashMap<&'static str, &'static dyn WorkflowType> = HashMap::new();
+
+            for registration in inventory::iter::<WorkflowTypeRegistration> {
+                let workflow = registration.workflow();
+                if registry.insert(workflow.type_id(), workflow).is_some() {
+                    panic!(
+                        "Two workflow types are registered as '{}'. Each type needs its own identifier.",
+                        workflow.type_id()
+                    );
+                }
+            }
+
+            registry
+        },
+    );
+
+    &REGISTRY
+}
+
+/// Looks up a workflow type by identifier.
+pub fn lookup(type_id: &str) -> Result<&'static dyn WorkflowType, Error> {
+    registry().get(type_id).copied().ok_or_else(|| {
+        human_errors::user(
+            format!("There is no workflow type called '{type_id}'."),
+            &[
+                "Check the identifier against the list of available workflow types.",
+                "If this workflow used to work, it may have been removed in an upgrade.",
+            ],
+        )
+    })
+}
+
+/// Every workflow type's description, ordered by name so that a menu built from
+/// this does not reshuffle itself between requests.
+pub fn descriptors() -> Vec<WorkflowTypeDescriptor> {
+    let mut descriptors: Vec<_> = registry()
+        .values()
+        .map(|workflow| workflow.descriptor())
+        .collect();
+    descriptors.sort_by(|a, b| a.name.cmp(&b.name));
+    descriptors
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_registered_type_has_a_unique_identifier() {
+        // `registry()` panics on a duplicate, so building it is the assertion.
+        let registry = registry();
+        assert!(
+            !registry.is_empty(),
+            "no workflow types are registered, so nothing could be created from the API",
+        );
+    }
+
+    #[test]
+    fn a_types_descriptor_agrees_with_the_identifier_it_is_registered_under() {
+        for (type_id, workflow) in registry() {
+            assert_eq!(
+                &workflow.descriptor().id,
+                type_id,
+                "the descriptor for '{type_id}' names a different id, so a form submitted from it would be saved as the wrong type",
+            );
+        }
+    }
+
+    #[test]
+    fn a_types_fields_are_uniquely_named() {
+        for (type_id, workflow) in registry() {
+            let descriptor = workflow.descriptor();
+            let mut seen = std::collections::HashSet::new();
+            for field in &descriptor.fields {
+                assert!(
+                    seen.insert(field.name.clone()),
+                    "'{type_id}' asks for '{}' twice, so one of the two would silently overwrite the other",
+                    field.name,
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_dynamic_picker_depends_on_a_field_its_type_actually_has() {
+        for (type_id, workflow) in registry() {
+            let descriptor = workflow.descriptor();
+            let names: std::collections::HashSet<_> =
+                descriptor.fields.iter().map(|f| f.name.as_str()).collect();
+
+            for field in &descriptor.fields {
+                if let automate_api::FieldKind::Options { depends_on, .. } = &field.kind {
+                    assert!(
+                        names.contains(depends_on.as_str()),
+                        "'{type_id}' has a picker '{}' scoped to '{depends_on}', which is not one of its fields, so it could never be filled in",
+                        field.name,
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn looking_up_an_unknown_type_says_so_rather_than_panicking() {
+        let Err(err) = lookup("not-a-real-workflow-type") else {
+            panic!("an unknown workflow type should not resolve to a handler");
+        };
+        assert!(
+            format!("{err}").contains("not-a-real-workflow-type"),
+            "the error should name the type that was asked for: {err}",
+        );
+    }
+
+    #[test]
+    fn a_type_names_an_instance_from_its_own_configuration() {
+        let rss = lookup("rss").unwrap();
+
+        let name = rss
+            .describe(&serde_json::json!({
+                "name": "Citation Needed",
+                "url": "https://example.com/rss/",
+                "homepage": "https://example.com/",
+            }))
+            .unwrap();
+
+        assert_eq!(name, "Citation Needed");
+    }
+
+    #[test]
+    fn a_type_falls_back_to_its_own_name_when_an_instance_has_nothing_to_add() {
+        // Types that can only sensibly exist once have no name field to draw on,
+        // so the type's name is the only sensible label for the instance.
+        struct Unnamed;
+        impl Job for Unnamed {
+            type JobType = ();
+            fn partition() -> &'static str {
+                "test/unnamed"
+            }
+            async fn handle(
+                &self,
+                _ctx: crate::job::JobContext<
+                    impl crate::services::Services + Send + Sync + 'static,
+                >,
+                _job: &Self::JobType,
+            ) -> Result<(), Error> {
+                Ok(())
+            }
+        }
+        impl ConfigurableWorkflow for Unnamed {
+            fn type_id() -> &'static str {
+                "test-unnamed"
+            }
+            fn descriptor() -> WorkflowTypeDescriptor {
+                WorkflowTypeDescriptor {
+                    id: <Self as ConfigurableWorkflow>::type_id().to_string(),
+                    name: "Unnamed".to_string(),
+                    description: String::new(),
+                    trigger: automate_api::WorkflowTrigger::Cron,
+                    fields: vec![],
+                }
+            }
+        }
+
+        assert_eq!(
+            WorkflowType::describe(&Unnamed, &serde_json::json!(null)).unwrap(),
+            "Unnamed",
+        );
+    }
+
+    #[test]
+    fn a_configuration_the_handler_could_not_read_is_refused() {
+        let rss = lookup("rss").unwrap();
+
+        // `url` is missing, so this would deserialize into nothing the handler
+        // could run.
+        let Err(err) = rss.validate(&serde_json::json!({
+            "name": "Broken",
+            "homepage": "https://example.com/",
+        })) else {
+            panic!("a configuration missing a required field should not validate");
+        };
+
+        assert!(
+            format!("{err}").contains("url"),
+            "the error should name the field at fault so it can be fixed: {err}",
+        );
+    }
+
+    #[test]
+    fn every_type_dispatches_into_a_partition_something_handles() {
+        // A type whose partition has no registered handler would save happily,
+        // schedule happily, and then have every run dropped as unroutable.
+        let handled: std::collections::HashSet<_> = inventory::iter::<crate::job::JobRegistration>
+            .into_iter()
+            .map(|registration| registration.handler().partition())
+            .collect();
+
+        for (type_id, workflow) in registry() {
+            assert!(
+                handled.contains(workflow.partition()),
+                "'{type_id}' dispatches into '{}', which no job handles, so its runs would be dropped",
+                workflow.partition(),
+            );
+        }
+    }
+
+    #[test]
+    fn descriptors_are_listed_in_a_stable_order() {
+        let first = descriptors();
+        let second = descriptors();
+        assert_eq!(
+            first.iter().map(|d| &d.id).collect::<Vec<_>>(),
+            second.iter().map(|d| &d.id).collect::<Vec<_>>(),
+        );
+    }
+}

@@ -40,6 +40,100 @@ impl Display for RssConfig {
 pub struct RssWorkflow;
 
 crate::register_job!(RssWorkflow);
+crate::register_workflow_type!(RssWorkflow);
+
+impl crate::workflows::ConfigurableWorkflow for RssWorkflow {
+    fn type_id() -> &'static str {
+        "rss"
+    }
+
+    fn describe(config: &Self::JobType) -> String {
+        config.name.clone()
+    }
+
+    fn descriptor() -> automate_api::WorkflowTypeDescriptor {
+        use automate_api::{FieldDescriptor, FieldKind, WorkflowTrigger, WorkflowTypeDescriptor};
+
+        WorkflowTypeDescriptor {
+            id: Self::type_id().to_string(),
+            name: "RSS Feed".to_string(),
+            description: "Watches a feed and files a task for each new entry.".to_string(),
+            trigger: WorkflowTrigger::Cron,
+            fields: vec![
+                FieldDescriptor::new(
+                    "name",
+                    "Name",
+                    FieldKind::Text {
+                        placeholder: Some("Citation Needed".into()),
+                    },
+                )
+                .with_help(
+                    "Used to label the tasks this creates, so you can tell them apart at a glance.",
+                )
+                .required(),
+                FieldDescriptor::new(
+                    "url",
+                    "Feed URL",
+                    FieldKind::Url {
+                        placeholder: Some("https://example.com/rss/".into()),
+                    },
+                )
+                .with_help("The address of the RSS or Atom feed itself, not the page it describes.")
+                .required(),
+                FieldDescriptor::new(
+                    "homepage",
+                    "Homepage",
+                    FieldKind::Url {
+                        placeholder: Some("https://example.com/".into()),
+                    },
+                )
+                .with_help(
+                    "Used to resolve relative links inside entries, which many feeds rely on.",
+                )
+                .required(),
+                FieldDescriptor::new("cron", "Schedule", FieldKind::Cron)
+                    .with_help("How often to check the feed for new entries.")
+                    .with_default("@daily")
+                    .required(),
+                FieldDescriptor::new(
+                    "filter",
+                    "Filter",
+                    FieldKind::Filter {
+                        fields: vec!["title".into(), "description".into(), "link".into()],
+                    },
+                )
+                .with_help("Only file entries matching this. Leave it empty to file every entry."),
+                FieldDescriptor::new(
+                    "todoist.connection",
+                    "Todoist account",
+                    FieldKind::Connection {
+                        provider: crate::publishers::TODOIST_PROVIDER.to_string(),
+                    },
+                )
+                .with_help("Which linked account the tasks are created in.")
+                .required(),
+                FieldDescriptor::new(
+                    "todoist.project",
+                    "Project",
+                    FieldKind::Options {
+                        source: "projects".into(),
+                        depends_on: "todoist.connection".into(),
+                    },
+                )
+                .with_default("Hobbies"),
+                FieldDescriptor::new(
+                    "todoist.section",
+                    "Section",
+                    FieldKind::Options {
+                        source: "sections".into(),
+                        depends_on: "todoist.connection".into(),
+                    },
+                )
+                .with_default("Reading"),
+            ],
+        }
+    }
+}
 
 impl Job for RssWorkflow {
     type JobType = RssConfig;

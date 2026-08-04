@@ -13,6 +13,7 @@ mod queue;
 mod tenant;
 mod user;
 mod wordlist;
+mod workflow;
 
 pub use connection::{ConnectionKind, ConnectionStatus, ConnectionSummary, OptionItem};
 pub use ids::{ConnectionId, WordId, WordIdError, WorkflowId};
@@ -21,3 +22,4 @@ pub use kv::KeyValueEntry;
 pub use queue::{QueueMessage, QueueStatus};
 pub use tenant::{TenantId, TenantIdError};
 pub use user::AdminUser;
+pub use workflow::{FieldDescriptor, FieldKind, Workflow, WorkflowTrigger, WorkflowTypeDescriptor};
