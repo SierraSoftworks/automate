@@ -97,6 +97,27 @@ continue to name the administrator, so administrator status never follows
 the impersonated account and any change made this way is recorded against
 the account it affected.
 
+### Connections
+
+Credentials for external services are held as **connections**: one linked
+account at one service, owned by the user who linked it. A workflow names
+the connection it publishes through, so two people — or one person with a
+personal and a work Todoist account — never share a credential.
+
+Manage them under `/api/v1/connections`. Services authorised through
+OAuth are linked by the setup wizard, which obtains the credential
+itself; services that issue a token you paste in are created directly.
+
+Naming a connection on a workflow is optional. With one account linked to
+a service it is used automatically; with several, a workflow that does
+not say which is reported as ambiguous rather than guessed at, since
+picking one would file your tasks in the wrong account.
+
+If you had `[connections.todoist]` in your configuration, it is imported
+once on start-up into the account a single-user installation runs as, so
+your workflows keep publishing. Once that has happened you can delete the
+section. The import never overwrites a connection you have since replaced.
+
 ### Encryption of stored credentials
 
 API tokens, OAuth refresh tokens and webhook signing secrets are
