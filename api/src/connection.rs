@@ -192,3 +192,47 @@ mod tests {
         assert_eq!(summary.expires_at, None);
     }
 }
+
+/// A choice offered by a picker in the UI.
+///
+/// Deliberately generic: the form renderer knows how to show a list of these and
+/// nothing about what they mean, so a new picker is a server-side addition
+/// rather than a UI change.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct OptionItem {
+    /// What gets stored when this is chosen.
+    pub value: String,
+
+    /// What the person sees.
+    pub label: String,
+
+    /// A colour the provider associates with this choice, so the picker can look
+    /// like the service it is drawn from.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<String>,
+
+    /// Whether this is the provider's own default, so a picker can preselect it.
+    #[serde(default)]
+    pub is_default: bool,
+}
+
+impl OptionItem {
+    pub fn new(value: impl Into<String>, label: impl Into<String>) -> Self {
+        Self {
+            value: value.into(),
+            label: label.into(),
+            color: None,
+            is_default: false,
+        }
+    }
+
+    pub fn with_color(mut self, color: impl Into<String>) -> Self {
+        self.color = Some(color.into());
+        self
+    }
+
+    pub fn as_default(mut self) -> Self {
+        self.is_default = true;
+        self
+    }
+}

@@ -14,7 +14,7 @@ mod tenant;
 mod user;
 mod wordlist;
 
-pub use connection::{ConnectionKind, ConnectionStatus, ConnectionSummary};
+pub use connection::{ConnectionKind, ConnectionStatus, ConnectionSummary, OptionItem};
 pub use ids::{ConnectionId, WordId, WordIdError, WorkflowId};
 pub use integration::{Connection, IntegrationInfo};
 pub use kv::KeyValueEntry;

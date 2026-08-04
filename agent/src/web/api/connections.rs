@@ -9,13 +9,14 @@
 //! the responses carry [`ConnectionSummary`], which has nowhere to put one.
 
 use actix_web::{HttpResponse, http::StatusCode, web};
-use automate_api::{ConnectionId, ConnectionKind};
+use automate_api::{ConnectionId, ConnectionKind, OptionItem};
 
 use super::json_error;
 use super::scope::Scoped;
 use crate::connections::ConnectionSecret;
 use crate::db::{AuditCategory, AuditEntry, AuditOutcome, AuditStore};
 use crate::prelude::*;
+use crate::publishers::{TODOIST_PROVIDER, TodoistClient, TodoistTarget};
 
 /// The body of a request to link a new service.
 #[derive(serde::Deserialize)]
@@ -234,5 +235,115 @@ async fn record(services: &Scoped, action: &'static str, id: ConnectionId, messa
         // Losing the record should not fail an operation that has already
         // happened; the connection is linked either way.
         warn!(error = %err, "Failed to record a connection change in the audit log.");
+    }
+}
+
+/// Which list of choices to fetch.
+#[derive(serde::Deserialize)]
+pub struct OptionsQuery {
+    /// Narrows the list to those belonging to another choice, such as the
+    /// sections within a project.
+    #[serde(default)]
+    pub parent: Option<String>,
+}
+
+/// `GET /api/v1/connections/{connection}/options/{source}` — the choices a
+/// picker should offer.
+///
+/// Fetched from the provider through the connection rather than typed in, so a
+/// workflow can only be pointed at a project that exists and the UI does not
+/// have to know anything about Todoist's shape.
+pub async fn options(
+    services: Scoped,
+    path: web::Path<(String, String)>,
+    query: web::Query<OptionsQuery>,
+) -> HttpResponse {
+    let (id, source) = path.into_inner();
+
+    let id = match parse_id(&id) {
+        Ok(id) => id,
+        Err(response) => return response,
+    };
+
+    let store = services.connections();
+
+    let connection = match store.get(id).await {
+        Ok(Some(connection)) => connection,
+        Ok(None) => return not_found(id),
+        Err(err) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, err.description()),
+    };
+
+    if connection.provider != TODOIST_PROVIDER {
+        return json_error(
+            StatusCode::BAD_REQUEST,
+            format!(
+                "'{}' connections do not offer any choices.",
+                connection.provider
+            ),
+        );
+    }
+
+    let target = TodoistTarget {
+        connection: Some(id),
+        ..Default::default()
+    };
+
+    let client = match TodoistClient::connect(&*services, &target).await {
+        Ok(client) => client,
+        Err(err) => return json_error(StatusCode::BAD_GATEWAY, err.description()),
+    };
+
+    match source.as_str() {
+        "projects" => match client.projects(&*services).await {
+            Ok(projects) => {
+                let mut items: Vec<OptionItem> = projects
+                    .iter()
+                    .map(|project| {
+                        let item = OptionItem::new(project.name.clone(), project.name.clone())
+                            .with_color(project.color.clone());
+
+                        if project.inbox_project {
+                            item.as_default()
+                        } else {
+                            item
+                        }
+                    })
+                    .collect();
+                items.sort_by(|a, b| a.label.cmp(&b.label));
+
+                HttpResponse::Ok().json(items)
+            }
+            Err(err) => json_error(StatusCode::BAD_GATEWAY, err.description()),
+        },
+        "sections" => {
+            let Some(project_name) = query.into_inner().parent else {
+                return json_error(
+                    StatusCode::BAD_REQUEST,
+                    "Specify which project's sections to list.",
+                );
+            };
+
+            let project_id = match client.get_project_id(&project_name, &*services).await {
+                Ok(id) => id,
+                Err(err) => return json_error(StatusCode::BAD_REQUEST, err.description()),
+            };
+
+            match client.sections(&project_id, &*services).await {
+                Ok(sections) => {
+                    let mut items: Vec<OptionItem> = sections
+                        .iter()
+                        .map(|section| OptionItem::new(section.name.clone(), section.name.clone()))
+                        .collect();
+                    items.sort_by(|a, b| a.label.cmp(&b.label));
+
+                    HttpResponse::Ok().json(items)
+                }
+                Err(err) => json_error(StatusCode::BAD_GATEWAY, err.description()),
+            }
+        }
+        other => json_error(
+            StatusCode::NOT_FOUND,
+            format!("There is no list of choices called '{other}'."),
+        ),
     }
 }

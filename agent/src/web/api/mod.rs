@@ -103,6 +103,10 @@ pub fn configure() -> actix_web::Scope<
                     "/connections/{connection}",
                     web::delete().to(connections::delete),
                 )
+                .route(
+                    "/connections/{connection}/options/{source}",
+                    web::get().to(connections::options),
+                )
                 // Installation-wide endpoints. These take the `Administrative`
                 // extractor, which refuses a request from anyone who is not an
                 // administrator, so the guard cannot be lost by remounting them.
@@ -1076,6 +1080,102 @@ mod tests {
 
             assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
         }
+    }
+
+    #[actix_web::test]
+    async fn choices_are_refused_for_a_connection_that_offers_none() {
+        let app = app!(context("true", "true").await);
+
+        let created: serde_json::Value = test::call_and_read_body_json(
+            &app,
+            test::TestRequest::post()
+                .uri("/api/v1/connections")
+                .set_json(serde_json::json!({ "provider": "spotify", "key": "tok" }))
+                .to_request(),
+        )
+        .await;
+
+        let resp = test::call_service(
+            &app,
+            test::TestRequest::get()
+                .uri(&format!(
+                    "/api/v1/connections/{}/options/projects",
+                    created["id"].as_str().unwrap()
+                ))
+                .to_request(),
+        )
+        .await;
+
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[actix_web::test]
+    async fn choices_for_an_unknown_connection_are_not_found() {
+        let app = app!(context("true", "true").await);
+
+        let resp = test::call_service(
+            &app,
+            test::TestRequest::get()
+                .uri("/api/v1/connections/abandon-abandon/options/projects")
+                .to_request(),
+        )
+        .await;
+
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[actix_web::test]
+    async fn an_unknown_kind_of_choice_is_not_found() {
+        let app = app!(context("true", "true").await);
+
+        let created: serde_json::Value = test::call_and_read_body_json(
+            &app,
+            test::TestRequest::post()
+                .uri("/api/v1/connections")
+                .set_json(serde_json::json!({ "provider": "todoist", "key": "tok" }))
+                .to_request(),
+        )
+        .await;
+
+        let resp = test::call_service(
+            &app,
+            test::TestRequest::get()
+                .uri(&format!(
+                    "/api/v1/connections/{}/options/nonsense",
+                    created["id"].as_str().unwrap()
+                ))
+                .to_request(),
+        )
+        .await;
+
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[actix_web::test]
+    async fn listing_sections_without_naming_a_project_is_refused() {
+        let app = app!(context("true", "true").await);
+
+        let created: serde_json::Value = test::call_and_read_body_json(
+            &app,
+            test::TestRequest::post()
+                .uri("/api/v1/connections")
+                .set_json(serde_json::json!({ "provider": "todoist", "key": "tok" }))
+                .to_request(),
+        )
+        .await;
+
+        let resp = test::call_service(
+            &app,
+            test::TestRequest::get()
+                .uri(&format!(
+                    "/api/v1/connections/{}/options/sections",
+                    created["id"].as_str().unwrap()
+                ))
+                .to_request(),
+        )
+        .await;
+
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     }
 
     #[actix_web::test]

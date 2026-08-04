@@ -119,6 +119,101 @@ impl TodoistClient {
         }
     }
 
+    /// The projects in this account, as cached for name resolution.
+    ///
+    /// The same list the publisher resolves names against, so a project offered
+    /// in the UI is one a workflow can actually file into.
+    #[instrument("publishers.todoist.projects", skip(self, services), fields(otel.kind=?OpenTelemetrySpanKind::Client), err(Display))]
+    pub async fn projects(
+        &self,
+        services: &impl crate::services::Services,
+    ) -> Result<Vec<todoist_api::models::Project>, human_errors::Error> {
+        let client = self.0.clone();
+
+        services
+            .cache()
+            .cached(
+                "todoist/projects",
+                "default",
+                move || {
+                    Box::pin(async move {
+                        let mut projects = Vec::new();
+                        let mut cursor = None;
+
+                        loop {
+                            let response = client.get_projects(None, cursor).await.wrap_user_err(
+                                "Failed to fetch Todoist projects.",
+                                &[
+                                    "Check that your Todoist API token is valid and has the necessary permissions.",
+                                ],
+                            )?;
+
+                            projects.extend(response.results);
+                            cursor = response.next_cursor;
+
+                            if cursor.is_none() {
+                                break;
+                            }
+                        }
+
+                        Ok(projects)
+                    })
+                },
+                chrono::Duration::hours(24),
+            )
+            .await
+    }
+
+    /// The sections within a project.
+    ///
+    /// Todoist returns every section in one call rather than per project, so the
+    /// whole set is cached once and narrowed here — which is also what the
+    /// publisher does when resolving a section by name.
+    #[instrument("publishers.todoist.sections", skip(self, services), fields(otel.kind=?OpenTelemetrySpanKind::Client), err(Display))]
+    pub async fn sections(
+        &self,
+        project_id: &str,
+        services: &impl crate::services::Services,
+    ) -> Result<Vec<todoist_api::models::Section>, human_errors::Error> {
+        let client = self.0.clone();
+
+        let sections: Vec<todoist_api::models::Section> = services
+            .cache()
+            .cached(
+                "todoist/sections",
+                "default",
+                move || {
+                    Box::pin(async move {
+                        let mut sections = Vec::new();
+                        let mut cursor = None;
+
+                        loop {
+                            let response = client.get_sections(None, cursor).await.wrap_user_err(
+                                "Failed to fetch Todoist sections.",
+                                &["Check that your Todoist API token is valid."],
+                            )?;
+
+                            sections.extend(response.results);
+                            cursor = response.next_cursor;
+
+                            if cursor.is_none() {
+                                break;
+                            }
+                        }
+
+                        Ok(sections)
+                    })
+                },
+                chrono::Duration::hours(24),
+            )
+            .await?;
+
+        Ok(sections
+            .into_iter()
+            .filter(|section| section.project_id == project_id)
+            .collect())
+    }
+
     #[instrument("publishers.todoist.get_project_id", skip(self, name, services), fields(project.name = name), err(Display))]
     pub async fn get_project_id(
         &self,
