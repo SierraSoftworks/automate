@@ -3,6 +3,7 @@ use std::sync::Arc;
 use automate_api::TenantId;
 
 use crate::config::Config;
+use crate::crypto::SecretStore;
 
 mod alphavantage;
 pub mod debounce;
@@ -42,6 +43,7 @@ pub const HTTP_USER_AGENT: &str = "SierraSoftworks/automate";
 pub struct AppContext {
     config: Arc<Config>,
     database: crate::db::SqliteDatabase,
+    secrets: Arc<SecretStore>,
     http_client: reqwest::Client,
     session: Arc<Session>,
 }
@@ -50,6 +52,7 @@ impl AppContext {
     pub fn new(
         config: crate::config::Config,
         database: crate::db::SqliteDatabase,
+        secrets: SecretStore,
         session: Arc<Session>,
     ) -> Self {
         let http_client = reqwest::Client::builder()
@@ -60,6 +63,7 @@ impl AppContext {
         Self {
             config: Arc::new(config),
             database,
+            secrets: Arc::new(secrets),
             http_client,
             session,
         }
@@ -70,6 +74,7 @@ impl AppContext {
         ServicesContainer {
             config: self.config.clone(),
             database: self.database.tenant(tenant),
+            secrets: self.secrets.clone(),
             http_client: self.http_client.clone(),
             session: self.session.clone(),
         }
@@ -101,6 +106,15 @@ where
     #[allow(dead_code)]
     fn session(&self) -> &Session;
 
+    /// Encrypts and decrypts the credentials this installation holds on behalf
+    /// of its users.
+    ///
+    /// Reached through the services rather than a global so that a test can
+    /// supply its own key, and so anything touching a secret says so in its
+    /// signature.
+    #[allow(dead_code)]
+    fn secrets(&self) -> &SecretStore;
+
     fn kv(&self) -> impl crate::db::KeyValueStore + Clone + Send + Sync + 'static;
     fn queue(&self) -> impl crate::db::Queue + Clone + Send + Sync + 'static;
     fn cache(&self) -> impl crate::db::Cache + Clone + Send + Sync + 'static;
@@ -116,6 +130,7 @@ where
 pub struct ServicesContainer<D: crate::db::KeyValueStore + crate::db::Queue + crate::db::Cache> {
     pub config: Arc<Config>,
     pub database: D,
+    pub secrets: Arc<SecretStore>,
     pub http_client: reqwest::Client,
     pub session: Arc<Session>,
 }
@@ -127,6 +142,7 @@ impl<D: crate::db::KeyValueStore + crate::db::Queue + crate::db::Cache + Clone> 
         Self {
             config: self.config.clone(),
             database: self.database.clone(),
+            secrets: self.secrets.clone(),
             http_client: self.http_client.clone(),
             session: self.session.clone(),
         }
@@ -157,7 +173,10 @@ impl ServicesContainer<crate::db::TenantDb> {
             Session::new("automate", "0.0.0-test").with_battery(tracing_batteries::Testing),
         );
 
-        Ok(AppContext::new(config, root, session).tenant(TenantId::local()))
+        Ok(
+            AppContext::new(config, root, SecretStore::ephemeral(), session)
+                .tenant(TenantId::local()),
+        )
     }
 }
 
@@ -177,6 +196,10 @@ where
 
     fn session(&self) -> &Session {
         &self.session
+    }
+
+    fn secrets(&self) -> &SecretStore {
+        &self.secrets
     }
 
     fn kv(&self) -> impl crate::db::KeyValueStore + Clone + Send + Sync + 'static {

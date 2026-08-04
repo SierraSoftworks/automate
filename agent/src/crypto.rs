@@ -327,6 +327,44 @@ impl SecretStore {
         Self { active, keys }
     }
 
+    /// Builds the store described by the configuration.
+    ///
+    /// Where no key is configured, one is generated into a file beside the
+    /// database, so that an existing installation starts protecting its
+    /// credentials without the operator having to do anything first.
+    pub fn load(
+        config: &crate::config::AuthConfig,
+        database: &Path,
+    ) -> Result<Self, human_errors::Error> {
+        let active = load_or_create_key(config.secret_key.as_deref(), database)?;
+
+        let previous = config
+            .previous_secret_keys
+            .iter()
+            .map(|key| {
+                SecretKey::from_encoded(key).map_err(|err| {
+                    human_errors::user(
+                        format!("One of your retired encryption keys could not be read. {err}"),
+                        &[
+                            "'previous_secret_keys' under [web.auth] must list keys in the same format as 'secret_key'.",
+                            "Remove a key from that list once no stored credential still uses it.",
+                        ],
+                    )
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+
+        let store = Self::new(active, previous);
+
+        debug!(
+            active_key = %store.active_key_id(),
+            available_keys = store.keys.len(),
+            "Loaded the credential encryption keys."
+        );
+
+        Ok(store)
+    }
+
     /// A store backed by a freshly generated key, for tests.
     #[cfg(test)]
     pub fn ephemeral() -> Self {

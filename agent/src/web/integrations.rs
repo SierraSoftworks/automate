@@ -494,6 +494,7 @@ mod tests {
                     client_id: "client".to_string(),
                     client_secret: "secret".to_string(),
                     scopes: vec![],
+                    username_claim: None,
                 });
             }
             config

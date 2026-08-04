@@ -115,9 +115,15 @@ async fn shutdown_session(session: Arc<Session>) {
 async fn run(args: Args, session: Arc<Session>) -> Result<(), human_errors::Error> {
     let config = Config::load(args.config.unwrap_or_else(|| "config.toml".into()))?;
 
-    let db = db::SqliteDatabase::open("database.sqlite").await.unwrap();
+    let database_path = config.web.database.clone();
+    let db = db::SqliteDatabase::open(&database_path).await?;
 
-    let context = services::AppContext::new(config, db, session.clone());
+    // The key lives beside the database unless the operator supplies one, so
+    // that an existing installation upgrades without needing to be configured.
+    let secrets =
+        crypto::SecretStore::load(&config.web.auth, std::path::Path::new(&database_path))?;
+
+    let context = services::AppContext::new(config, db, secrets, session.clone());
 
     // The web layer still serves a single installation, so it acts as the local
     // tenant - which is also what an installation with no identity provider

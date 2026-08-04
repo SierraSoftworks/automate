@@ -648,6 +648,7 @@ mod tests {
             client_id: "test-client".into(),
             client_secret: "test-secret".into(),
             scopes: vec![],
+            username_claim: None,
         }
     }
 
@@ -792,6 +793,7 @@ mod tests {
                 client_id: "client".to_string(),
                 client_secret: "secret".to_string(),
                 scopes: vec![],
+                username_claim: None,
             })
         })
         .await
