@@ -18,8 +18,12 @@ use actix_web::{
 };
 
 use crate::prelude::*;
+use crate::services::AppContext;
+use crate::users::UserRegistry;
+use crate::web::Principal;
 use crate::web::helpers::oidc::{
-    AdminRequestFilter, admin_user_from_claims, filterable_claims, validate_token,
+    AdminRequestFilter, admin_user_from_claims, filterable_claims, username_from_claims,
+    validate_token,
 };
 use crate::web::helpers::request::client_ip;
 
@@ -28,12 +32,8 @@ mod kv;
 mod queue;
 mod user;
 
-/// The validated identity attached to a request after successful authentication,
-/// made available to handlers via the request extensions.
-#[derive(Clone)]
-pub struct Authenticated {
-    pub user: Option<automate_api::AdminUser>,
-}
+/// The header by which an administrator asks to act as another user.
+pub const IMPERSONATE_HEADER: &str = "x-impersonate-user";
 
 /// Extracts a bearer token from the `Authorization` header, accepting either
 /// capitalisation of the `Bearer` scheme.
@@ -111,11 +111,19 @@ pub fn configure() -> actix_web::Scope<
 
 /// Authentication and authorisation middleware for the protected API endpoints.
 ///
-/// When OIDC is configured, a valid `Authorization: Bearer` ID token (issued by
-/// the popup login flow) is required. The validated claims (along with request
-/// metadata) are then evaluated against the admin ACL. When OIDC is not
-/// configured, the ACL is evaluated against request metadata alone (for example
-/// to restrict access by client IP).
+/// Resolves the [`Principal`] a request is handled under and attaches it to the
+/// request extensions. That involves three separate decisions:
+///
+/// 1. **Who is this?** When an identity provider is configured, a valid
+///    `Authorization: Bearer` ID token is required and the account name is taken
+///    from its claims. Otherwise there is nobody to identify, and the request
+///    acts as the installation's local account.
+/// 2. **May they be here?** The `user_acl` filter is evaluated against the token
+///    claims and request metadata. A separate `admin_acl` decides whether they
+///    may administer the installation. Both are evaluated per request, so a
+///    change to the configuration takes effect immediately.
+/// 3. **Whose records are they acting on?** Normally their own; an administrator
+///    may redirect this with `X-Impersonate-User`.
 ///
 /// Because the credential is a bearer header rather than an automatically
 /// attached cookie, a cross-site page cannot forge an authenticated request, so
@@ -125,22 +133,22 @@ pub async fn api_auth<S: Services + Send + Sync + 'static>(
     next: Next<BoxBody>,
 ) -> Result<ServiceResponse<BoxBody>, actix_web::Error> {
     use actix_web::HttpMessage;
+    use actix_web::http::StatusCode;
 
     let Some(services) = req.app_data::<web::Data<S>>().cloned() else {
         return Ok(req.into_response(json_error(
-            actix_web::http::StatusCode::INTERNAL_SERVER_ERROR,
+            StatusCode::INTERNAL_SERVER_ERROR,
             "Service context unavailable.",
         )));
     };
 
     let config = services.config();
-    let admin = &config.web.admin;
 
-    // Authenticate via the bearer token when OIDC is configured.
-    let claims = if let Some(oidc) = &admin.oidc {
+    // Authenticate via the bearer token when an identity provider is configured.
+    let claims = if let Some(oidc) = config.web.oidc() {
         let Some(token) = bearer_token(req.headers()) else {
             return Ok(req.into_response(json_error(
-                actix_web::http::StatusCode::UNAUTHORIZED,
+                StatusCode::UNAUTHORIZED,
                 "Authentication is required to access this resource.",
             )));
         };
@@ -150,7 +158,7 @@ pub async fn api_auth<S: Services + Send + Sync + 'static>(
             Err(e) => {
                 info!("Rejected API request with an invalid bearer token: {e}");
                 return Ok(req.into_response(json_error(
-                    actix_web::http::StatusCode::UNAUTHORIZED,
+                    StatusCode::UNAUTHORIZED,
                     "Your session is invalid or has expired. Please sign in again.",
                 )));
             }
@@ -168,26 +176,220 @@ pub async fn api_auth<S: Services + Send + Sync + 'static>(
         claims: filterable.as_ref(),
     };
 
-    let allowed = admin.acl.matches(&filter).unwrap_or(false);
-
-    if !allowed {
+    if !config.web.user_acl().matches(&filter).unwrap_or(false) {
         // We only reach the ACL check after authentication has already been
-        // resolved: either OIDC is configured and the session validated above, or
-        // OIDC is disabled and there is nothing to sign in to. In both cases a
+        // resolved: either an identity provider is configured and the session
+        // validated above, or there is nothing to sign in to. In both cases a
         // denial here is a permanent authorization failure, so respond `403`.
         // Returning `401` would tell the browser to start a sign-in that cannot
-        // change the outcome — and, when OIDC is disabled, would leave the admin
+        // change the outcome — and, with no identity provider, would leave the
         // UI bouncing through a sign-in flow that goes nowhere.
         return Ok(req.into_response(json_error(
-            actix_web::http::StatusCode::FORBIDDEN,
+            StatusCode::FORBIDDEN,
             "Your account is not permitted to access this resource.",
         )));
     }
 
-    let user = claims.as_ref().map(admin_user_from_claims);
-    req.extensions_mut().insert(Authenticated { user });
+    let is_admin = config.web.admin_acl().matches(&filter).unwrap_or(false);
+
+    // Determine which account the request acts as. With no identity provider
+    // there is nobody to identify, so everything belongs to the installation's
+    // local account — which is what a single-user install has always used.
+    let account = match &claims {
+        Some(claims) => {
+            match username_from_claims(
+                claims,
+                config.web.oidc().and_then(|o| o.username_claim.as_deref()),
+            ) {
+                Ok(account) => account,
+                Err(err) => {
+                    warn!("Rejected a sign-in whose account could not be determined: {err}");
+                    return Ok(
+                        req.into_response(json_error(StatusCode::FORBIDDEN, err.description()))
+                    );
+                }
+            }
+        }
+        None => local_tenant(&config),
+    };
+
+    let mut principal = Principal::new(
+        account.clone(),
+        is_admin,
+        claims.as_ref().map(admin_user_from_claims),
+    );
+
+    // The registry belongs to the installation rather than to any one account,
+    // so it is reached through the root context.
+    if let Some(context) = req.app_data::<web::Data<AppContext>>().cloned() {
+        let registry = UserRegistry::new(context.tenant(TenantId::system()));
+        let display = principal.to_admin_user();
+
+        match registry
+            .record_sign_in(
+                &account,
+                display.as_ref().map_or("Signed in", |u| u.name.as_str()),
+                display.as_ref().and_then(|u| u.email.as_deref()),
+                is_admin,
+            )
+            .await
+        {
+            // A suspended account is turned away here rather than by the ACL,
+            // because suspension is the one lever an administrator has that does
+            // not require editing the configuration file.
+            Ok(None) => {
+                warn!(user.account = %account, "Refused a request from a suspended account.");
+                return Ok(req.into_response(json_error(
+                    StatusCode::FORBIDDEN,
+                    "This account has been suspended.",
+                )));
+            }
+            Ok(Some(_)) => {}
+            Err(err) => {
+                // Failing to update the registry must not lock everybody out;
+                // it is a record of who has signed in, not a gate on doing so.
+                warn!(error = %err, "Could not record a sign-in in the user registry.");
+                services.session().record_human_error(&err);
+            }
+        }
+
+        match resolve_impersonation(&req, &principal, &registry).await {
+            Ok(Some(subject)) => {
+                info!(
+                    admin.account = %principal.actor(),
+                    user.account = %subject,
+                    "An administrator is acting as another user."
+                );
+
+                record_impersonation(&context, &req, principal.actor(), &subject).await;
+                principal = principal.impersonating(subject);
+            }
+            Ok(None) => {}
+            Err(response) => return Ok(req.into_response(response)),
+        }
+    }
+
+    req.extensions_mut().insert(principal);
 
     next.call(req).await
+}
+
+/// Records that an administrator changed something while acting as another user.
+///
+/// Only requests that change something are recorded. Every request during an
+/// impersonation session passes through here and the browser polls, so auditing
+/// reads as well would bury the writes — which are what anyone reviewing this
+/// afterwards actually wants to find. The entry is written to the impersonated
+/// account's log, so the person affected can see it, and names the administrator
+/// as the actor.
+async fn record_impersonation(
+    context: &AppContext,
+    req: &ServiceRequest,
+    actor: &TenantId,
+    subject: &TenantId,
+) {
+    use crate::db::{AuditCategory, AuditEntry, AuditOutcome, AuditStore};
+
+    if req.method().is_safe() {
+        return;
+    }
+
+    let entry = AuditEntry::new(
+        AuditCategory::Administration,
+        "impersonated",
+        AuditOutcome::Success,
+    )
+    .subject(subject)
+    .actor(actor)
+    .message(format!(
+        "{actor} made a change while acting as this account."
+    ))
+    .detail(serde_json::json!({
+        "method": req.method().as_str(),
+        "path": req.path(),
+    }));
+
+    if let Err(err) = context.tenant(subject.clone()).audit().record(entry).await {
+        // Losing the record is bad, but refusing the request over it would let a
+        // full disk lock an administrator out mid-investigation.
+        error!(error = %err, "Failed to record an impersonated action in the audit log.");
+        context.session().record_human_error(&err);
+    }
+}
+
+/// The account an installation with no identity provider acts as.
+fn local_tenant(config: &crate::config::Config) -> TenantId {
+    config
+        .web
+        .auth
+        .local_user
+        .as_deref()
+        .and_then(|name| TenantId::new(name).ok())
+        .unwrap_or_else(TenantId::local)
+}
+
+/// Resolves the `X-Impersonate-User` header, if present.
+///
+/// Returns the account to act as, `None` when the header is absent, and an error
+/// response when the request asks for something it may not have.
+async fn resolve_impersonation<S: Services>(
+    req: &ServiceRequest,
+    principal: &Principal,
+    registry: &UserRegistry<S>,
+) -> Result<Option<TenantId>, HttpResponse> {
+    use actix_web::http::StatusCode;
+
+    let Some(requested) = req
+        .headers()
+        .get(IMPERSONATE_HEADER)
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return Ok(None);
+    };
+
+    if !principal.is_admin() {
+        warn!(
+            user.account = %principal.actor(),
+            "Refused an impersonation attempt from an account that is not an administrator."
+        );
+        return Err(json_error(
+            StatusCode::FORBIDDEN,
+            "Only administrators may act as another user.",
+        ));
+    }
+
+    let subject =
+        TenantId::new(requested).map_err(|err| json_error(StatusCode::BAD_REQUEST, err))?;
+
+    // Acting as yourself is the same as not impersonating at all, and letting it
+    // through would put a misleading impersonation banner in front of an
+    // administrator looking at their own records.
+    if &subject == principal.actor() {
+        return Ok(None);
+    }
+
+    // Requiring the account to be known stops a typo silently creating an empty
+    // namespace that looks like a user with no workflows.
+    match registry.get(&subject).await {
+        Ok(Some(user)) if !user.disabled => Ok(Some(subject)),
+        Ok(Some(_)) => Err(json_error(
+            StatusCode::FORBIDDEN,
+            format!("The account '{subject}' has been suspended."),
+        )),
+        Ok(None) => Err(json_error(
+            StatusCode::NOT_FOUND,
+            format!("There is no account named '{subject}'."),
+        )),
+        Err(err) => {
+            error!(error = %err, "Failed to look up an account to impersonate.");
+            Err(json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "We could not look up that account.",
+            ))
+        }
+    }
 }
 
 #[cfg(test)]
@@ -196,25 +398,58 @@ mod tests {
     use actix_web::http::StatusCode;
     use actix_web::{App, test, web};
 
-    use crate::db::TenantDb;
     use crate::filter::Filter;
-    use crate::services::ServicesContainer;
+    use crate::services::AppContext;
+    use crate::users::User;
 
-    /// Builds a services container with OIDC disabled and the given admin ACL.
-    async fn service_with_acl(acl: &str) -> ServicesContainer<TenantDb> {
-        ServicesContainer::new_custom_mock(|c, _| c.web.admin.acl = Filter::new(acl).unwrap())
+    /// Builds a context with no identity provider and the given access filters.
+    ///
+    /// Leaving OIDC unconfigured keeps these tests free of a JWKS server while
+    /// still exercising the whole middleware: the account resolves to the
+    /// installation's local user, and `admin_acl` decides whether it may
+    /// impersonate. What is being tested is the authorisation logic, which is
+    /// identical either way.
+    async fn context(user_acl: &str, admin_acl: &str) -> AppContext {
+        AppContext::new_mock(|config| {
+            config.web.auth.user_acl = Some(Filter::new(user_acl).unwrap());
+            config.web.auth.admin_acl = Some(Filter::new(admin_acl).unwrap());
+        })
+        .await
+        .unwrap()
+    }
+
+    /// Registers an account so that it can be impersonated.
+    async fn register(context: &AppContext, username: &str, disabled: bool) -> User {
+        let registry = UserRegistry::new(context.tenant(TenantId::system()));
+        let username = TenantId::new(username).unwrap();
+
+        registry
+            .record_sign_in(&username, username.as_str(), None, false)
             .await
-            .unwrap()
+            .unwrap();
+
+        if disabled {
+            registry.set_disabled(&username, true).await.unwrap();
+        }
+
+        registry.get(&username).await.unwrap().unwrap()
+    }
+
+    macro_rules! app {
+        ($context:expr) => {
+            test::init_service(
+                App::new()
+                    .app_data(web::Data::new($context.tenant(TenantId::local())))
+                    .app_data(web::Data::new($context.clone()))
+                    .service(configure()),
+            )
+            .await
+        };
     }
 
     #[actix_web::test]
     async fn acl_denial_without_oidc_is_forbidden_not_unauthorized() {
-        let app = test::init_service(
-            App::new()
-                .app_data(web::Data::new(service_with_acl("false").await))
-                .service(configure()),
-        )
-        .await;
+        let app = app!(context("false", "false").await);
 
         let req = test::TestRequest::get().uri("/api/v1/me").to_request();
         let resp = test::call_service(&app, req).await;
@@ -227,12 +462,7 @@ mod tests {
 
     #[actix_web::test]
     async fn acl_allow_without_oidc_reports_no_signed_in_user() {
-        let app = test::init_service(
-            App::new()
-                .app_data(web::Data::new(service_with_acl("true").await))
-                .service(configure()),
-        )
-        .await;
+        let app = app!(context("true", "true").await);
 
         let req = test::TestRequest::get().uri("/api/v1/me").to_request();
         let resp = test::call_service(&app, req).await;
@@ -245,12 +475,7 @@ mod tests {
         // With OIDC disabled there is no bearer to present; access is governed by
         // the ACL alone, and a bearer-only model has no CSRF token to reject a
         // mutating request on.
-        let app = test::init_service(
-            App::new()
-                .app_data(web::Data::new(service_with_acl("true").await))
-                .service(configure()),
-        )
-        .await;
+        let app = app!(context("true", "true").await);
 
         let req = test::TestRequest::delete()
             .uri("/api/v1/kv/cache?key=foo")
@@ -260,6 +485,229 @@ mod tests {
         // Reaches the handler (the ACL allows it); the key simply doesn't exist.
         assert_ne!(resp.status(), StatusCode::FORBIDDEN);
         assert_ne!(resp.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[actix_web::test]
+    async fn signing_in_records_the_account_in_the_registry() {
+        let context = context("true", "false").await;
+        let app = app!(context);
+
+        test::call_service(
+            &app,
+            test::TestRequest::get().uri("/api/v1/me").to_request(),
+        )
+        .await;
+
+        let registry = UserRegistry::new(context.tenant(TenantId::system()));
+        let accounts = registry.list().await.unwrap();
+
+        assert_eq!(accounts.len(), 1);
+        assert_eq!(accounts[0].username, TenantId::local());
+        assert!(!accounts[0].is_admin);
+    }
+
+    #[actix_web::test]
+    async fn the_local_account_can_be_named_so_adopting_oidc_keeps_existing_records() {
+        let context = AppContext::new_mock(|config| {
+            config.web.auth.user_acl = Some(Filter::new("true").unwrap());
+            config.web.auth.local_user = Some("alice@example.com".into());
+        })
+        .await
+        .unwrap();
+        let app = app!(context);
+
+        test::call_service(
+            &app,
+            test::TestRequest::get().uri("/api/v1/me").to_request(),
+        )
+        .await;
+
+        let accounts = UserRegistry::new(context.tenant(TenantId::system()))
+            .list()
+            .await
+            .unwrap();
+
+        assert_eq!(accounts[0].username.as_str(), "alice@example.com");
+    }
+
+    #[actix_web::test]
+    async fn a_suspended_account_is_refused() {
+        let context = context("true", "true").await;
+        let app = app!(context);
+
+        // Sign in once so the account exists, then suspend it.
+        test::call_service(
+            &app,
+            test::TestRequest::get().uri("/api/v1/me").to_request(),
+        )
+        .await;
+        UserRegistry::new(context.tenant(TenantId::system()))
+            .set_disabled(&TenantId::local(), true)
+            .await
+            .unwrap();
+
+        let resp = test::call_service(
+            &app,
+            test::TestRequest::get().uri("/api/v1/me").to_request(),
+        )
+        .await;
+
+        // Suspension is the one lever that does not require editing the
+        // configuration file, so it has to work even against a permissive ACL.
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[actix_web::test]
+    async fn impersonation_is_refused_for_an_account_that_is_not_an_administrator() {
+        let context = context("true", "false").await;
+        register(&context, "alice", false).await;
+        let app = app!(context);
+
+        let req = test::TestRequest::get()
+            .uri("/api/v1/me")
+            .insert_header((IMPERSONATE_HEADER, "alice"))
+            .to_request();
+        let resp = test::call_service(&app, req).await;
+
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[actix_web::test]
+    async fn an_administrator_may_act_as_another_user() {
+        let context = context("true", "true").await;
+        register(&context, "alice", false).await;
+        let app = app!(context);
+
+        let req = test::TestRequest::get()
+            .uri("/api/v1/me")
+            .insert_header((IMPERSONATE_HEADER, "alice"))
+            .to_request();
+        let resp = test::call_service(&app, req).await;
+
+        assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+    }
+
+    #[actix_web::test]
+    async fn impersonating_an_unknown_account_is_reported_rather_than_silently_creating_one() {
+        // A typo would otherwise open an empty namespace that looks exactly like
+        // a real user who happens to have no workflows.
+        let app = app!(context("true", "true").await);
+
+        let req = test::TestRequest::get()
+            .uri("/api/v1/me")
+            .insert_header((IMPERSONATE_HEADER, "nobody"))
+            .to_request();
+        let resp = test::call_service(&app, req).await;
+
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[actix_web::test]
+    async fn a_suspended_account_cannot_be_impersonated() {
+        let context = context("true", "true").await;
+        register(&context, "alice", true).await;
+        let app = app!(context);
+
+        let req = test::TestRequest::get()
+            .uri("/api/v1/me")
+            .insert_header((IMPERSONATE_HEADER, "alice"))
+            .to_request();
+        let resp = test::call_service(&app, req).await;
+
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[actix_web::test]
+    async fn an_impersonation_header_naming_an_unusable_account_is_a_bad_request() {
+        let app = app!(context("true", "true").await);
+
+        // The reserved namespace holds the user registry itself.
+        let req = test::TestRequest::get()
+            .uri("/api/v1/me")
+            .insert_header((IMPERSONATE_HEADER, "!system"))
+            .to_request();
+        let resp = test::call_service(&app, req).await;
+
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[actix_web::test]
+    async fn an_empty_impersonation_header_is_ignored() {
+        let app = app!(context("true", "true").await);
+
+        let req = test::TestRequest::get()
+            .uri("/api/v1/me")
+            .insert_header((IMPERSONATE_HEADER, "   "))
+            .to_request();
+        let resp = test::call_service(&app, req).await;
+
+        assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+    }
+
+    #[actix_web::test]
+    async fn an_impersonated_change_is_recorded_against_the_account_it_affected() {
+        use crate::db::{AuditQuery, AuditStore};
+
+        let context = context("true", "true").await;
+        register(&context, "alice", false).await;
+        let app = app!(context);
+
+        let req = test::TestRequest::delete()
+            .uri("/api/v1/kv/notes?key=anything")
+            .insert_header((IMPERSONATE_HEADER, "alice"))
+            .to_request();
+        test::call_service(&app, req).await;
+
+        // Written to the impersonated account's log, so the person affected can
+        // see it, and attributed to the administrator rather than to them.
+        let entries = context
+            .tenant(TenantId::new("alice").unwrap())
+            .audit()
+            .audit(AuditQuery::recent(10))
+            .await
+            .unwrap();
+
+        assert_eq!(
+            entries.len(),
+            1,
+            "expected one audit entry, got {entries:?}"
+        );
+        assert_eq!(entries[0].action, "impersonated");
+        assert_eq!(
+            entries[0].actor.as_deref(),
+            Some(TenantId::local().as_str())
+        );
+        assert_eq!(entries[0].subject.as_deref(), Some("alice"));
+        assert_eq!(entries[0].detail.as_ref().unwrap()["method"], "DELETE");
+    }
+
+    #[actix_web::test]
+    async fn merely_reading_while_impersonating_is_not_audited() {
+        use crate::db::{AuditQuery, AuditStore};
+
+        // Every request during an impersonation session passes through the
+        // middleware and the browser polls, so auditing reads would bury the
+        // changes, which are what anyone reviewing this afterwards is looking
+        // for.
+        let context = context("true", "true").await;
+        register(&context, "alice", false).await;
+        let app = app!(context);
+
+        let req = test::TestRequest::get()
+            .uri("/api/v1/me")
+            .insert_header((IMPERSONATE_HEADER, "alice"))
+            .to_request();
+        test::call_service(&app, req).await;
+
+        assert!(
+            context
+                .tenant(TenantId::new("alice").unwrap())
+                .audit()
+                .audit(AuditQuery::recent(10))
+                .await
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[actix_web::test]

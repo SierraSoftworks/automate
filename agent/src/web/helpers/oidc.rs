@@ -430,27 +430,77 @@ async fn token_request(
     })
 }
 
+/// Reads a non-empty string claim.
+fn str_claim(claims: &serde_json::Map<String, serde_json::Value>, key: &str) -> Option<String> {
+    claims
+        .get(key)
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+        .filter(|s| !s.is_empty())
+}
+
 /// Derives the [`automate_api::AdminUser`] display identity from a validated
 /// claim set, falling back through the common OIDC name claims.
+///
+/// Covers only how the person is presented. Which account they are — the name
+/// their records are stored under — is [`username_from_claims`], which is
+/// deliberately a separate decision: a display name may change freely, whereas
+/// changing an account name moves everything somebody owns.
 pub fn admin_user_from_claims(
     claims: &serde_json::Map<String, serde_json::Value>,
 ) -> automate_api::AdminUser {
-    let str_claim = |key: &str| {
-        claims
-            .get(key)
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string())
-            .filter(|s| !s.is_empty())
-    };
-
-    let email = str_claim("email");
-    let name = str_claim("name")
-        .or_else(|| str_claim("preferred_username"))
+    let email = str_claim(claims, "email");
+    let name = str_claim(claims, "name")
+        .or_else(|| str_claim(claims, "preferred_username"))
         .or_else(|| email.clone())
-        .or_else(|| str_claim("sub"))
+        .or_else(|| str_claim(claims, "sub"))
         .unwrap_or_else(|| "Signed in".to_string());
 
-    automate_api::AdminUser { name, email }
+    automate_api::AdminUser {
+        email,
+        ..automate_api::AdminUser::new(name)
+    }
+}
+
+/// Determines which account a validated claim set belongs to.
+///
+/// Uses the configured claim where one is named, otherwise `preferred_username`
+/// falling back to `sub`. `sub` is the last resort rather than the default
+/// because it is usually an opaque identifier, and an account name is something
+/// people have to recognise, type into an impersonation header, and see in the
+/// audit log.
+pub fn username_from_claims(
+    claims: &serde_json::Map<String, serde_json::Value>,
+    configured_claim: Option<&str>,
+) -> Result<TenantId, human_errors::Error> {
+    let (claim, value) = match configured_claim {
+        Some(claim) => (claim, str_claim(claims, claim)),
+        None => (
+            "preferred_username",
+            str_claim(claims, "preferred_username").or_else(|| str_claim(claims, "sub")),
+        ),
+    };
+
+    let Some(value) = value else {
+        return Err(human_errors::user(
+            format!(
+                "Your identity provider did not supply a '{claim}' claim, so we cannot tell which account you are signing in to."
+            ),
+            &[
+                "Configure your identity provider to include this claim in the ID token.",
+                "Alternatively, set 'username_claim' under [web.auth.oidc] to a claim your provider does supply.",
+            ],
+        ));
+    };
+
+    TenantId::new(&value).map_err(|err| {
+        human_errors::user(
+            err.to_string(),
+            &[
+                "Point 'username_claim' under [web.auth.oidc] at a claim carrying a usable account name.",
+            ],
+        )
+    })
 }
 
 /// Removes registered/temporal claims so the ACL filter only sees

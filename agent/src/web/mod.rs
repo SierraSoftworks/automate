@@ -4,18 +4,20 @@ use actix_web::{App, HttpServer, web};
 use human_errors::ResultExt;
 
 use crate::integrations::Registry;
-use crate::prelude::Services;
-use crate::services::AppServices;
+use crate::prelude::TenantId;
+use crate::services::{AppContext, AppServices};
 
 mod api;
 mod helpers;
 mod integrations;
 mod oauth;
+mod principal;
 mod telemetry;
 mod ui;
 mod webhooks;
 
 pub use oauth::{OAuth2Config, OAuth2RefreshToken, refresh_or_notify};
+pub use principal::Principal;
 
 /// Concrete over [`AppServices`] rather than generic over [`Services`].
 ///
@@ -25,13 +27,20 @@ pub use oauth::{OAuth2Config, OAuth2RefreshToken, refresh_or_notify};
 /// integration routes looking for application data that was never registered, so
 /// the constraint is stated in the signature instead of being discovered at
 /// runtime.
-pub async fn run_web_server(services: AppServices) -> Result<(), human_errors::Error> {
+pub async fn run_web_server(context: AppContext) -> Result<(), human_errors::Error> {
     // Built once, up front, so a duplicate integration id is a start-up failure
     // rather than a route that quietly resolves to whichever registration the
     // linker emitted first.
-    let registry = Arc::new(Registry::new(&services.config())?);
+    let registry = Arc::new(Registry::new(&context.config())?);
 
-    if let Some((mut addr, port)) = services.config().web.address.split_once(':') {
+    // The handlers that have not yet been made tenant-aware continue to act as
+    // the local tenant, which is where a single-installation agent has always
+    // kept its records. Authentication reaches for the context instead, because
+    // the user registry it maintains belongs to the installation rather than to
+    // any one account.
+    let services = context.tenant(TenantId::local());
+
+    if let Some((mut addr, port)) = context.config().web.address.split_once(':') {
         if addr.is_empty() {
             addr = "0.0.0.0";
         }
@@ -44,6 +53,7 @@ pub async fn run_web_server(services: AppServices) -> Result<(), human_errors::E
         let server = HttpServer::new(move || {
             App::new()
                 .app_data(web::Data::new(services.clone()))
+                .app_data(web::Data::new(context.clone()))
                 .app_data(web::Data::from(registry.clone()))
                 .wrap(telemetry::TracingLogger::<AppServices>::new())
                 .service(api::configure())

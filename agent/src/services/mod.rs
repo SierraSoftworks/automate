@@ -86,6 +86,10 @@ impl AppContext {
         &self.database
     }
 
+    pub fn config(&self) -> Arc<Config> {
+        self.config.clone()
+    }
+
     pub fn session(&self) -> &Session {
         &self.session
     }
@@ -119,6 +123,9 @@ where
     fn queue(&self) -> impl crate::db::Queue + Clone + Send + Sync + 'static;
     fn cache(&self) -> impl crate::db::Cache + Clone + Send + Sync + 'static;
 
+    /// The audit log for this tenant.
+    fn audit(&self) -> impl crate::db::AuditStore + Clone + Send + Sync + 'static;
+
     /// A shared [`reqwest::Client`] configured with the default user agent.
     ///
     /// Cloning a [`reqwest::Client`] is cheap and shares the underlying
@@ -127,7 +134,9 @@ where
     fn http_client(&self) -> reqwest::Client;
 }
 
-pub struct ServicesContainer<D: crate::db::KeyValueStore + crate::db::Queue + crate::db::Cache> {
+pub struct ServicesContainer<
+    D: crate::db::KeyValueStore + crate::db::Queue + crate::db::Cache + crate::db::AuditStore,
+> {
     pub config: Arc<Config>,
     pub database: D,
     pub secrets: Arc<SecretStore>,
@@ -135,8 +144,9 @@ pub struct ServicesContainer<D: crate::db::KeyValueStore + crate::db::Queue + cr
     pub session: Arc<Session>,
 }
 
-impl<D: crate::db::KeyValueStore + crate::db::Queue + crate::db::Cache + Clone> Clone
-    for ServicesContainer<D>
+impl<
+    D: crate::db::KeyValueStore + crate::db::Queue + crate::db::Cache + crate::db::AuditStore + Clone,
+> Clone for ServicesContainer<D>
 {
     fn clone(&self) -> Self {
         Self {
@@ -146,6 +156,31 @@ impl<D: crate::db::KeyValueStore + crate::db::Queue + crate::db::Cache + Clone> 
             http_client: self.http_client.clone(),
             session: self.session.clone(),
         }
+    }
+}
+
+#[cfg(test)]
+impl AppContext {
+    /// Builds a root context backed by an in-memory database and a throwaway
+    /// encryption key.
+    pub async fn new_mock(
+        f: impl Sized + FnOnce(&mut Config),
+    ) -> Result<Self, human_errors::Error> {
+        let database = crate::db::SqliteDatabase::open_in_memory().await?;
+
+        let mut config = Config::default();
+        f(&mut config);
+
+        let session = Arc::new(
+            Session::new("automate", "0.0.0-test").with_battery(tracing_batteries::Testing),
+        );
+
+        Ok(AppContext::new(
+            config,
+            database,
+            SecretStore::ephemeral(),
+            session,
+        ))
     }
 }
 
@@ -185,6 +220,7 @@ where
     D: crate::db::KeyValueStore
         + crate::db::Queue
         + crate::db::Cache
+        + crate::db::AuditStore
         + Clone
         + Send
         + Sync
@@ -211,6 +247,10 @@ where
     }
 
     fn cache(&self) -> impl crate::db::Cache + Clone + Send + Sync + 'static {
+        self.database.clone()
+    }
+
+    fn audit(&self) -> impl crate::db::AuditStore + Clone + Send + Sync + 'static {
         self.database.clone()
     }
 

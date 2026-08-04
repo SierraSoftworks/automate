@@ -10,6 +10,7 @@ mod parsers;
 mod prelude;
 mod publishers;
 mod services;
+mod users;
 mod web;
 mod webhooks;
 
@@ -125,13 +126,8 @@ async fn run(args: Args, session: Arc<Session>) -> Result<(), human_errors::Erro
 
     let context = services::AppContext::new(config, db, secrets, session.clone());
 
-    // The web layer still serves a single installation, so it acts as the local
-    // tenant - which is also what an installation with no identity provider
-    // configured will keep using once identity lands.
-    let services = context.tenant(automate_api::TenantId::local());
-
     (
-        crate::web::run_web_server(services.clone()),
+        crate::web::run_web_server(context.clone()),
         crate::job::JobHost::run(context.clone()),
     )
         .race()
