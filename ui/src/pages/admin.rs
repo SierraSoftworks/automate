@@ -357,8 +357,6 @@ pub fn admin() -> Html {
         <>
             { banner }
             <ConnectionsPanel reload={*connections_reload} />
-            <super::Connections />
-            <super::Workflows />
             <PartitionBrowser
                 partitions={partitions}
                 empty="No partitions found in the key-value store or job queues."

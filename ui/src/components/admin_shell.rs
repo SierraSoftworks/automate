@@ -3,6 +3,9 @@ use std::rc::Rc;
 use chrono::{Datelike, Utc};
 use yew::prelude::*;
 
+use yew_router::prelude::*;
+
+use crate::app::Route;
 use crate::components::{AppBar, PageTitle};
 use crate::pages::Protected;
 use crate::search::{SearchContext, SearchFilter, SearchVocabulary, VocabularyContext};
@@ -83,6 +86,24 @@ pub fn admin_shell(props: &AdminShellProps) -> Html {
         })
     };
 
+    // The shell is shared, so what it is a shell *for* has to come from the
+    // route. Hard-coding one page's title here meant every other page claimed to
+    // be the data browser.
+    let (title, subtitle) = match use_route::<Route>().unwrap_or(Route::Admin) {
+        Route::Connections => (
+            "Connections",
+            "The services this account is linked to, and the credentials used to reach them.",
+        ),
+        Route::Workflows => (
+            "Workflows",
+            "The things Automate watches for you, and what it does when they change.",
+        ),
+        _ => (
+            "Admin",
+            "Browse the key-value store and job queues across every partition.",
+        ),
+    };
+
     html! {
         <ContextProvider<SearchContext> context={search}>
             <ContextProvider<VocabularyContext> context={vocabulary_ctx}>
@@ -92,12 +113,10 @@ pub fn admin_shell(props: &AdminShellProps) -> Html {
                         <div class="app-container">
                             <ContextProvider<PageActions> context={(*page_actions).clone()}>
                                 <Protected>
-                                    <PageTitle
-                                        title="Admin"
-                                        subtitle="Browse the key-value store and job queues across every partition."
-                                    >
+                                    <PageTitle title={title} subtitle={subtitle}>
                                         { (*actions).clone() }
                                     </PageTitle>
+                                    <AdminNav />
                                     { props.children.clone() }
                                 </Protected>
                             </ContextProvider<PageActions>>
@@ -109,5 +128,43 @@ pub fn admin_shell(props: &AdminShellProps) -> Html {
                 </div>
             </ContextProvider<VocabularyContext>>
         </ContextProvider<SearchContext>>
+    }
+}
+
+/// The links between the admin pages.
+///
+/// Small enough to live beside the shell that renders it: there are three
+/// destinations, and giving them their own module would be more ceremony than
+/// the thing deserves.
+#[function_component(AdminNav)]
+fn admin_nav() -> Html {
+    let current = use_route::<Route>().unwrap_or(Route::Admin);
+
+    let link = |route: Route, label: &'static str| {
+        // Both spellings of the browser route are the same destination, so one
+        // must not appear unselected while the other is showing.
+        let active = matches!(
+            (&route, &current),
+            (Route::Connections, Route::Connections)
+                | (Route::Workflows, Route::Workflows)
+                | (Route::Admin, Route::Admin | Route::AdminRoot)
+        );
+
+        html! {
+            <Link<Route>
+                to={route}
+                classes={classes!("admin-nav__link", active.then_some("admin-nav__link--active"))}
+            >
+                { label }
+            </Link<Route>>
+        }
+    };
+
+    html! {
+        <nav class="admin-nav">
+            { link(Route::Workflows, "Workflows") }
+            { link(Route::Connections, "Connections") }
+            { link(Route::Admin, "Data") }
+        </nav>
     }
 }

@@ -1201,6 +1201,34 @@ footer {
   }
 }
 
+// The links between the admin pages.
+.admin-nav {
+  display: flex;
+  gap: 0.25rem;
+  margin-bottom: 1.5rem;
+  border-bottom: 1px solid $border-lighter;
+
+  &__link {
+    padding: 0.5rem 0.9rem;
+    font-size: 0.875rem;
+    font-weight: 500;
+    color: $text-secondary;
+    text-decoration: none;
+    border-bottom: 2px solid transparent;
+    margin-bottom: -1px;
+    transition: color 0.2s, border-color 0.2s;
+
+    &:hover {
+      color: $brand;
+    }
+
+    &--active {
+      color: $brand;
+      border-bottom-color: $brand;
+    }
+  }
+}
+
 // Workflows: the things a person has asked Automate to watch.
 .workflows {
   @include card;
