@@ -46,3 +46,59 @@ pub fn short_relative(dt: chrono::DateTime<chrono::Utc>) -> String {
         format!("in {magnitude}")
     }
 }
+
+/// A plain reading of the common cron shorthands and simple expressions.
+///
+/// Deliberately partial. A cron expression can say things that take a paragraph
+/// to explain, and a half-right paraphrase of one is worse than none — so
+/// anything beyond the shapes recognised here is left to speak for itself rather
+/// than described approximately.
+pub fn describe_cron(expression: &str) -> Option<String> {
+    let expression = expression.trim();
+
+    match expression.to_ascii_lowercase().as_str() {
+        "" => return None,
+        "@hourly" => return Some("every hour".into()),
+        "@daily" | "@midnight" => return Some("every day at midnight".into()),
+        "@weekly" => return Some("every week on Sunday".into()),
+        "@monthly" => return Some("on the first of every month".into()),
+        "@yearly" | "@annually" => return Some("once a year, on 1 January".into()),
+        _ => {}
+    }
+
+    let parts: Vec<&str> = expression.split_whitespace().collect();
+    let [minute, hour, day, month, weekday] = parts.as_slice() else {
+        return None;
+    };
+
+    if (*day, *month, *weekday) != ("*", "*", "*") {
+        return None;
+    }
+
+    // "0 */6 * * *" — every N hours on the hour.
+    if let Some(interval) = hour.strip_prefix("*/")
+        && *minute == "0"
+    {
+        return interval
+            .parse::<u32>()
+            .ok()
+            .map(|hours| format!("every {hours} hours"));
+    }
+
+    // "*/15 * * * *" — every N minutes.
+    if let Some(interval) = minute.strip_prefix("*/")
+        && *hour == "*"
+    {
+        return interval
+            .parse::<u32>()
+            .ok()
+            .map(|minutes| format!("every {minutes} minutes"));
+    }
+
+    // "30 9 * * *" — once a day at a given time.
+    if let (Ok(minute), Ok(hour)) = (minute.parse::<u32>(), hour.parse::<u32>()) {
+        return Some(format!("every day at {hour:02}:{minute:02}"));
+    }
+
+    None
+}

@@ -128,6 +128,13 @@ pub enum FieldKind {
         source: String,
         /// The [`FieldKind::Connection`] field whose value scopes the lookup.
         depends_on: String,
+        /// A further field whose value narrows the list, for the sources that
+        /// are a list within something else — the sections of a project rather
+        /// than of an account. Without this a picker could only ever be scoped
+        /// by the account, and every section in the workspace would be offered
+        /// as though it belonged to the chosen project.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        parent: Option<String>,
     },
 
     /// A linked account belonging to the signed-in user.
@@ -344,6 +351,7 @@ mod tests {
             FieldKind::Options {
                 source: "projects".into(),
                 depends_on: "todoist.connection".into(),
+                parent: None,
             },
             FieldKind::Connection {
                 provider: "todoist".into(),
@@ -370,6 +378,7 @@ mod tests {
         let kind = FieldKind::Options {
             source: "projects".into(),
             depends_on: "todoist.connection".into(),
+            parent: None,
         };
 
         let json = serde_json::to_value(&kind).unwrap();

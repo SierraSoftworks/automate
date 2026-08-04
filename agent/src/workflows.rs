@@ -276,12 +276,23 @@ mod tests {
                 descriptor.fields.iter().map(|f| f.name.as_str()).collect();
 
             for field in &descriptor.fields {
-                if let automate_api::FieldKind::Options { depends_on, .. } = &field.kind {
+                if let automate_api::FieldKind::Options {
+                    depends_on, parent, ..
+                } = &field.kind
+                {
                     assert!(
                         names.contains(depends_on.as_str()),
                         "'{type_id}' has a picker '{}' scoped to '{depends_on}', which is not one of its fields, so it could never be filled in",
                         field.name,
                     );
+
+                    if let Some(parent) = parent {
+                        assert!(
+                            names.contains(parent.as_str()),
+                            "'{type_id}' has a picker '{}' narrowed by '{parent}', which is not one of its fields, so it would never be narrowed",
+                            field.name,
+                        );
+                    }
                 }
             }
         }

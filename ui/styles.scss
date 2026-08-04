@@ -1201,6 +1201,126 @@ footer {
   }
 }
 
+// Workflows: the things a person has asked Automate to watch.
+.workflows {
+  @include card;
+  padding: 1.5rem;
+  margin-bottom: 1.5rem;
+
+  &__title {
+    margin: 0 0 1rem;
+    font-size: 1.125rem;
+    font-weight: 600;
+    color: $text-primary;
+  }
+
+  &__empty {
+    margin: 0 0 1.25rem;
+    font-size: 0.875rem;
+    color: $text-secondary;
+  }
+
+  &__list {
+    list-style: none;
+    margin: 0 0 1.5rem;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+
+  &__form {
+    padding: 1.25rem;
+    background: $fill-lighter;
+    border: 1px solid $border-lighter;
+    border-radius: $radius;
+    max-width: 34rem;
+  }
+
+  &__form-title {
+    margin: 0 0 1rem;
+    font-size: 0.9375rem;
+    font-weight: 600;
+    color: $text-primary;
+  }
+
+  &__form-description {
+    margin: -0.25rem 0 1rem;
+    font-size: 0.8125rem;
+    color: $text-secondary;
+  }
+}
+
+.workflow {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  padding: 0.75rem 1rem;
+  border: 1px solid $border-lighter;
+  border-radius: $radius;
+  background: $bg-white;
+
+  &__detail {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+  }
+
+  &__name {
+    font-weight: 600;
+    font-size: 0.9375rem;
+    color: $text-primary;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  &__meta {
+    font-size: 0.75rem;
+    color: $text-secondary;
+  }
+
+  &__status {
+    flex: none;
+    font-size: 0.75rem;
+    font-weight: 600;
+    padding: 0.2rem 0.55rem;
+    border-radius: 999px;
+
+    &--paused {
+      color: $text-secondary;
+      background: $fill-light;
+      border: 1px solid $border-light;
+    }
+  }
+}
+
+// A form drawn from a workflow type's description rather than written by hand.
+.dynamic-form {
+  display: flex;
+  flex-direction: column;
+
+  // Shown where a picker cannot offer anything yet, because the account or
+  // project that scopes it has not been chosen.
+  &__unavailable {
+    margin: 0;
+    padding: 0.5rem 0.75rem;
+    font-size: 0.8125rem;
+    color: $text-secondary;
+    background: $fill-light;
+    border: 1px dashed $border-light;
+    border-radius: $radius-sm;
+  }
+
+  &__hint {
+    margin: 0.35rem 0 0;
+    font-size: 0.75rem;
+    color: $text-placeholder;
+  }
+}
+
 // -----------------------------------------------------------------------------
 // 6. Partition browser (db / queue)
 // -----------------------------------------------------------------------------

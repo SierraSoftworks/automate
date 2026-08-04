@@ -10,6 +10,7 @@ mod app_bar;
 mod connect_menu;
 mod connections_panel;
 mod entity;
+pub mod dynamic_form;
 mod form;
 mod helpers;
 mod json_highlight;
@@ -24,6 +25,7 @@ pub use app_bar::AppBar;
 pub use connect_menu::ConnectMenu;
 pub use connections_panel::ConnectionsPanel;
 pub use entity::{DbEntity, EntityMetadata};
+pub use dynamic_form::{DynamicForm, FetchedOptions};
 #[allow(unused_imports)]
 pub use form::{
     Button, ButtonKind, Field, NumberInput, Select, SelectOption, Switch, TextArea, TextInput,

@@ -399,6 +399,7 @@ macro_rules! todoist_target_fields {
             automate_api::FieldKind::Options {
                 source: "projects".into(),
                 depends_on: $crate::config_path!($ty: todoist.connection).into(),
+                parent: None,
             },
         );
         if let Some(default) = $project {
@@ -411,6 +412,10 @@ macro_rules! todoist_target_fields {
             automate_api::FieldKind::Options {
                 source: "sections".into(),
                 depends_on: $crate::config_path!($ty: todoist.connection).into(),
+                // Sections belong to a project, so offering every section in the
+                // workspace would let somebody file into one that is not in the
+                // project they chose.
+                parent: Some($crate::config_path!($ty: todoist.project).to_string()),
             },
         );
         if let Some(default) = $section {

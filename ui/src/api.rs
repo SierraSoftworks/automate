@@ -7,7 +7,8 @@
 //! is surfaced as [`ApiError::Unauthorized`] so callers can prompt for sign-in.
 
 use automate_api::{
-    AdminUser, Connection, ConnectionSummary, IntegrationInfo, KeyValueEntry, QueueMessage,
+    AdminUser, Connection, ConnectionSummary, IntegrationInfo, KeyValueEntry, OptionItem,
+    QueueMessage, Workflow, WorkflowTypeDescriptor,
 };
 use gloo_net::http::{Request, Response};
 use serde::Serialize;
@@ -57,6 +58,7 @@ struct ServerError {
 enum Verb {
     Get,
     Post,
+    Put,
     Patch,
     Delete,
 }
@@ -71,6 +73,7 @@ fn build<B: Serialize>(
     let builder = match verb {
         Verb::Get => Request::get(url),
         Verb::Post => Request::post(url),
+        Verb::Put => Request::put(url),
         Verb::Patch => Request::patch(url),
         Verb::Delete => Request::delete(url),
     };
@@ -280,6 +283,73 @@ pub async fn rename_service_connection(
 /// Unlinks a service.
 pub async fn delete_service_connection(id: &str) -> Result<(), ApiError> {
     delete(&format!("/connections/{}", urlencode(id))).await
+}
+
+/// The kinds of workflow that can be created, and the form that configures each.
+///
+/// Fetched rather than compiled in, so a workflow type added to the agent is one
+/// this can offer without being rebuilt.
+pub async fn list_workflow_types() -> Result<Vec<WorkflowTypeDescriptor>, ApiError> {
+    get_json("/workflow-types").await
+}
+
+/// The workflows this account has configured.
+pub async fn list_workflows() -> Result<Vec<Workflow>, ApiError> {
+    get_json("/workflows").await
+}
+
+/// Configures a new workflow.
+pub async fn create_workflow(
+    type_id: &str,
+    config: &serde_json::Value,
+    schedule: Option<&str>,
+    enabled: bool,
+) -> Result<Workflow, ApiError> {
+    let body = serde_json::json!({
+        "type": type_id,
+        "config": config,
+        "schedule": schedule,
+        "enabled": enabled,
+    });
+
+    json_response(send(Verb::Post, "/workflows", Some(&body)).await?).await
+}
+
+/// Removes a workflow.
+pub async fn delete_workflow(id: &str) -> Result<(), ApiError> {
+    delete(&format!("/workflows/{}", urlencode(id))).await
+}
+
+/// The choices a picker should offer, fetched through a linked account.
+pub async fn list_connection_options(
+    connection: &str,
+    source: &str,
+    parent: Option<&str>,
+) -> Result<Vec<OptionItem>, ApiError> {
+    let mut url = format!(
+        "/connections/{}/options/{}",
+        urlencode(connection),
+        urlencode(source)
+    );
+    if let Some(parent) = parent {
+        url.push_str(&format!("?parent={}", urlencode(parent)));
+    }
+
+    get_json(&url).await
+}
+
+/// Reads a JSON body, turning a refusal into the message it carries.
+async fn json_response<T: serde::de::DeserializeOwned>(
+    response: gloo_net::http::Response,
+) -> Result<T, ApiError> {
+    if !response.ok() {
+        return Err(error_from_response(response).await);
+    }
+
+    response
+        .json::<T>()
+        .await
+        .map_err(|err| ApiError::Server(err.to_string()))
 }
 
 /// Lists the integrations configured on the agent.
