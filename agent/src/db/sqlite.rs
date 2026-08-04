@@ -531,6 +531,37 @@ impl KeyValueStore for TenantDb {
         Ok(())
     }
 
+    #[instrument("db.sqlite.insert", skip(self, partition, key, value), fields(otel.kind=?OpenTelemetrySpanKind::Client), err(Display))]
+    async fn insert<T: serde::Serialize + Send + 'static>(
+        &self,
+        partition: impl Into<Cow<'static, str>> + Send,
+        key: impl Into<Cow<'static, str>> + Send,
+        value: T,
+    ) -> std::result::Result<bool, errors::Error> {
+        let serialized = serde_json::to_string(&value).wrap_system_err(
+            "Failed to serialize value for storage in the key/value store.",
+            ADVICE_REPORT_DEV,
+        )?;
+
+        let partition = partition.into().into_owned();
+        let key = key.into().into_owned();
+        let tenant = self.tenant.to_string();
+
+        let inserted = self
+            .connection
+            .call(move |c| {
+                c.execute(
+                    "INSERT INTO kv (tenant, partition, key, value) VALUES (?1, ?2, ?3, ?4)
+                     ON CONFLICT(tenant, partition, key) DO NOTHING",
+                    (tenant, partition, key, serialized),
+                )
+            })
+            .await
+            .or_system_err(ADVICE_DB_ERROR)?;
+
+        Ok(inserted > 0)
+    }
+
     #[instrument("db.sqlite.remove", skip(self, partition, key), fields(otel.kind=?OpenTelemetrySpanKind::Client), err(Display))]
     async fn remove(
         &self,

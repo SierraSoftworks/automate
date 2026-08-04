@@ -5,6 +5,7 @@
 //! (native) and the `automate-ui` crate (WebAssembly). It defines the JSON
 //! contract exchanged over the `/api/v1` endpoints.
 
+mod connection;
 pub mod ids;
 mod integration;
 mod kv;
@@ -13,6 +14,7 @@ mod tenant;
 mod user;
 mod wordlist;
 
+pub use connection::{ConnectionKind, ConnectionStatus, ConnectionSummary};
 pub use ids::{ConnectionId, WordId, WordIdError, WorkflowId};
 pub use integration::{Connection, IntegrationInfo};
 pub use kv::KeyValueEntry;

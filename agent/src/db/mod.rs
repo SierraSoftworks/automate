@@ -46,6 +46,20 @@ pub trait KeyValueStore {
         value: T,
     ) -> Result<(), errors::Error>;
 
+    /// Writes a value only if the key is not already taken, reporting whether it
+    /// was written.
+    ///
+    /// [`KeyValueStore::set`] overwrites, which is what almost every caller
+    /// wants. This exists for the callers generating their own random
+    /// identifiers, where quietly overwriting a colliding key would destroy an
+    /// unrelated record rather than reporting the collision so it can be retried.
+    async fn insert<T: Serialize + Send + 'static>(
+        &self,
+        partition: impl Into<Cow<'static, str>> + Send,
+        key: impl Into<Cow<'static, str>> + Send,
+        value: T,
+    ) -> Result<bool, errors::Error>;
+
     async fn remove(
         &self,
         partition: impl Into<Cow<'static, str>> + Send,
