@@ -127,6 +127,12 @@ async fn run(args: Args, session: Arc<Session>) -> Result<(), human_errors::Erro
 
     let context = services::AppContext::new(config, db, secrets, session.clone());
 
+    // Credentials configured before connections existed are imported once, so an
+    // upgrade does not silently stop workflows publishing until the operator
+    // recreates them by hand.
+    let local = automate_api::TenantId::local();
+    connections::import_configured_credentials(context.tenant(local.clone()), local).await?;
+
     (
         crate::web::run_web_server(context.clone()),
         crate::job::JobHost::run(context.clone()),

@@ -2,8 +2,8 @@ use hmac::{Hmac, KeyInit, Mac};
 use serde::{Deserialize, Serialize};
 use sha2::Sha512;
 
-use crate::config::TodoistConfig;
 use crate::prelude::*;
+use crate::publishers::TodoistTarget;
 
 type HmacSha512 = Hmac<Sha512>;
 
@@ -13,11 +13,11 @@ pub struct TerraformWebhookConfig {
     pub secret: Option<String>,
 
     #[serde(default = "default_todoist_config")]
-    pub todoist: TodoistConfig,
+    pub todoist: TodoistTarget,
 }
 
-fn default_todoist_config() -> TodoistConfig {
-    TodoistConfig {
+fn default_todoist_config() -> TodoistTarget {
+    TodoistTarget {
         project: Some("Hobbies".into()),
         section: Some("Open Source".into()),
         ..Default::default()
@@ -42,8 +42,9 @@ impl Job for TerraformWebhook {
         job: &Self::JobType,
     ) -> Result<(), human_errors::Error> {
         let services = ctx.services();
+        let config = services.config().webhooks.terraform.clone();
 
-        if let Some(secret) = services.config().webhooks.terraform.secret.as_ref() {
+        if let Some(secret) = config.secret.as_ref() {
             let expected_hash = job.headers.get("X-TFE-Notification-Signature")
                 .ok_or_else(|| human_errors::user("Missing X-TFE-Notification-Signature header in Terraform webhook", &[
                     "Make sure you are only sending Terraform Cloud webhook events to this endpoint."
@@ -101,11 +102,7 @@ impl Job for TerraformWebhook {
                         ),
                         priority: Some(payload.priority()),
                         due: crate::publishers::TodoistDueDate::DateTime(ctx.scheduled_at()),
-                        config: services
-                            .config()
-                            .connections
-                            .todoist
-                            .merge(&default_todoist_config()),
+                        config: config.todoist.clone(),
                         ..Default::default()
                     },
                     None,
@@ -127,11 +124,7 @@ impl Job for TerraformWebhook {
                         )),
                         priority: Some(payload.priority()),
                         due: crate::publishers::TodoistDueDate::DateTime(ctx.scheduled_at()),
-                        config: services
-                            .config()
-                            .connections
-                            .todoist
-                            .merge(&default_todoist_config()),
+                        config: config.todoist.clone(),
                         ..Default::default()
                     },
                     None,

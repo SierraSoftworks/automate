@@ -3,8 +3,8 @@ use std::fmt::Display;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    config::TodoistConfig,
     prelude::*,
+    publishers::TodoistTarget,
     publishers::{TodoistDueDate, TodoistUpsertTask, TodoistUpsertTaskPayload},
 };
 
@@ -16,7 +16,7 @@ pub struct OAuth2ReauthorizationRequiredConfig {
     pub provider: String,
 
     #[serde(default)]
-    pub todoist: TodoistConfig,
+    pub todoist: TodoistTarget,
 }
 
 impl Display for OAuth2ReauthorizationRequiredConfig {
@@ -225,7 +225,7 @@ mod tests {
                 ctx,
                 &OAuth2ReauthorizationRequiredConfig {
                     provider: "spotify".into(),
-                    todoist: TodoistConfig {
+                    todoist: TodoistTarget {
                         project: Some("Accounts".into()),
                         section: Some("Re-authorize".into()),
                         ..Default::default()

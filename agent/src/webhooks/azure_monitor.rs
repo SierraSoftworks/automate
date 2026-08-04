@@ -1,9 +1,9 @@
 use serde::Deserialize;
 
 use crate::{
-    config::TodoistConfig,
     filter::FilterValue,
     prelude::*,
+    publishers::TodoistTarget,
     publishers::{
         TodoistCompleteTask, TodoistCompleteTaskPayload, TodoistUpsertTask,
         TodoistUpsertTaskPayload,
@@ -16,11 +16,11 @@ pub struct AzureMonitorWebhookConfig {
     pub filter: Filter,
 
     #[serde(default = "default_todoist_config")]
-    pub todoist: TodoistConfig,
+    pub todoist: TodoistTarget,
 }
 
-fn default_todoist_config() -> crate::config::TodoistConfig {
-    crate::config::TodoistConfig {
+fn default_todoist_config() -> crate::publishers::TodoistTarget {
+    crate::publishers::TodoistTarget {
         project: Some("Life".into()),
         section: Some("Tasks & Chores".into()),
         ..Default::default()

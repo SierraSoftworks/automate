@@ -389,6 +389,63 @@ impl<S: Services> ConnectionStore<S> {
     }
 }
 
+/// Moves credentials out of the configuration file and into connections.
+///
+/// An installation configured before connections existed keeps its Todoist key
+/// in `config.toml`. Rather than making the operator recreate it by hand — and
+/// having their workflows quietly stop publishing until they do — it is imported
+/// once, into the account a single-user installation runs as.
+///
+/// Idempotent: an account that already has a connection to the service is left
+/// alone, so this cannot overwrite a credential somebody has since replaced
+/// through the UI.
+pub async fn import_configured_credentials<S: Services>(
+    services: S,
+    tenant: TenantId,
+) -> Result<usize, human_errors::Error> {
+    let config = services.config();
+    let store = ConnectionStore::new(services, tenant.clone());
+
+    let Some(api_key) = config
+        .connections
+        .todoist
+        .api_key
+        .as_deref()
+        .map(str::trim)
+        .filter(|key| !key.is_empty())
+    else {
+        return Ok(0);
+    };
+
+    if !store
+        .list_for_provider(crate::publishers::TODOIST_PROVIDER)
+        .await?
+        .is_empty()
+    {
+        return Ok(0);
+    }
+
+    let connection = store
+        .create(
+            crate::publishers::TODOIST_PROVIDER,
+            "Todoist",
+            None,
+            ConnectionSecret::ApiKey {
+                key: api_key.to_string(),
+            },
+        )
+        .await?;
+
+    warn!(
+        connection.id = %connection.id,
+        user.account = %tenant,
+        "Imported the Todoist API key from your configuration file into a connection. \
+         You can now remove [connections.todoist] from config.toml."
+    );
+
+    Ok(1)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -666,6 +723,51 @@ mod tests {
                 .await
                 .unwrap()
                 .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn a_configured_todoist_key_is_imported_once() {
+        let context = AppContext::new_mock(|config| {
+            config.connections.todoist.api_key = Some("legacy-tok".into());
+        })
+        .await
+        .unwrap();
+
+        let imported = import_configured_credentials(context.tenant(alice()), alice())
+            .await
+            .unwrap();
+        assert_eq!(imported, 1);
+
+        let store = ConnectionStore::new(context.tenant(alice()), alice());
+        let connections = store.list_for_provider("todoist").await.unwrap();
+        assert_eq!(connections.len(), 1);
+
+        match store.open(&connections[0]).unwrap() {
+            ConnectionSecret::ApiKey { key } => assert_eq!(key, "legacy-tok"),
+            other => panic!("expected an api key, got {other:?}"),
+        }
+
+        // Running again must not add a second copy, nor overwrite one the user
+        // has since replaced through the UI.
+        assert_eq!(
+            import_configured_credentials(context.tenant(alice()), alice())
+                .await
+                .unwrap(),
+            0
+        );
+        assert_eq!(store.list_for_provider("todoist").await.unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn nothing_is_imported_when_no_credential_was_configured() {
+        let context = AppContext::new_mock(|_| {}).await.unwrap();
+
+        assert_eq!(
+            import_configured_credentials(context.tenant(alice()), alice())
+                .await
+                .unwrap(),
+            0
         );
     }
 

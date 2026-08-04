@@ -6,8 +6,8 @@ use crate::prelude::*;
 use crate::publishers::{TodoistCreateTask, TodoistCreateTaskPayload};
 use crate::{
     collectors::{Collector, XkcdCollector},
-    config::TodoistConfig,
     filter::Filter,
+    publishers::TodoistTarget,
     services::Services,
 };
 
@@ -17,7 +17,7 @@ pub struct XkcdConfig {
     pub filter: Filter,
 
     #[serde(default)]
-    pub todoist: TodoistConfig,
+    pub todoist: TodoistTarget,
 }
 
 impl Display for XkcdConfig {

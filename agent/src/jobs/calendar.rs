@@ -4,8 +4,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     collectors::{CalendarCollector, Diff, DifferentialCollector},
-    config::TodoistConfig,
     prelude::*,
+    publishers::TodoistTarget,
 };
 
 #[derive(Clone, Serialize, Deserialize, Default)]
@@ -20,7 +20,7 @@ pub struct CalendarWorkflowConfig {
     pub filter: Filter,
 
     #[serde(default)]
-    pub todoist: TodoistConfig,
+    pub todoist: TodoistTarget,
 }
 
 impl Display for CalendarWorkflowConfig {

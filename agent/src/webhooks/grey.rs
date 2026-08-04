@@ -103,7 +103,7 @@ pub struct GreyWebhookConfig {
     pub filter: crate::filter::Filter,
 
     #[serde(default = "default_todoist_config")]
-    pub todoist: crate::config::TodoistConfig,
+    pub todoist: crate::publishers::TodoistTarget,
 }
 
 fn default_alert_delay() -> chrono::Duration {
@@ -118,8 +118,8 @@ fn default_noise_duration() -> chrono::Duration {
     chrono::Duration::minutes(5)
 }
 
-fn default_todoist_config() -> crate::config::TodoistConfig {
-    crate::config::TodoistConfig {
+fn default_todoist_config() -> crate::publishers::TodoistTarget {
+    crate::publishers::TodoistTarget {
         project: Some("Life".into()),
         section: Some("Tasks & Chores".into()),
         ..Default::default()

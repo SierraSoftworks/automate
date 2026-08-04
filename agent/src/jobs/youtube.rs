@@ -4,8 +4,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     collectors::YouTubeCollector,
-    config::TodoistConfig,
     prelude::*,
+    publishers::TodoistTarget,
     publishers::{TodoistCreateTask, TodoistCreateTaskPayload},
 };
 
@@ -18,7 +18,7 @@ pub struct YouTubeConfig {
     filter: Filter,
 
     #[serde(default)]
-    pub todoist: TodoistConfig,
+    pub todoist: TodoistTarget,
 }
 
 impl Display for YouTubeConfig {

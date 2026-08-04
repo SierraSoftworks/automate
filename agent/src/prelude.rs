@@ -1,5 +1,5 @@
 pub use crate::collectors::Collector;
-pub use crate::config::{Config, Mergeable};
+pub use crate::config::Config;
 pub use crate::db::{Cache, KeyValueStore, Queue};
 pub use crate::filter::{Filter, Filterable};
 pub use crate::job::{Job, JobContext};

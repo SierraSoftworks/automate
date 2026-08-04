@@ -44,7 +44,7 @@ pub struct OAuth2Config {
     /// `[connections.todoist]` configuration, so it only needs to specify the
     /// fields that should differ (for example a dedicated project or section).
     #[serde(default)]
-    pub todoist: crate::config::TodoistConfig,
+    pub todoist: crate::publishers::TodoistTarget,
 }
 
 impl OAuth2Config {

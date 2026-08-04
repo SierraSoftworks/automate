@@ -18,11 +18,11 @@ pub struct TailscaleWebhookConfig {
     pub filter: crate::filter::Filter,
 
     #[serde(default = "default_todoist_config")]
-    pub todoist: crate::config::TodoistConfig,
+    pub todoist: crate::publishers::TodoistTarget,
 }
 
-fn default_todoist_config() -> crate::config::TodoistConfig {
-    crate::config::TodoistConfig {
+fn default_todoist_config() -> crate::publishers::TodoistTarget {
+    crate::publishers::TodoistTarget {
         project: Some("Life".into()),
         section: Some("Tasks & Chores".into()),
         ..Default::default()

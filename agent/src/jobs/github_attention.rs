@@ -1,5 +1,5 @@
-use crate::config::TodoistConfig;
 use crate::prelude::*;
+use crate::publishers::TodoistTarget;
 use crate::publishers::{
     TodoistCompleteTask, TodoistCompleteTaskPayload, TodoistDueDate, TodoistUpsertTask,
     TodoistUpsertTaskPayload,
@@ -40,7 +40,7 @@ pub struct GitHubAttentionConfig {
     pub security_alerts: Filter,
 
     #[serde(default)]
-    pub todoist: TodoistConfig,
+    pub todoist: TodoistTarget,
 }
 
 impl Default for GitHubAttentionConfig {
@@ -49,7 +49,7 @@ impl Default for GitHubAttentionConfig {
             comments: default_comment_filter(),
             assignments: default_assignment_filter(),
             security_alerts: Filter::default(),
-            todoist: TodoistConfig::default(),
+            todoist: TodoistTarget::default(),
         }
     }
 }

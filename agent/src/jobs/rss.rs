@@ -4,8 +4,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     collectors::RssCollector,
-    config::TodoistConfig,
     prelude::*,
+    publishers::TodoistTarget,
     publishers::{TodoistCreateTask, TodoistCreateTaskPayload, TodoistDueDate},
 };
 
@@ -19,11 +19,11 @@ pub struct RssConfig {
     pub filter: Filter,
 
     #[serde(default = "default_todoist_config")]
-    pub todoist: TodoistConfig,
+    pub todoist: TodoistTarget,
 }
 
-fn default_todoist_config() -> TodoistConfig {
-    TodoistConfig {
+fn default_todoist_config() -> TodoistTarget {
+    TodoistTarget {
         project: Some("Hobbies".into()),
         section: Some("Reading".into()),
         ..Default::default()

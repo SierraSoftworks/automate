@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 
 use crate::jobs::*;
 use crate::prelude::*;
@@ -20,10 +20,6 @@ pub struct Config {
     pub webhooks: WebhookConfigs,
     #[serde(default)]
     pub workflows: WorkflowConfigs,
-}
-
-pub trait Mergeable {
-    fn merge(&self, other: &Self) -> Self;
 }
 
 impl Config {
@@ -102,8 +98,13 @@ impl Config {
 
 #[derive(Default, Clone, Deserialize)]
 pub struct ConnectionConfigs {
+    /// The Todoist credential an installation used to share.
+    ///
+    /// Superseded by per-account connections. Kept only so that an existing
+    /// configuration file still loads and can be imported once on start-up; see
+    /// [`crate::connections::import_configured_credentials`].
     #[serde(default)]
-    pub todoist: TodoistConfig,
+    pub todoist: LegacyApiKey,
 
     #[serde(default)]
     pub github: GitHubConfig,
@@ -408,6 +409,13 @@ pub struct YnabConfig {
     pub api_key: Option<String>,
 }
 
+/// A credential that used to live in the configuration file.
+#[derive(Default, Clone, Deserialize)]
+pub struct LegacyApiKey {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_key: Option<String>,
+}
+
 #[derive(Default, Clone, Deserialize)]
 pub struct AlphaVantageConfig {
     /// The AlphaVantage API key used to fetch stock quotes and exchange rates.
@@ -614,25 +622,5 @@ mod tests {
         // Cleanup
         std::fs::remove_file(&config_file).ok();
         std::fs::remove_file(&env_file).ok();
-    }
-}
-
-#[derive(Clone, Serialize, Deserialize, Default)]
-pub struct TodoistConfig {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub api_key: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub project: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub section: Option<String>,
-}
-
-impl Mergeable for TodoistConfig {
-    fn merge(&self, other: &Self) -> Self {
-        TodoistConfig {
-            api_key: other.api_key.clone().or_else(|| self.api_key.clone()),
-            project: other.project.clone().or_else(|| self.project.clone()),
-            section: other.section.clone().or_else(|| self.section.clone()),
-        }
     }
 }

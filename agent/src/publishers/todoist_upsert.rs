@@ -12,7 +12,7 @@ pub struct TodoistUpsertTaskPayload {
     pub priority: Option<i32>,
     pub due: TodoistDueDate,
     pub duration: Option<chrono::Duration>,
-    pub config: crate::config::TodoistConfig,
+    pub config: crate::publishers::TodoistTarget,
 }
 
 pub struct TodoistUpsertTask;
@@ -40,9 +40,8 @@ impl Job for TodoistUpsertTask {
         job: &Self::JobType,
     ) -> Result<(), human_errors::Error> {
         let services = ctx.services();
-        let config = services.config().connections.todoist.merge(&job.config);
 
-        let client = TodoistClient::new(&config)?;
+        let client = TodoistClient::connect(services, &job.config).await?;
         let hash = self.job_hash(job)?;
 
         if let Some(existing_task) = services
@@ -98,13 +97,13 @@ impl Job for TodoistUpsertTask {
                 .await?;
         } else {
             let project_id = client
-                .get_project_id(config.project.as_deref().unwrap_or("Inbox"), services)
+                .get_project_id(job.config.project.as_deref().unwrap_or("Inbox"), services)
                 .await?;
             let section_id = client
                 .get_section_id(
-                    config.project.as_deref().unwrap_or("Inbox"),
+                    job.config.project.as_deref().unwrap_or("Inbox"),
                     &project_id,
-                    config.section.as_deref(),
+                    job.config.section.as_deref(),
                     services,
                 )
                 .await?;
@@ -151,7 +150,7 @@ impl Job for TodoistUpsertTask {
     }
 }
 
-// async fn update(task_id: &str, update: UpdateTaskArgs, config: &TodoistConfig, _services: &impl crate::services::Services) -> Result<(), human_errors::Error> {
+// async fn update(task_id: &str, update: UpdateTaskArgs, config: &TodoistTarget, _services: &impl crate::services::Services) -> Result<(), human_errors::Error> {
 //     let client = get_client(config)?;
 
 //     client.update_task(task_id, &update).await.wrap_err_as_user(
@@ -165,7 +164,7 @@ impl Job for TodoistUpsertTask {
 //     Ok(())
 // }
 
-// async fn complete(task_id: &str, config: &TodoistConfig, _services: &impl crate::services::Services) -> Result<(), human_errors::Error> {
+// async fn complete(task_id: &str, config: &TodoistTarget, _services: &impl crate::services::Services) -> Result<(), human_errors::Error> {
 //     let client = get_client(config)?;
 
 //     client.complete_task(task_id).await.wrap_err_as_user(

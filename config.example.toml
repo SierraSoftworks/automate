@@ -33,6 +33,9 @@ api_key = "${{ env.GITHUB_API_KEY }}"
 # acl = 'true'
 
 [connections.todoist]
+# Superseded by per-account connections, which each user manages themselves.
+# This is imported once on start-up into the account a single-user installation
+# runs as, after which you can delete this section.
 api_key = "${{ env.TODOIST_API_KEY }}"
 
 [connections.ynab]
@@ -72,7 +75,9 @@ scopes = [
 ]
 # When this provider's refresh token expires or is revoked, automate raises a
 # Todoist reminder (with a link to re-authorize) using the settings below, merged
-# over the global [connections.todoist]. Omit to fall back to the Inbox.
+# Where this workflow files its tasks. Omit `project` to fall back to the Inbox.
+# Add `connection = "two-words"` to choose between several linked Todoist
+# accounts; with only one connected it is used automatically.
 todoist = { project = "Software", section = "Accounts" }
 
 

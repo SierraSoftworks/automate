@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::prelude::*;
 use crate::publishers::{TodoistCreateTask, TodoistCreateTaskPayload, TodoistDueDate};
-use crate::{collectors::GitHubReleasesCollector, config::TodoistConfig, filter::Filter};
+use crate::{collectors::GitHubReleasesCollector, filter::Filter, publishers::TodoistTarget};
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct GitHubReleasesConfig {
@@ -14,7 +14,7 @@ pub struct GitHubReleasesConfig {
     pub filter: Filter,
 
     #[serde(default)]
-    pub todoist: TodoistConfig,
+    pub todoist: TodoistTarget,
 }
 
 impl Display for GitHubReleasesConfig {

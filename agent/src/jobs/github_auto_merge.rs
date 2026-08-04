@@ -1,5 +1,5 @@
-use crate::config::TodoistConfig;
 use crate::prelude::*;
+use crate::publishers::TodoistTarget;
 use crate::publishers::{TodoistUpsertTask, TodoistUpsertTaskPayload};
 use crate::services::{AutoMergeOutcome, GitHubAppClient, GitHubClient};
 use crate::webhooks::GitHubPullRequestEvent;
@@ -23,7 +23,7 @@ pub struct GitHubAutoMergeConfig {
     /// Where the reminders to turn on a repository's "Allow auto-merge" setting
     /// are filed.
     #[serde(default)]
-    pub todoist: TodoistConfig,
+    pub todoist: TodoistTarget,
 }
 
 impl Default for GitHubAutoMergeConfig {
@@ -32,7 +32,7 @@ impl Default for GitHubAutoMergeConfig {
             filter: default_auto_merge_filter(),
             approve: false,
             approval_message: default_approval_message(),
-            todoist: TodoistConfig::default(),
+            todoist: TodoistTarget::default(),
         }
     }
 }
