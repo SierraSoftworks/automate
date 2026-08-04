@@ -75,6 +75,10 @@ todoist = { project = "Software", section = "Accounts" }
 
 [web]
 address = "127.0.0.1:8080"
+# Where the SQLite database is kept. The encryption key protecting stored
+# credentials lives beside it as "<database>.key" unless you configure one
+# explicitly below, so moving the database moves both.
+# database = "database.sqlite"
 # base_url is used to construct absolute URLs (e.g. the OIDC redirect URI, and the
 # re-authorization links in OAuth expiry reminders, which are built from a
 # background job that has no incoming request to infer the host from). When
@@ -85,7 +89,47 @@ address = "127.0.0.1:8080"
 # service runs behind a trusted reverse proxy that sets these headers.
 # trust_proxy = true
 
+[web.auth]
+# Whether several people may sign in and each keep their own workflows and
+# connections. Off by default, so upgrading an existing installation changes
+# nothing until you opt in.
+# multi_tenant = true
+
+# The account owning everything when no identity provider is configured. Naming
+# this after the username you will eventually sign in as means adopting an
+# identity provider later leaves your existing workflows where they are.
+# local_user = "you@example.com"
+
+# Two independent gates, both evaluated against the same filter surface as the
+# legacy [web.admin] acl below. `user_acl` decides who may sign in at all;
+# `admin_acl` decides who may administer the installation and impersonate other
+# users. When either is omitted it falls back to [web.admin] acl, so an existing
+# configuration keeps behaving exactly as it did.
+# user_acl = 'true'
+# admin_acl = 'claims.email == "you@example.com"'
+
+# The key protecting stored credentials, as base64 or hexadecimal. Generate one
+# with: openssl rand -base64 32
+# When omitted, a key is generated into a file beside the database on first run
+# - back that file up, because without it stored credentials cannot be read.
+# secret_key = "${{ env.AUTOMATE_SECRET_KEY }}"
+
+# Keys previously used to encrypt credentials. Values are only ever written with
+# the current key, but are read with whichever key sealed them, so a rotated key
+# stays listed here until every record that used it has been rewritten.
+# previous_secret_keys = []
+
+# [web.auth.oidc] takes the same settings as [web.admin.oidc] below, plus:
+# username_claim - the claim identifying the account, which becomes the key
+# everything the user owns is stored under. Defaults to "preferred_username",
+# falling back to "sub". Choose a claim that does not change: renaming an
+# account is a deliberate migration rather than something that happens by itself.
+
 [web.admin]
+# Superseded by [web.auth] above, and retained so existing configurations keep
+# working. Under this section there is a single gate: passing it grants full
+# access, so it governs both signing in and administrator status.
+#
 # The admin area is denied by default; you must provide an `acl` that evaluates to
 # true to grant access. The filter can reference `client_ip`, `method`, `path`,
 # `headers.*`, and (when OIDC is configured) validated token claims via `claims.*`.
@@ -185,12 +229,16 @@ trusted_secrets = [
 todoist = { project = "Software", section = "Outages" }
 
 [webhooks.sentry]
-# secret = "xxxxxx"
+# Required: Sentry signs every delivery, and the agent refuses to process one it
+# cannot verify.
+secret = "xxxxxx"
 # filter = 'true'
 todoist = { project = "Software", section = "Errors" }
 
 [webhooks.tailscale]
-# secret = "xxxxxx"
+# Required: Tailscale signs every delivery, and the agent refuses to process one
+# it cannot verify.
+secret = "xxxxxx"
 # filter = 'true'
 todoist = { project = "Software", section = "Security" }
 
@@ -239,20 +287,24 @@ cron = "0 */6 * * *"
 name = "Word of the Day"
 homepage = "https://www.merriam-webster.com/word"
 url = "https://www.merriam-webster.com/word/feed/rss2"
+cron = "@daily"
 
 [[workflows.youtube]]
 name = "Alexander the Ok"
 channel_id = "UC9XjwCMWhes6R3jtOzZx50A"
+cron = "0 */6 * * *"
 
 [[workflows.youtube]]
 name = "Dakar"
 channel_id = "UCJVKwvv58Xo3Rt4rF3NiL9w"
 filter = "title contains \"extended highlights\""
+cron = "0 */6 * * *"
 
 [[workflows.youtube]]
 name = "Formula 1"
 channel_id = "UCB_qr75-ydFVKSF9Dmo6izg"
 filter = "title contains \"highlights | \" && !(title contains \"f2 \")"
+cron = "0 */6 * * *"
 
 [[workflows.xkcd]]
 cron = "0 8 * * *"
