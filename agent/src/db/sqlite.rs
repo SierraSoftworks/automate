@@ -292,6 +292,88 @@ impl SqliteDatabase {
             .map(|names| names.iter().map(TenantId::from_storage).collect())
     }
 
+    /// Reserves the next due message from any partition, for any tenant.
+    ///
+    /// The shared job consumer works on behalf of everybody, so it cannot use
+    /// the tenant-scoped dequeue. The tenant comes back alongside the message so
+    /// the consumer can scope itself before handing the work to a handler.
+    ///
+    /// Messages are taken in scheduling order across the whole installation.
+    /// That is fair in the sense of first-come-first-served, but it is not fair
+    /// between tenants: somebody with a great many due messages will delay
+    /// everyone else's. Per-tenant limits keep that bounded for now.
+    #[instrument("db.sqlite.dequeue_any_global", skip(self, reserve_for), fields(otel.kind=?OpenTelemetrySpanKind::Consumer), err(Display))]
+    pub async fn dequeue_any_global(
+        &self,
+        reserve_for: chrono::Duration,
+    ) -> Result<(TenantId, super::QueueMessage<serde_json::Value>), errors::Error> {
+        loop {
+            let reservation_id = uuid::Uuid::new_v4().to_string();
+            let reserved_until = chrono::Utc::now() + reserve_for;
+
+            let message = self.connection.call(move |c| {
+                let tx = c.transaction().or_system_err(ADVICE_DB_ERROR)?;
+
+                let message = tx.query_one(
+                    "SELECT tenant, partition, key, payload, scheduledAt, traceparent, tracestate, idempotencyKey \
+                     FROM queues WHERE hiddenUntil < CURRENT_TIMESTAMP ORDER BY scheduledAt LIMIT 1",
+                    [],
+                    |row| {
+                        let tenant: String = row.get(0)?;
+                        let partition: String = row.get(1)?;
+                        let key: String = row.get(2)?;
+                        let payload_str: String = row.get(3)?;
+                        let scheduled_at: chrono::DateTime<chrono::Utc> = row.get(4)?;
+                        let traceparent: Option<String> = row.get(5)?;
+                        let tracestate: Option<String> = row.get(6)?;
+                        let idempotency_key: Option<String> = row.get(7)?;
+
+                        let payload: serde_json::Value = serde_json::from_str(&payload_str).map_err(|e| {
+                            rusqlite::Error::FromSqlConversionFailure(
+                                3,
+                                rusqlite::types::Type::Text,
+                                Box::new(e),
+                            )
+                        })?;
+
+                        Ok((
+                            TenantId::from_storage(tenant),
+                            super::QueueMessage {
+                                key,
+                                partition,
+                                reservation_id: reservation_id.clone(),
+                                payload,
+                                scheduled_at,
+                                traceparent,
+                                tracestate,
+                                idempotency_key,
+                            },
+                        ))
+                    },
+                ).optional().or_system_err(ADVICE_DB_ERROR)?;
+
+                if let Some((tenant, msg)) = &message {
+                    tx.execute(
+                        "UPDATE queues
+                        SET reservedBy = ?1, hiddenUntil = ?2
+                        WHERE tenant = ?3 AND partition = ?4 AND key = ?5",
+                        (&reservation_id, &reserved_until, tenant.as_str(), &msg.partition, &msg.key),
+                    ).or_system_err(ADVICE_DB_ERROR)?;
+                }
+
+                tx.commit().or_system_err(ADVICE_DB_ERROR)?;
+
+                Result::<_, human_errors::Error>::Ok(message)
+            }).await.or_system_err(ADVICE_DB_ERROR)?;
+
+            if let Some(message) = message {
+                return Ok(message);
+            } else {
+                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+            }
+        }
+    }
+
     /// Reads audit entries across every tenant.
     ///
     /// The tenant-scoped handle can only see its own history; this is the
@@ -1176,6 +1258,85 @@ mod tests {
                 "unexpected primary key on '{table}'"
             );
         }
+    }
+
+    #[tokio::test]
+    async fn the_shared_consumer_dequeues_across_every_tenant() {
+        // The job consumer works on behalf of everybody, so unlike the scoped
+        // handles it must be able to see every tenant's work.
+        let db = SqliteDatabase::open_in_memory().await.unwrap();
+
+        db.tenant(alice())
+            .enqueue("work", "alice's job", Some("shared".into()), None)
+            .await
+            .unwrap();
+        db.tenant(bob())
+            .enqueue("work", "bob's job", Some("shared".into()), None)
+            .await
+            .unwrap();
+
+        let mut seen = Vec::new();
+        for _ in 0..2 {
+            let (tenant, message) = db
+                .dequeue_any_global(chrono::Duration::minutes(1))
+                .await
+                .unwrap();
+            seen.push((tenant, message.payload.as_str().unwrap().to_string()));
+        }
+
+        seen.sort();
+        assert_eq!(
+            seen,
+            vec![
+                (alice(), "alice's job".to_string()),
+                (bob(), "bob's job".to_string()),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_globally_dequeued_message_is_reserved_only_for_its_own_tenant() {
+        // Both tenants hold the same partition and key, so a reservation that
+        // ignored the tenant would hide the wrong message.
+        let db = SqliteDatabase::open_in_memory().await.unwrap();
+
+        db.tenant(alice())
+            .enqueue("work", "alice's job", Some("shared".into()), None)
+            .await
+            .unwrap();
+        db.tenant(bob())
+            .enqueue("work", "bob's job", Some("shared".into()), None)
+            .await
+            .unwrap();
+
+        let (tenant, message) = db
+            .dequeue_any_global(chrono::Duration::minutes(5))
+            .await
+            .unwrap();
+
+        // The other tenant's message stays visible, and completing ours leaves
+        // theirs in place.
+        let other = if tenant == alice() { bob() } else { alice() };
+        db.tenant(tenant.clone())
+            .complete("work", message)
+            .await
+            .unwrap();
+
+        assert!(
+            db.tenant(tenant)
+                .peek::<_, String>("work", 10)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(
+            db.tenant(other)
+                .peek::<_, String>("work", 10)
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
     }
 
     #[tokio::test]

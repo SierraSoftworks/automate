@@ -117,18 +117,16 @@ async fn run(args: Args, session: Arc<Session>) -> Result<(), human_errors::Erro
 
     let db = db::SqliteDatabase::open("database.sqlite").await.unwrap();
 
-    // Until identity lands, everything the agent does belongs to the local
-    // tenant, which is also what an installation with no identity provider
-    // configured will keep using.
-    let services = services::ServicesContainer::new(
-        config,
-        db.tenant(automate_api::TenantId::local()),
-        session.clone(),
-    );
+    let context = services::AppContext::new(config, db, session.clone());
+
+    // The web layer still serves a single installation, so it acts as the local
+    // tenant - which is also what an installation with no identity provider
+    // configured will keep using once identity lands.
+    let services = context.tenant(automate_api::TenantId::local());
 
     (
         crate::web::run_web_server(services.clone()),
-        crate::job::JobHost::run(services.clone()),
+        crate::job::JobHost::run(context.clone()),
     )
         .race()
         .await

@@ -5,7 +5,7 @@ use chrono::{DateTime, TimeDelta, Utc};
 
 use crate::db::QueueMessage;
 use crate::prelude::*;
-use crate::services::AppServices;
+use crate::services::{AppContext, AppServices};
 
 /// Contextual information about the job being processed, derived from the
 /// original [`QueueMessage`] that triggered it.
@@ -280,8 +280,8 @@ macro_rules! register_job {
 pub struct JobHost;
 
 impl JobHost {
-    #[instrument("job.host.run", skip(services), fields(otel.kind=?OpenTelemetrySpanKind::Consumer), err(Display))]
-    pub async fn run(services: AppServices) -> Result<(), human_errors::Error> {
+    #[instrument("job.host.run", skip(context), fields(otel.kind=?OpenTelemetrySpanKind::Consumer), err(Display))]
+    pub async fn run(context: AppContext) -> Result<(), human_errors::Error> {
         let mut registry: HashMap<&'static str, &'static dyn JobRunnable> = HashMap::new();
         for registration in inventory::iter::<JobRegistration> {
             let handler = registration.handler();
@@ -306,8 +306,14 @@ impl JobHost {
 
         // Run one-time startup wiring for every registered job (for example,
         // scheduling recurring cron tasks) before we begin processing work.
+        //
+        // Scheduling is still driven by the configuration file, which describes
+        // a single installation, so it is seeded against the local tenant. Once
+        // workflows are stored per user this becomes a reconciliation pass over
+        // every tenant instead.
+        let setup_services = context.tenant(TenantId::local());
         for handler in registry.values() {
-            handler.setup(services.clone()).await?;
+            handler.setup(setup_services.clone()).await?;
         }
 
         // Reserve dequeued messages for at least as long as the slowest job may
@@ -320,7 +326,6 @@ impl JobHost {
             .max()
             .unwrap_or_else(|| TimeDelta::minutes(5));
 
-        let queue = services.queue();
         let root_span = tracing::Span::current();
 
         // Track spawned job tasks so their lifetimes are bounded by the job
@@ -336,8 +341,13 @@ impl JobHost {
             // Reap completed job tasks so the set does not grow without bound.
             while tasks.try_join_next().is_some() {}
 
-            match queue.dequeue_any(reserve_for).await {
-                Ok(item) => {
+            // The consumer works on behalf of every tenant, so it dequeues
+            // from the root and immediately narrows itself to the tenant that
+            // owns the message before touching any handler.
+            match context.database().dequeue_any_global(reserve_for).await {
+                Ok((tenant, item)) => {
+                    let services = context.tenant(tenant);
+
                     let Some(&handler) = registry.get(item.partition.as_str()) else {
                         warn!(
                             job.payload = %item.payload,
@@ -349,23 +359,22 @@ impl JobHost {
                             "job::missing-handler",
                             [("partition".to_string(), item.partition.clone())].into(),
                         );
-                        if let Err(err) = queue.complete(item.partition.clone(), item).await {
+                        if let Err(err) = services
+                            .queue()
+                            .complete(item.partition.clone(), item)
+                            .await
+                        {
                             error!(error = %err, "Failed to drop unhandled job message: {err}");
                             services.session().record_human_error(&err);
                         }
                         continue;
                     };
 
-                    tasks.spawn(Self::process(
-                        handler,
-                        item,
-                        services.clone(),
-                        root_span.clone(),
-                    ));
+                    tasks.spawn(Self::process(handler, item, services, root_span.clone()));
                 }
                 Err(err) => {
                     error!(error = %err, "An error occurred while fetching a job from the queue: {err}");
-                    services.session().record_human_error(&err);
+                    context.session().record_human_error(&err);
                     tokio::time::sleep(std::time::Duration::from_secs(5)).await;
                 }
             }

@@ -1,5 +1,7 @@
 use std::sync::Arc;
 
+use automate_api::TenantId;
+
 use crate::config::Config;
 
 mod alphavantage;
@@ -28,6 +30,61 @@ pub type AppServices = ServicesContainer<crate::db::TenantDb>;
 /// The user agent applied to the shared HTTP client used across collectors and
 /// publishers.
 pub const HTTP_USER_AGENT: &str = "SierraSoftworks/automate";
+
+/// The installation-wide handle from which tenant-scoped [`AppServices`] are
+/// derived.
+///
+/// This is the only thing that can reach across tenants, and it is deliberately
+/// held in very few places: `main`, the job consumer, and the parts of the web
+/// layer that resolve who a request is acting for. Everything downstream of
+/// those receives an [`AppServices`], which cannot widen its own scope.
+#[derive(Clone)]
+pub struct AppContext {
+    config: Arc<Config>,
+    database: crate::db::SqliteDatabase,
+    http_client: reqwest::Client,
+    session: Arc<Session>,
+}
+
+impl AppContext {
+    pub fn new(
+        config: crate::config::Config,
+        database: crate::db::SqliteDatabase,
+        session: Arc<Session>,
+    ) -> Self {
+        let http_client = reqwest::Client::builder()
+            .user_agent(HTTP_USER_AGENT)
+            .build()
+            .expect("Failed to build the default HTTP client.");
+
+        Self {
+            config: Arc::new(config),
+            database,
+            http_client,
+            session,
+        }
+    }
+
+    /// Derives the services used to act on one tenant's behalf.
+    pub fn tenant(&self, tenant: TenantId) -> AppServices {
+        ServicesContainer {
+            config: self.config.clone(),
+            database: self.database.tenant(tenant),
+            http_client: self.http_client.clone(),
+            session: self.session.clone(),
+        }
+    }
+
+    /// The unscoped database handle, for installation-level work such as
+    /// enumerating tenants or reading the cross-tenant audit log.
+    pub fn database(&self) -> &crate::db::SqliteDatabase {
+        &self.database
+    }
+
+    pub fn session(&self) -> &Session {
+        &self.session
+    }
+}
 
 pub trait Services
 where
@@ -76,50 +133,31 @@ impl<D: crate::db::KeyValueStore + crate::db::Queue + crate::db::Cache + Clone> 
     }
 }
 
-impl<D> ServicesContainer<D>
-where
-    D: crate::db::KeyValueStore + crate::db::Queue + crate::db::Cache,
-{
-    pub fn new(config: crate::config::Config, database: D, session: Arc<Session>) -> Self {
-        let http_client = reqwest::Client::builder()
-            .user_agent(HTTP_USER_AGENT)
-            .build()
-            .expect("Failed to build the default HTTP client.");
-
-        Self {
-            config: Arc::new(config),
-            database,
-            http_client,
-            session,
-        }
-    }
-}
-
 #[cfg(test)]
 impl ServicesContainer<crate::db::TenantDb> {
     pub async fn new_mock() -> Result<Self, human_errors::Error> {
-        let database = crate::db::SqliteDatabase::open_in_memory()
-            .await?
-            .tenant(automate_api::TenantId::local());
-        let config = Config::default();
-        let session = Arc::new(
-            Session::new("automate", "0.0.0-test").with_battery(tracing_batteries::Testing),
-        );
-        Ok(Self::new(config, database, session))
+        Self::new_custom_mock(|_, _| {}).await
     }
 
+    /// Builds mock services, letting the caller adjust the configuration and
+    /// seed the database first.
+    ///
+    /// Routed through [`AppContext`] so that tests construct their services the
+    /// same way the running agent does.
     pub async fn new_custom_mock(
         f: impl Sized + FnOnce(&mut Config, &crate::db::TenantDb),
     ) -> Result<Self, human_errors::Error> {
-        let database = crate::db::SqliteDatabase::open_in_memory()
-            .await?
-            .tenant(automate_api::TenantId::local());
+        let root = crate::db::SqliteDatabase::open_in_memory().await?;
+        let database = root.tenant(TenantId::local());
+
         let mut config = Config::default();
         f(&mut config, &database);
+
         let session = Arc::new(
             Session::new("automate", "0.0.0-test").with_battery(tracing_batteries::Testing),
         );
-        Ok(Self::new(config, database, session))
+
+        Ok(AppContext::new(config, root, session).tenant(TenantId::local()))
     }
 }
 
