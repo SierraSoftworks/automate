@@ -58,10 +58,12 @@ impl crate::workflows::ConfigurableWorkflow for RssWorkflow {
             id: Self::type_id().to_string(),
             name: "RSS Feed".to_string(),
             description: "Watches a feed and files a task for each new entry.".to_string(),
-            trigger: WorkflowTrigger::Cron,
+            trigger: WorkflowTrigger::Cron {
+                default_schedule: "@daily".to_string(),
+            },
             fields: vec![
                 FieldDescriptor::new(
-                    "name",
+                    crate::config_path!(RssConfig: name),
                     "Name",
                     FieldKind::Text {
                         placeholder: Some("Citation Needed".into()),
@@ -72,7 +74,7 @@ impl crate::workflows::ConfigurableWorkflow for RssWorkflow {
                 )
                 .required(),
                 FieldDescriptor::new(
-                    "url",
+                    crate::config_path!(RssConfig: url),
                     "Feed URL",
                     FieldKind::Url {
                         placeholder: Some("https://example.com/rss/".into()),
@@ -81,7 +83,7 @@ impl crate::workflows::ConfigurableWorkflow for RssWorkflow {
                 .with_help("The address of the RSS or Atom feed itself, not the page it describes.")
                 .required(),
                 FieldDescriptor::new(
-                    "homepage",
+                    crate::config_path!(RssConfig: homepage),
                     "Homepage",
                     FieldKind::Url {
                         placeholder: Some("https://example.com/".into()),
@@ -91,12 +93,8 @@ impl crate::workflows::ConfigurableWorkflow for RssWorkflow {
                     "Used to resolve relative links inside entries, which many feeds rely on.",
                 )
                 .required(),
-                FieldDescriptor::new("cron", "Schedule", FieldKind::Cron)
-                    .with_help("How often to check the feed for new entries.")
-                    .with_default("@daily")
-                    .required(),
                 FieldDescriptor::new(
-                    "filter",
+                    crate::config_path!(RssConfig: filter),
                     "Filter",
                     FieldKind::Filter {
                         fields: vec!["title".into(), "description".into(), "link".into()],
@@ -104,7 +102,7 @@ impl crate::workflows::ConfigurableWorkflow for RssWorkflow {
                 )
                 .with_help("Only file entries matching this. Leave it empty to file every entry."),
                 FieldDescriptor::new(
-                    "todoist.connection",
+                    crate::config_path!(RssConfig: todoist.connection),
                     "Todoist account",
                     FieldKind::Connection {
                         provider: crate::publishers::TODOIST_PROVIDER.to_string(),
@@ -113,7 +111,7 @@ impl crate::workflows::ConfigurableWorkflow for RssWorkflow {
                 .with_help("Which linked account the tasks are created in.")
                 .required(),
                 FieldDescriptor::new(
-                    "todoist.project",
+                    crate::config_path!(RssConfig: todoist.project),
                     "Project",
                     FieldKind::Options {
                         source: "projects".into(),
@@ -122,7 +120,7 @@ impl crate::workflows::ConfigurableWorkflow for RssWorkflow {
                 )
                 .with_default("Hobbies"),
                 FieldDescriptor::new(
-                    "todoist.section",
+                    crate::config_path!(RssConfig: todoist.section),
                     "Section",
                     FieldKind::Options {
                         source: "sections".into(),

@@ -140,6 +140,35 @@ impl WorkflowTypeRegistration {
 
 inventory::collect!(WorkflowTypeRegistration);
 
+/// The dotted path to a field, checked at compile time against the type that
+/// holds it.
+///
+/// A descriptor addresses values by string path, which is what the renderer
+/// needs but is also a string nothing was keeping honest: renaming a field on
+/// the configuration struct left the descriptor advertising a name that no
+/// longer existed, and the form went on collecting a value serde would then
+/// discard. This borrows the field it names, so that rename stops compiling.
+///
+/// ```ignore
+/// config_path!(RssConfig: todoist.project) // => "todoist.project"
+/// ```
+///
+/// What this does *not* prove is that every field the configuration requires
+/// has a descriptor. Rust cannot enumerate a struct's fields without a derive
+/// macro, so that direction is covered by a test which builds a configuration
+/// out of the descriptor and asserts the handler's own type accepts it.
+#[macro_export]
+macro_rules! config_path {
+    ($ty:ty : $head:ident $(. $rest:ident)*) => {{
+        #[allow(unused)]
+        fn assert_field_exists(value: &$ty) {
+            let _ = &value.$head $(. $rest)*;
+        }
+
+        concat!(stringify!($head) $(, ".", stringify!($rest))*)
+    }};
+}
+
 /// Registers a [`ConfigurableWorkflow`] so that it can be created from the API.
 ///
 /// This is separate from [`crate::register_job!`] because the two answer
@@ -318,7 +347,9 @@ mod tests {
                     id: <Self as ConfigurableWorkflow>::type_id().to_string(),
                     name: "Unnamed".to_string(),
                     description: String::new(),
-                    trigger: automate_api::WorkflowTrigger::Cron,
+                    trigger: automate_api::WorkflowTrigger::Cron {
+                        default_schedule: "@daily".to_string(),
+                    },
                     fields: vec![],
                 }
             }
@@ -364,6 +395,104 @@ mod tests {
                 "'{type_id}' dispatches into '{}', which no job handles, so its runs would be dropped",
                 workflow.partition(),
             );
+        }
+    }
+
+    /// Builds a value the given control could plausibly have collected.
+    ///
+    /// The point is not realism but type-correctness: each kind produces the
+    /// shape the matching field is declared to hold, so that a configuration
+    /// assembled from a descriptor is one the handler's own type should accept.
+    fn synthetic_value(kind: &automate_api::FieldKind) -> serde_json::Value {
+        use automate_api::FieldKind;
+
+        match kind {
+            FieldKind::Text { .. } | FieldKind::TextArea { .. } => serde_json::json!("example"),
+            FieldKind::Url { .. } => serde_json::json!("https://example.com/"),
+            FieldKind::Number { min, .. } => serde_json::json!(min.unwrap_or(1.0)),
+            FieldKind::Boolean => serde_json::json!(false),
+            FieldKind::Select { options } => options
+                .first()
+                .map(|option| serde_json::json!(option.value))
+                .unwrap_or(serde_json::json!("example")),
+            FieldKind::Options { .. } => serde_json::json!("example"),
+            FieldKind::Connection { .. } => {
+                serde_json::json!(automate_api::ConnectionId::from_entropy(0).to_string())
+            }
+            FieldKind::Cron => serde_json::json!("@daily"),
+            // A filter has to parse, so the only value guaranteed to is the one
+            // the type produces for itself.
+            FieldKind::Filter { .. } => {
+                serde_json::to_value(crate::filter::Filter::default()).unwrap()
+            }
+        }
+    }
+
+    /// Writes `value` into `target` at a dotted path, creating objects as needed.
+    fn insert_at(target: &mut serde_json::Value, path: &str, value: serde_json::Value) {
+        let mut cursor = target;
+        let mut segments = path.split('.').peekable();
+
+        while let Some(segment) = segments.next() {
+            if segments.peek().is_none() {
+                cursor[segment] = value;
+                return;
+            }
+
+            if !cursor[segment].is_object() {
+                cursor[segment] = serde_json::json!({});
+            }
+            cursor = &mut cursor[segment];
+        }
+    }
+
+    fn config_from(
+        fields: &[automate_api::FieldDescriptor],
+        required_only: bool,
+    ) -> serde_json::Value {
+        let mut config = serde_json::json!({});
+        for field in fields {
+            if required_only && !field.required {
+                continue;
+            }
+            insert_at(&mut config, &field.name, synthetic_value(&field.kind));
+        }
+        config
+    }
+
+    #[test]
+    fn a_form_filled_in_completely_produces_a_configuration_the_handler_accepts() {
+        // `config_path!` proves each descriptor names a field that exists. This
+        // is the other direction: that the fields it names are *enough*, and
+        // hold what the handler's type expects. Between them, a descriptor
+        // cannot describe a form which collects a configuration that will not
+        // load.
+        for (type_id, workflow) in registry() {
+            let descriptor = workflow.descriptor();
+            let config = config_from(&descriptor.fields, false);
+
+            if let Err(err) = workflow.validate(&config) {
+                panic!(
+                    "'{type_id}' describes a form whose completed values its handler rejects: {err}\nconfiguration was: {config:#}",
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_form_with_only_its_required_fields_filled_in_is_enough_to_save() {
+        // Anything the handler insists on must be marked required, or somebody
+        // filling in the form as instructed would be told at the last moment
+        // that it cannot be saved.
+        for (type_id, workflow) in registry() {
+            let descriptor = workflow.descriptor();
+            let config = config_from(&descriptor.fields, true);
+
+            if let Err(err) = workflow.validate(&config) {
+                panic!(
+                    "'{type_id}' has a field its handler requires but its form does not mark required: {err}\nconfiguration was: {config:#}",
+                );
+            }
         }
     }
 

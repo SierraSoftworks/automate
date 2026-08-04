@@ -43,7 +43,12 @@ use crate::{OptionItem, WorkflowId};
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum WorkflowTrigger {
     /// Runs on a schedule the user provides.
-    Cron,
+    Cron {
+        /// The schedule a new workflow of this type starts with, so that
+        /// somebody adding a feed does not have to have an opinion about how
+        /// often to poll it before they can save.
+        default_schedule: String,
+    },
 
     /// Runs when a delivery arrives on this workflow's webhook URL.
     Webhook {
@@ -56,7 +61,7 @@ impl WorkflowTrigger {
     /// The storage partition that holds configurations for this trigger.
     pub fn partition(&self) -> String {
         match self {
-            Self::Cron => "cron".to_string(),
+            Self::Cron { .. } => "cron".to_string(),
             Self::Webhook { source } => format!("webhooks/{source}"),
         }
     }
@@ -257,7 +262,16 @@ pub struct Workflow {
     pub enabled: bool,
 
     /// The values collected for this type's fields.
+    ///
+    /// Holds only what the workflow itself needs. The schedule is deliberately
+    /// not in here: it belongs to the trigger rather than the work, and putting
+    /// it alongside would mean every configuration type carrying a field its
+    /// handler never reads.
     pub config: serde_json::Value,
+
+    /// The schedule this runs on, for types triggered by [`WorkflowTrigger::Cron`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub schedule: Option<String>,
 
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub updated_at: chrono::DateTime<chrono::Utc>,
@@ -281,7 +295,13 @@ mod tests {
 
     #[test]
     fn a_trigger_names_the_partition_holding_its_configurations() {
-        assert_eq!(WorkflowTrigger::Cron.partition(), "cron");
+        assert_eq!(
+            WorkflowTrigger::Cron {
+                default_schedule: "@daily".into()
+            }
+            .partition(),
+            "cron"
+        );
         assert_eq!(
             WorkflowTrigger::Webhook {
                 source: "github".into()
@@ -402,6 +422,7 @@ mod tests {
             name: "Citation Needed".into(),
             enabled: true,
             config: serde_json::json!({}),
+            schedule: Some("@daily".into()),
             created_at: chrono::Utc::now(),
             updated_at: chrono::Utc::now(),
             last_run: None,
