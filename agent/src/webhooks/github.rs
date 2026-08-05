@@ -60,16 +60,6 @@ const RESOLVING_ACTIONS: &[&str] = &[
     "unassigned",
 ];
 
-/// The provider that GitHub App installations are linked under.
-///
-/// There is no `GITHUB_PROVIDER` in the connection layer to borrow, because
-/// installations are recorded in their own key-value partition rather than as
-/// [`crate::connections::Connection`]s. `"github"` is nonetheless the real
-/// string: it is the id [`crate::integrations::github_app::GitHubAppIntegration`]
-/// reports its instance under, and the source this webhook is triggered by, so
-/// it is the name a person sees against the account they installed the App on.
-pub const GITHUB_PROVIDER: &str = "github";
-
 /// What one person asked us to do with the deliveries their GitHub sends.
 ///
 /// This one keeps its shared secret, where the other webhook workflows dropped
@@ -132,6 +122,106 @@ impl Display for GitHubWebhookConfig {
 /// which knows how to act on it.
 #[derive(Clone)]
 pub struct GitHubWebhook;
+
+/// The setup notes shown while somebody is configuring one of these.
+const DOCUMENTATION: &str = r#"## What this does
+
+Listens to one GitHub organisation's (or repository's) webhook deliveries and
+acts on them as they arrive, rather than by polling. Two independent things can
+be switched on, and both are off until you say otherwise:
+
+- **Auto-merge** turns on GitHub's own auto-merge for pull requests you select,
+  so they merge themselves once their checks pass.
+- **Reminders** raise a Todoist task when a comment, an assignment or a
+  security alert wants your attention, and complete it when the subject is
+  dealt with.
+
+With both off this workflow still keeps the GitHub notifications inbox in sync,
+which is the only thing it does without being asked.
+
+## Getting the address
+
+Save the workflow first. Its address is generated when it is created and shown
+on the workflow afterwards; there is nothing to paste into GitHub until then.
+
+Then, in GitHub:
+
+1. Go to the organisation's webhook settings at
+   `https://github.com/organizations/<org>/settings/hooks`, or a single
+   repository's at `https://github.com/<owner>/<repo>/settings/hooks`, and
+   choose **Add webhook**.
+2. Set **Payload URL** to this workflow's address.
+3. Set **Content type** to `application/json`. The form-encoded option will not
+   parse.
+4. Fill in **Secret** — see below.
+5. Under **Which events**, select the ones you actually want. Pull request
+   events feed auto-merge; issue comments, pull request reviews, assignments
+   and the Dependabot, code scanning and secret scanning alerts feed reminders.
+
+GitHub sends a `ping` when the webhook is created, which is accepted and
+ignored; a green tick in its **Recent Deliveries** tab means the address is
+right.
+
+## The webhook secret
+
+Unlike the other webhook workflows, this one insists on a shared secret. The
+address alone proves somebody knew the URL; GitHub's `X-Hub-Signature-256`
+header proves that *GitHub* sent the delivery and that nothing rewrote it on
+the way. That stronger claim is worth having here in particular, because these
+deliveries can approve and merge pull requests in your repositories rather than
+merely filing a task you can ignore.
+
+Generate a long random string, paste the same value into GitHub's **Secret**
+field and into **Webhook secret** here. They have to match exactly: GitHub
+computes the signature with its copy and we check it with ours. While this
+field is empty every delivery is refused, which fails closed rather than
+quietly accepting anything.
+
+See GitHub's notes on
+[validating webhook deliveries](https://docs.github.com/en/webhooks/using-webhooks/validating-webhook-deliveries)
+for what is being checked.
+
+## Auto-merge
+
+**Enable auto-merge** is the switch; nothing below it happens while it is off.
+
+**Auto-merge these pull requests** selects which ones to act on, matching on
+`action`, `author`, `sender`, `title`, `draft`, `repository`,
+`repository_name`, `repository_owner` and `private`. The default is the case
+this exists for:
+
+```
+action == "opened" && author in ["dependabot[bot]", "dependabot-preview[bot]"]
+```
+
+**Approve them too** additionally leaves an approving review. Repositories with
+a required-review branch protection rule need one before auto-merge can
+complete, so it is necessary there and gratuitous everywhere else — it spends a
+real approval on somebody else's diff. **Approval message** is the body of that
+review.
+
+Auto-merge writes to your repositories, so it needs the GitHub App installed on
+the account that owns them, named by **GitHub installation**.
+
+## Reminders
+
+**File reminders** is the switch. Below it are three filters, one per kind of
+event, each matching on `kind`, `event`, `action`, `resolved`, `repository`,
+`repository_owner`, `repository_name`, `number`, `title`, `author`, `assignee`,
+`subject_author`, `body` and `severity`.
+
+- **Comments** defaults to everything except Dependabot's own commentary.
+  `subject_author == "your-username"` narrows it to threads on your own issues
+  and pull requests, which is usually what people mean.
+- **Assignments** defaults to `false` — nothing — because only you know which
+  account is yours. `assignee == "your-username"` is the answer.
+- **Security alerts** defaults to `true`, all of them. Narrow it with
+  `severity in ["critical", "high"]` if that is too much.
+
+Comments and assignments on the same issue or pull request collapse onto one
+task, so a busy thread does not become a wall of them. Security alerts get one
+task each, because each needs its own fix.
+"#;
 
 impl GitHubWebhook {
     /// Verifies the `X-Hub-Signature-256` header, which GitHub populates with
@@ -242,6 +332,7 @@ impl crate::workflows::ConfigurableWorkflow for GitHubWebhook {
             description:
                 "Reacts to what happens in your GitHub organisation, as it happens rather than on a poll."
                     .to_string(),
+            documentation: DOCUMENTATION.to_string(),
             trigger: WorkflowTrigger::Webhook {
                 source: "github".to_string(),
             },
@@ -261,21 +352,13 @@ impl crate::workflows::ConfigurableWorkflow for GitHubWebhook {
                     crate::config_path!(GitHubWebhookConfig: connection),
                     "GitHub installation",
                     FieldKind::Connection {
-                        provider: GITHUB_PROVIDER.to_string(),
+                        provider: crate::integrations::github_app::GITHUB_PROVIDER.to_string(),
                     },
                 )
                 .with_help(
                     "Which installation of the GitHub App this workflow serves — the GitHub account you installed it on. Its deliveries are the ones this workflow handles, and its repositories are the ones auto-merge can write to.",
                 )
-                // Deliberately not required, though it reads as though it should
-                // be. Installations are recorded in their own partition rather
-                // than as connections, so this picker has nothing to offer yet
-                // and the form shows "link an account first" against a kind of
-                // account there is currently no way to link. Insisting on a
-                // field nobody can fill in would make the whole type unsaveable;
-                // it becomes required once installations are surfaced as
-                // connections.
-                ,
+                .required(),
                 FieldDescriptor::new(
                     crate::config_path!(GitHubWebhookConfig: secret),
                     "Webhook secret",
@@ -1864,16 +1947,12 @@ mod tests {
     }
 
     #[test]
-    fn nothing_is_insisted_on_that_a_person_has_no_way_to_provide() {
-        // The installation is what a GitHub workflow really serves, and it reads
-        // as though it ought to be required. It is not, because installations
-        // are recorded in their own partition rather than as connections, so the
-        // picker for it has nothing to offer and the form says "link an account
-        // first" against a kind of account there is no way to link. A required
-        // field nobody can satisfy makes the whole type unsaveable.
-        //
-        // This is here to fail when installations do become connections, so that
-        // making the field required is a decision somebody takes deliberately.
+    fn the_installation_is_the_only_thing_besides_a_name_a_workflow_must_be_told() {
+        // Which installation a workflow serves cannot be inferred from a
+        // delivery we have not yet decided to trust, and installing the App is
+        // now what puts an account in the picker, so insisting on it is a
+        // question somebody can actually answer. Everything else has a sensible
+        // starting point.
         use crate::workflows::ConfigurableWorkflow;
 
         let required: Vec<String> = GitHubWebhook::descriptor()
@@ -1883,7 +1962,7 @@ mod tests {
             .map(|field| field.name)
             .collect();
 
-        assert_eq!(required, vec!["name"]);
+        assert_eq!(required, vec!["name", "connection"]);
     }
 
     #[test]

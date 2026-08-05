@@ -364,15 +364,48 @@ impl<S: Services> ConnectionStore<S> {
     /// Workflows referring to it are left alone: they will report a missing
     /// connection, which is a clearer thing for the user to see than having
     /// silently disappeared along with the credential.
+    ///
+    /// # Why a GitHub connection takes its installation record with it
+    ///
+    /// A GitHub App connection is written together with an entry in the
+    /// installation registry, by
+    /// [`crate::integrations::github_app::record_installation`]. Removing only
+    /// one of the pair would leave the integrations page still listing the
+    /// account as connected while the connections page and every picker say it
+    /// is not, and the person would have no way to tell which was right. So both
+    /// go.
+    ///
+    /// It deliberately does **not** uninstall the App at GitHub. That revokes
+    /// our access to somebody's repositories, it is not undoable from here, and
+    /// it already has its own explicit control in the integrations area. Because
+    /// the App stays installed, the account can be brought back by running that
+    /// integration's setup again — which is what makes removing the connection a
+    /// recoverable act rather than a trap.
+    ///
+    /// Done here rather than in the HTTP handler so that it holds for every
+    /// caller, including
+    /// [`crate::integrations::github_app::forget_installation`].
     pub async fn delete(&self, id: ConnectionId) -> Result<bool, human_errors::Error> {
-        if self.get(id).await?.is_none() {
+        let Some(connection) = self.get(id).await? else {
             return Ok(false);
-        }
+        };
 
         self.services
             .kv()
             .remove(CONNECTIONS_PARTITION, id.to_string())
             .await?;
+
+        if connection.provider == crate::integrations::github_app::GITHUB_PROVIDER
+            && let Some(account) = connection.account
+        {
+            self.services
+                .kv()
+                .remove(
+                    crate::integrations::github_app::INSTALLATIONS_PARTITION,
+                    account,
+                )
+                .await?;
+        }
 
         Ok(true)
     }
