@@ -13,6 +13,7 @@ mod publishers;
 mod services;
 mod users;
 mod web;
+mod webhook_payload;
 mod webhooks;
 mod workflow_store;
 mod workflow_toml;
