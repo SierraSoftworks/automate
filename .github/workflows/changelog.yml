@@ -7,11 +7,52 @@ on:
   pull_request:
     types: [opened, reopened, synchronize]
 
+concurrency:
+  group: changelog-${{ github.event_name == 'pull_request' && github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   update:
     name: Prepare
     runs-on: ubuntu-latest
     steps:
-      - uses: release-drafter/release-drafter@v7.7.0
+      - name: Check out merge result
+        if: github.event_name == 'pull_request'
+        uses: actions/checkout@v7
+
+      - name: Fingerprint merge result
+        id: fingerprint
+        if: github.event_name == 'pull_request'
+        run: echo "tree=$(git rev-parse HEAD^{tree})" >> "$GITHUB_OUTPUT"
+
+      - name: Find successful result
+        id: success
+        if: github.event_name == 'pull_request'
+        uses: actions/cache/restore@v6
+        with:
+          path: .changelog-success
+          key: changelog-v1-${{ steps.fingerprint.outputs.tree }}
+          lookup-only: true
+
+      - name: Reuse successful result
+        if: steps.success.outputs.cache-hit == 'true'
+        run: echo "This merge tree has already been processed."
+
+      - name: Prepare release notes
+        if: github.event_name != 'pull_request' || steps.success.outputs.cache-hit != 'true'
+        uses: release-drafter/release-drafter@v7.7.0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create success marker
+        if: github.event_name == 'pull_request' && steps.success.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p .changelog-success
+          echo "${{ steps.fingerprint.outputs.tree }}" > .changelog-success/merge-tree
+
+      - name: Save successful result
+        if: github.event_name == 'pull_request' && steps.success.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: .changelog-success
+          key: changelog-v1-${{ steps.fingerprint.outputs.tree }}
