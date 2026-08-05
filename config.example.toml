@@ -28,6 +28,10 @@ api_key = "${{ env.GITHUB_API_KEY }}"
 # app_id = "123456"
 # slug = "my-automate"  # the App's URL slug, from its public page
 # private_key = "${{ env.GITHUB_APP_PRIVATE_KEY }}"
+# Where the App's management calls are addressed, defaulting to
+# https://api.github.com. A GitHub Enterprise Server instance serves its API
+# from its own host instead, so an App registered there needs this.
+# api_url = "https://github.example.com/api/v3"
 # Who may use the install wizard, evaluated exactly like the OAuth providers'
 # acl. Admin-gated when omitted.
 # acl = 'true'

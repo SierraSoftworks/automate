@@ -370,36 +370,6 @@ impl GitHubAppIntegration {
         GitHubAppClient::new(Self::config(&config)?, ctx.services().http_client())
     }
 
-    /// Every installation GitHub reports as belonging to this App.
-    #[cfg(not(test))]
-    async fn reported_installations(
-        ctx: &IntegrationContext<'_>,
-    ) -> Result<Vec<GitHubInstallation>, human_errors::Error> {
-        Self::client(ctx)?.installations().await
-    }
-
-    /// The installations a test has arranged for GitHub to report.
-    ///
-    /// Reaching the real listing needs the App's RSA private key, and this
-    /// repository deliberately does not ship one — the same reason
-    /// [`GitHubAppClient::new_for_test`] exists. What the callback's tests are
-    /// about is decided either side of this call and not by it: which account a
-    /// completed setup lands in, and whether the state that got it here was ever
-    /// issued. The listing itself is covered against a mock server in
-    /// [`crate::services::github_app`].
-    ///
-    /// The configuration check is kept, so a test still has to have an App
-    /// configured for the callback to get this far.
-    #[cfg(test)]
-    async fn reported_installations(
-        ctx: &IntegrationContext<'_>,
-    ) -> Result<Vec<GitHubInstallation>, human_errors::Error> {
-        let config = ctx.context.config();
-        Self::config(&config)?;
-
-        Ok(tests::reported_installations())
-    }
-
     /// Turns the installation id the browser came back with into a fact.
     ///
     /// The query string is under the browser's control, so an id in it is a
@@ -409,7 +379,8 @@ impl GitHubAppIntegration {
         ctx: &IntegrationContext<'_>,
         installation_id: u64,
     ) -> Result<GitHubInstallation, human_errors::Error> {
-        Self::reported_installations(ctx)
+        Self::client(ctx)?
+            .installations()
             .await?
             .into_iter()
             .find(|installation| installation.id == installation_id)
@@ -607,56 +578,61 @@ impl Integration for GitHubAppIntegration {
 
 #[cfg(test)]
 mod tests {
-    use std::cell::RefCell;
-
     use automate_api::ConnectionKind;
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
 
     use super::*;
     use crate::services::{AppContext, ServicesContainer};
 
     type TestServices = ServicesContainer<crate::db::TenantDb>;
 
-    thread_local! {
-        /// What GitHub is pretending to report for the App under test.
-        ///
-        /// A thread-local rather than a global because `#[tokio::test]` runs each
-        /// test on its own thread with a current-thread runtime, so one test's
-        /// arrangement can never be seen by another's.
-        static REPORTED_INSTALLATIONS: RefCell<Vec<GitHubInstallation>> =
-            const { RefCell::new(Vec::new()) };
-    }
-
-    /// Read by [`GitHubAppIntegration::reported_installations`] in test builds.
-    pub(super) fn reported_installations() -> Vec<GitHubInstallation> {
-        REPORTED_INSTALLATIONS.with(|reported| reported.borrow().clone())
-    }
-
-    /// Arranges for GitHub to report these installations to the setup callback.
-    fn github_reports(installations: &[GitHubInstallation]) {
-        REPORTED_INSTALLATIONS.with(|reported| *reported.borrow_mut() = installations.to_vec());
-    }
-
     async fn services() -> TestServices {
         TestServices::new_mock().await.expect("build mock services")
     }
 
-    /// A context with a GitHub App configured, which is the precondition for the
-    /// setup wizard existing at all.
-    async fn app_context() -> AppContext {
-        AppContext::new_mock(|config| {
-            config.connections.github.app = Some(
-                toml::from_str(
-                    r#"
-                    app_id = "123456"
-                    slug = "my-automate"
-                    private_key = "-----BEGIN RSA PRIVATE KEY-----\nnot-a-real-key\n-----END RSA PRIVATE KEY-----"
-                    "#,
-                )
-                .expect("the sample app should parse"),
-            );
+    /// A GitHub which reports these installations, and a context whose App is
+    /// pointed at it.
+    ///
+    /// A configured App is the precondition for the setup wizard existing at
+    /// all, and the listing is what a completion turns the browser's claimed
+    /// installation id into a fact against — so standing one up is what lets
+    /// these tests run the callback whole, exactly as the running agent does,
+    /// rather than a build of it with the GitHub call cut out.
+    ///
+    /// The server is handed back with the context because dropping it stops it
+    /// listening: a test that let it go would leave the App addressing a closed
+    /// port.
+    async fn github_reporting(installations: &[GitHubInstallation]) -> (MockServer, AppContext) {
+        let server = MockServer::start().await;
+
+        let reported: Vec<Value> = installations
+            .iter()
+            .map(|installation| {
+                serde_json::json!({
+                    "id": installation.id,
+                    "account": {
+                        "login": installation.account,
+                        "type": installation.account_type,
+                    },
+                })
+            })
+            .collect();
+
+        Mock::given(method("GET"))
+            .and(path("/app/installations"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(reported))
+            .mount(&server)
+            .await;
+
+        let api_url = server.uri();
+        let context = AppContext::new_mock(move |config| {
+            config.connections.github.app = Some(crate::testing::github_app(api_url));
         })
         .await
-        .expect("build a mock context")
+        .expect("build a mock context");
+
+        (server, context)
     }
 
     fn ctx(context: &AppContext, initiator: TenantId) -> IntegrationContext<'_> {
@@ -1059,7 +1035,7 @@ mod tests {
     /// them to read. A rename made on one shows up on the other.
     #[tokio::test]
     async fn the_integrations_page_and_the_connections_page_describe_the_same_record() {
-        let context = app_context().await;
+        let (_github, context) = github_reporting(&[]).await;
         let store = ConnectionStore::new(context.tenant(alice()), alice());
 
         record_installation(
@@ -1105,7 +1081,7 @@ mod tests {
     /// now scoped by whoever is asking rather than read from a shared partition.
     #[tokio::test]
     async fn one_accounts_installations_are_invisible_to_another() {
-        let context = app_context().await;
+        let (_github, context) = github_reporting(&[]).await;
 
         record_installation(
             &installation(42, "SierraSoftworks"),
@@ -1182,7 +1158,7 @@ mod tests {
     async fn beginning_setup_records_who_started_it() {
         // GitHub sends the visitor back to us, so this record is the only
         // trustworthy statement of whose installation the callback completes.
-        let context = app_context().await;
+        let (_github, context) = github_reporting(&[]).await;
 
         let redirect = GitHubAppIntegration
             .begin_setup(GITHUB_PROVIDER, ctx(&context, alice()))
@@ -1211,8 +1187,7 @@ mod tests {
     async fn a_completion_whose_state_was_never_issued_is_refused() {
         // Otherwise anybody who can reach the callback can assert that an
         // installation happened, without ever having started one.
-        let context = app_context().await;
-        github_reports(&[installation(42, "SierraSoftworks")]);
+        let (_github, context) = github_reporting(&[installation(42, "SierraSoftworks")]).await;
 
         let outcome = GitHubAppIntegration
             .complete_setup(
@@ -1240,8 +1215,7 @@ mod tests {
         // A callback URL sits in browser history, in a proxy log, and in
         // whatever the visitor pasted it into. Replaying it must not re-link an
         // account somebody has since removed.
-        let context = app_context().await;
-        github_reports(&[installation(42, "SierraSoftworks")]);
+        let (_github, context) = github_reporting(&[installation(42, "SierraSoftworks")]).await;
 
         let redirect = GitHubAppIntegration
             .begin_setup(GITHUB_PROVIDER, ctx(&context, alice()))
@@ -1284,8 +1258,7 @@ mod tests {
     /// that comes with it — is filed under.
     #[tokio::test]
     async fn a_completion_lands_the_installation_in_the_account_that_started_the_setup() {
-        let context = app_context().await;
-        github_reports(&[installation(42, "SierraSoftworks")]);
+        let (_github, context) = github_reporting(&[installation(42, "SierraSoftworks")]).await;
 
         // Alice starts the setup.
         let redirect = GitHubAppIntegration
@@ -1324,8 +1297,7 @@ mod tests {
     async fn the_refusal_for_an_unknown_state_and_a_used_state_are_indistinguishable() {
         // Probing the callback must not tell somebody whether a state they have
         // is one we ever issued.
-        let context = app_context().await;
-        github_reports(&[installation(42, "SierraSoftworks")]);
+        let (_github, context) = github_reporting(&[installation(42, "SierraSoftworks")]).await;
 
         let redirect = GitHubAppIntegration
             .begin_setup(GITHUB_PROVIDER, ctx(&context, alice()))
@@ -1361,8 +1333,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_completion_without_a_state_is_refused() {
-        let context = app_context().await;
-        github_reports(&[installation(42, "SierraSoftworks")]);
+        let (_github, context) = github_reporting(&[installation(42, "SierraSoftworks")]).await;
 
         assert!(
             GitHubAppIntegration
@@ -1382,7 +1353,7 @@ mod tests {
     /// can make the wizard say.
     #[tokio::test]
     async fn a_cancelled_installation_is_still_only_reported_for_a_setup_we_started() {
-        let context = app_context().await;
+        let (_github, context) = github_reporting(&[]).await;
 
         assert!(
             GitHubAppIntegration
@@ -1417,8 +1388,7 @@ mod tests {
     /// fact, so one GitHub does not vouch for must not be recorded.
     #[tokio::test]
     async fn an_installation_github_does_not_report_is_refused() {
-        let context = app_context().await;
-        github_reports(&[installation(42, "SierraSoftworks")]);
+        let (_github, context) = github_reporting(&[installation(42, "SierraSoftworks")]).await;
 
         let redirect = GitHubAppIntegration
             .begin_setup(GITHUB_PROVIDER, ctx(&context, alice()))

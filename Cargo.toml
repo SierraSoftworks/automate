@@ -7,3 +7,14 @@ members = ["agent", "api"]
 # `cargo build`/`test` for the agent are not affected by its wasm-only
 # dependencies; build it with `trunk build` (or `trunk serve`) instead.
 exclude = ["ui"]
+
+# The tests generate an RSA key for the GitHub App rather than committing one,
+# and the bignum arithmetic that takes is thousands of times slower when built
+# without optimisation — enough to dominate the whole suite. Optimising just
+# these two leaves everything the tests are actually about compiled for
+# debugging, and is what the `rsa` crate recommends.
+[profile.dev.package.num-bigint-dig]
+opt-level = 3
+
+[profile.dev.package.rsa]
+opt-level = 3

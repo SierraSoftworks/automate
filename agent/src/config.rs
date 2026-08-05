@@ -366,6 +366,15 @@ pub struct GitHubAppConfig {
     /// people to.
     pub slug: String,
 
+    /// The base URL of the GitHub API the App's management calls are addressed
+    /// to, defaulting to `https://api.github.com`.
+    ///
+    /// A GitHub Enterprise Server instance serves its API from its own host, at
+    /// `https://<hostname>/api/v3`, so an App registered there is unreachable
+    /// without this. The paths below it are the same ones github.com serves.
+    #[serde(default)]
+    pub api_url: Option<String>,
+
     /// Who may use the install wizard. Evaluated exactly like the OAuth2
     /// providers' `acl`, and admin-gated when omitted.
     #[serde(default)]
