@@ -12,12 +12,13 @@ pub async fn handle<S: Services>(
     body: web::Payload,
     services: web::Data<S>,
 ) -> impl Responder {
-    let body = match body.to_bytes().await {
-        Ok(bytes) => String::from_utf8_lossy(&bytes).to_string(),
-        Err(err) => {
+    let body = match body.to_bytes_limited(MAX_BODY).await {
+        Ok(Ok(bytes)) => String::from_utf8_lossy(&bytes).to_string(),
+        Ok(Err(err)) => {
             error!("Failed to read webhook body: {}", err);
             return actix_web::HttpResponse::BadRequest().finish();
         }
+        Err(_) => return actix_web::HttpResponse::PayloadTooLarge().finish(),
     };
 
     let mut event = WebhookEvent {
@@ -105,7 +106,20 @@ pub async fn deliver(
 
     match store.webhook_token(&record) {
         Ok(Some(expected)) if expected == token => {}
-        Ok(_) => return refuse(),
+        Ok(_) => {
+            // Only reachable if the index pointed somewhere the record does not
+            // agree with, which should not happen — so it is worth a record that
+            // its owner can see rather than only a log line.
+            audit(
+                &services,
+                record.id,
+                crate::db::AuditOutcome::Denied,
+                "Refused a delivery whose address did not match this workflow.".to_string(),
+            )
+            .await;
+
+            return refuse();
+        }
         Err(err) => {
             error!(error = %err, "Failed to read a workflow's webhook token: {err}");
             return actix_web::HttpResponse::InternalServerError().finish();
@@ -117,6 +131,18 @@ pub async fn deliver(
         // sender did nothing wrong, and telling them otherwise would have them
         // retry or raise an alert over a workflow its owner deliberately paused.
         debug!(workflow.id = %record.id, "Discarding a delivery for a paused workflow.");
+
+        // Recorded, because from the outside this looks exactly like a delivery
+        // that worked. Somebody wondering why nothing happened should be able to
+        // find out that it was paused rather than lost.
+        audit(
+            &services,
+            record.id,
+            crate::db::AuditOutcome::Success,
+            "Discarded a delivery because this workflow is paused.".to_string(),
+        )
+        .await;
+
         return actix_web::HttpResponse::NoContent().finish();
     }
 
@@ -166,7 +192,41 @@ pub async fn deliver(
         return actix_web::HttpResponse::InternalServerError().finish();
     }
 
+    audit(
+        &services,
+        record.id,
+        crate::db::AuditOutcome::Success,
+        format!("Accepted a delivery for '{}'.", record.type_id),
+    )
+    .await;
+
     actix_web::HttpResponse::NoContent().finish()
+}
+
+/// Notes what became of a delivery, for the workflows we could identify.
+///
+/// Deliberately not called for a token nobody was issued. We do not know whose
+/// account such a delivery would belong to, and the only place to put it would
+/// be one shared by everybody — which is an unauthenticated endpoint writing
+/// unbounded rows into a table the whole installation reads. A line in the log
+/// is the right weight for a request we have no reason to believe is real.
+async fn audit(
+    services: &crate::services::AppServices,
+    workflow: automate_api::WorkflowId,
+    outcome: crate::db::AuditOutcome,
+    message: String,
+) {
+    use crate::db::{AuditCategory, AuditEntry, AuditStore};
+
+    let entry = AuditEntry::new(AuditCategory::WebhookDelivery, "received", outcome)
+        .subject(workflow)
+        .message(message);
+
+    if let Err(err) = services.audit().record(entry).await {
+        // The delivery has already been accepted; losing the note about it is
+        // not a reason to make the sender retry.
+        warn!(error = %err, "Failed to record a webhook delivery in the audit log.");
+    }
 }
 
 /// The one answer given to every delivery we will not accept.
@@ -377,6 +437,67 @@ mod tests {
         let queued: Vec<crate::db::PeekedMessage<serde_json::Value>> =
             services.queue().peek("webhooks/generic", 10).await.unwrap();
         assert!(queued.is_empty(), "a paused workflow should not be run");
+    }
+
+    #[actix_web::test]
+    async fn an_accepted_delivery_leaves_a_record_its_owner_can_find() {
+        use crate::db::AuditStore;
+
+        let context = context().await;
+        let workflow = workflow(&context).await;
+        let app = app!(context);
+
+        assert_eq!(
+            post!(app, workflow.webhook_path.as_deref().unwrap()),
+            StatusCode::NO_CONTENT,
+        );
+
+        let entries = context
+            .tenant(TenantId::local())
+            .audit()
+            .audit(crate::db::AuditQuery::recent(50))
+            .await
+            .unwrap();
+
+        assert!(
+            entries
+                .iter()
+                .any(|entry| entry.category == crate::db::AuditCategory::WebhookDelivery),
+            "a delivery that was accepted should be visible to the account it ran for",
+        );
+    }
+
+    #[actix_web::test]
+    async fn a_token_nobody_was_issued_writes_nothing_to_the_audit_log() {
+        // The endpoint is anonymous, so recording every rejected guess would let
+        // anybody at all fill a table the whole installation reads.
+        use crate::db::AuditStore;
+
+        let context = context().await;
+        workflow(&context).await;
+        let app = app!(context);
+
+        let guess = WebhookToken::from_bytes([0x42; 16]);
+        assert_eq!(
+            post!(app, &format!("/webhooks/w/{guess}")),
+            StatusCode::NOT_FOUND,
+        );
+
+        for tenant in [TenantId::local(), TenantId::system()] {
+            let entries = context
+                .tenant(tenant.clone())
+                .audit()
+                .audit(crate::db::AuditQuery::recent(50))
+                .await
+                .unwrap();
+
+            assert!(
+                !entries
+                    .iter()
+                    .any(|entry| entry.category == crate::db::AuditCategory::WebhookDelivery),
+                "an unrecognised token should not be able to write to {tenant}'s audit log",
+            );
+        }
     }
 
     #[actix_web::test]
