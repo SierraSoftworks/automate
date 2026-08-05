@@ -19,7 +19,7 @@ use crate::api;
 use crate::components::dynamic_form::{set_at, value_at};
 use crate::components::{
     Alert, AlertKind, Button, ButtonKind, DynamicForm, Field, FetchedOptions, Select, SelectOption,
-    Switch, TextInput,
+    Switch, TextInput, WebhookAddress,
 };
 
 /// What a form hands back when it is submitted.
@@ -260,7 +260,7 @@ fn workflow_row(props: &WorkflowRowProps) -> Html {
         .as_deref()
         .and_then(crate::util::describe_cron)
         .or_else(|| workflow.schedule.clone())
-        .unwrap_or_else(|| "when triggered".to_string());
+        .unwrap_or_else(|| "when its webhook is called".to_string());
 
     html! {
         <li class="workflow">
@@ -300,6 +300,14 @@ fn workflow_row(props: &WorkflowRowProps) -> Html {
                     kind={AlertKind::Error}
                     title="We could not save this change."
                     message={message}
+                />
+            }
+
+            if let Some(path) = workflow.webhook_path.clone() {
+                <WebhookAddress
+                    workflow={workflow.id.to_string()}
+                    path={path}
+                    on_rotated={props.on_changed.clone()}
                 />
             }
 

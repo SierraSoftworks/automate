@@ -1357,6 +1357,88 @@ footer {
   }
 }
 
+// The address a webhook workflow is reached at.
+.webhook-address {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0.75rem 1rem;
+  background: $fill-lighter;
+  border: 1px solid $border-lighter;
+  border-radius: $radius;
+
+  &__label {
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: $text-secondary;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+
+  &__row {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+
+  &__url {
+    flex: 1;
+    min-width: 0;
+    padding: 0.45rem 0.65rem;
+    font-family: $font-mono;
+    font-size: 0.8125rem;
+    color: $text-primary;
+    background: $bg-white;
+    border: 1px solid $border-light;
+    border-radius: $radius-sm;
+
+    &:focus {
+      outline: none;
+      border-color: $brand;
+    }
+  }
+
+  &__rotate {
+    align-self: flex-start;
+    padding: 0;
+    font-size: 0.75rem;
+    color: $text-secondary;
+    background: none;
+    border: none;
+    text-decoration: underline;
+    cursor: pointer;
+
+    &:hover {
+      color: $danger;
+    }
+  }
+
+  &__confirm {
+    padding: 0.65rem 0.75rem;
+    background: $danger-bg;
+    border: 1px solid $danger-border;
+    border-radius: $radius-sm;
+  }
+
+  &__warning {
+    margin: 0 0 0.6rem;
+    font-size: 0.8125rem;
+    color: $danger;
+  }
+
+  &__actions {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+
+  &__error {
+    margin: 0;
+    font-size: 0.8125rem;
+    color: $danger;
+  }
+}
+
 // A form drawn from a workflow type's description rather than written by hand.
 .dynamic-form {
   display: flex;

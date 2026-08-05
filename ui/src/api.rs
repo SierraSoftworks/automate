@@ -343,6 +343,19 @@ pub async fn update_workflow(
     .await
 }
 
+/// Issues a new webhook address, and stops the old one working.
+pub async fn rotate_webhook(id: &str) -> Result<Workflow, ApiError> {
+    json_response(
+        send(
+            Verb::Post,
+            &format!("/workflows/{}/rotate-webhook", urlencode(id)),
+            None::<&()>,
+        )
+        .await?,
+    )
+    .await
+}
+
 /// Removes a workflow.
 pub async fn delete_workflow(id: &str) -> Result<(), ApiError> {
     delete(&format!("/workflows/{}", urlencode(id))).await
