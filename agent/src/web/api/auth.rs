@@ -34,7 +34,7 @@ pub struct TokenRefreshRequest {
 /// `client_id`, and the requested `scopes` (always including `openid`). Public.
 pub async fn metadata<S: Services>(services: web::Data<S>) -> HttpResponse {
     let config = services.config();
-    let Some(oidc) = config.web.admin.oidc.as_ref() else {
+    let Some(oidc) = config.web.oidc() else {
         return json_error(
             actix_web::http::StatusCode::NOT_FOUND,
             "Administrative sign-in is not configured on this server.",
@@ -75,7 +75,7 @@ pub async fn auth_token<S: Services>(
     body: web::Json<TokenExchangeRequest>,
 ) -> HttpResponse {
     let config = services.config();
-    let Some(oidc) = config.web.admin.oidc.as_ref() else {
+    let Some(oidc) = config.web.oidc() else {
         return json_error(
             actix_web::http::StatusCode::NOT_FOUND,
             "Administrative sign-in is not configured on this server.",
@@ -123,7 +123,7 @@ pub async fn auth_refresh<S: Services>(
     body: web::Json<TokenRefreshRequest>,
 ) -> HttpResponse {
     let config = services.config();
-    let Some(oidc) = config.web.admin.oidc.as_ref() else {
+    let Some(oidc) = config.web.oidc() else {
         return json_error(
             actix_web::http::StatusCode::NOT_FOUND,
             "Administrative sign-in is not configured on this server.",
@@ -176,4 +176,111 @@ fn token_response(tokens: &crate::web::helpers::oidc::TokenSet) -> serde_json::V
         );
     }
     serde_json::Value::Object(body)
+}
+
+#[cfg(test)]
+mod tests {
+    use actix_web::http::StatusCode;
+    use actix_web::{App, test, web};
+    use automate_api::TenantId;
+
+    use crate::config::OidcConfig;
+    use crate::services::AppContext;
+    use crate::web::api::configure;
+
+    fn provider() -> OidcConfig {
+        OidcConfig {
+            endpoint: "https://idp.example.com".into(),
+            client_id: "a-client".into(),
+            client_secret: "a-secret".into(),
+            scopes: vec!["openid".into(), "email".into()],
+            username_claim: None,
+        }
+    }
+
+    macro_rules! app {
+        ($context:expr) => {
+            test::init_service(
+                App::new()
+                    .app_data(web::Data::new($context.tenant(TenantId::local())))
+                    .app_data(web::Data::new($context.clone()))
+                    .service(configure()),
+            )
+            .await
+        };
+    }
+
+    /// Signing in has to work whichever block the provider was written under.
+    ///
+    /// `[web.auth]` supersedes `[web.admin]`, and `WebConfig::oidc` is what
+    /// reconciles the two. These endpoints read the field directly instead, so
+    /// moving a working configuration to the new block — which is what the
+    /// upgrade notes tell people to do — turned every one of them into "sign-in
+    /// is not configured" while the middleware went on believing it was. That is
+    /// the whole login flow, so all three are checked rather than just the one
+    /// somebody noticed.
+    #[rstest::rstest]
+    #[case::under_the_current_block(true)]
+    #[case::under_the_legacy_block(false)]
+    #[actix_web::test]
+    async fn signing_in_is_offered_wherever_the_provider_is_configured(#[case] current: bool) {
+        let context = AppContext::new_mock(move |config| {
+            if current {
+                config.web.auth.oidc = Some(provider());
+            } else {
+                config.web.admin.oidc = Some(provider());
+            }
+        })
+        .await
+        .unwrap();
+
+        let app = app!(context);
+
+        for (method, uri) in [
+            ("GET", "/api/v1/auth/metadata"),
+            ("POST", "/api/v1/auth/token"),
+            ("POST", "/api/v1/auth/refresh"),
+        ] {
+            let request = if method == "GET" {
+                test::TestRequest::get().uri(uri).to_request()
+            } else {
+                // A body the handler will get past, so a 404 can only mean it
+                // decided there was no provider at all.
+                test::TestRequest::post()
+                    .uri(uri)
+                    .set_json(serde_json::json!({
+                        "code": "x",
+                        "redirect_uri": "https://example.com/",
+                        "refresh_token": "x",
+                    }))
+                    .to_request()
+            };
+
+            let status = test::call_service(&app, request).await.status();
+
+            assert_ne!(
+                status,
+                StatusCode::NOT_FOUND,
+                "{method} {uri} reported that sign-in is not configured, but it is",
+            );
+        }
+    }
+
+    #[actix_web::test]
+    async fn an_installation_with_no_provider_says_sign_in_is_not_configured() {
+        // The other side of it: the 404 has to still mean what it says, or the
+        // test above would pass against a handler that never returns one.
+        let context = AppContext::new_mock(|_| {}).await.unwrap();
+        let app = app!(context);
+
+        let response = test::call_service(
+            &app,
+            test::TestRequest::get()
+                .uri("/api/v1/auth/metadata")
+                .to_request(),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
 }

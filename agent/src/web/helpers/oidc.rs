@@ -43,7 +43,7 @@ const EXCLUDED_CLAIMS: &[&str] = &[
 ];
 
 const ADVICE_PROVIDER: &[&str] = &[
-    "Ensure that the `web.admin.oidc.endpoint` points at a valid OIDC provider.",
+    "Ensure that the `web.auth.oidc.endpoint` points at a valid OIDC provider.",
     "Check that the provider is reachable from this server.",
 ];
 
