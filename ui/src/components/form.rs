@@ -97,11 +97,26 @@ fn input_value(event: &InputEvent) -> Option<String> {
         })
 }
 
+/// Reads the value out of a blur event's target.
+fn blurred_value(event: &FocusEvent) -> Option<String> {
+    event
+        .target_dyn_into::<HtmlInputElement>()
+        .map(|input| input.value())
+        .or_else(|| {
+            event
+                .target_dyn_into::<HtmlTextAreaElement>()
+                .map(|area| area.value())
+        })
+}
+
 #[derive(Properties, PartialEq)]
 pub struct TextInputProps {
     pub id: AttrValue,
     pub value: AttrValue,
     pub onchange: Callback<String>,
+
+    #[prop_or_default]
+    pub onblur: Callback<String>,
 
     #[prop_or_default]
     pub placeholder: Option<AttrValue>,
@@ -128,6 +143,12 @@ pub fn text_input(props: &TextInputProps) -> Html {
             onchange.emit(value);
         }
     });
+    let blur = props.onblur.clone();
+    let onblur = Callback::from(move |event: FocusEvent| {
+        if let Some(value) = blurred_value(&event) {
+            blur.emit(value);
+        }
+    });
 
     html! {
         <input
@@ -140,6 +161,7 @@ pub fn text_input(props: &TextInputProps) -> Html {
             autocomplete={if props.secret { "off" } else { "on" }}
             spellcheck={if props.secret { "false" } else { "true" }}
             {oninput}
+            {onblur}
         />
     }
 }
@@ -149,6 +171,9 @@ pub struct TextAreaProps {
     pub id: AttrValue,
     pub value: AttrValue,
     pub onchange: Callback<String>,
+
+    #[prop_or_default]
+    pub onblur: Callback<String>,
 
     #[prop_or_default]
     pub placeholder: Option<AttrValue>,
@@ -176,6 +201,12 @@ pub fn text_area(props: &TextAreaProps) -> Html {
             onchange.emit(value);
         }
     });
+    let blur = props.onblur.clone();
+    let onblur = Callback::from(move |event: FocusEvent| {
+        if let Some(value) = blurred_value(&event) {
+            blur.emit(value);
+        }
+    });
 
     html! {
         <textarea
@@ -191,6 +222,7 @@ pub fn text_area(props: &TextAreaProps) -> Html {
             placeholder={props.placeholder.clone()}
             disabled={props.disabled}
             {oninput}
+            {onblur}
         />
     }
 }
