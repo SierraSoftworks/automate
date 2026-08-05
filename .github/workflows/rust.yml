@@ -14,10 +14,47 @@ env:
   IMAGE_NAME: ${{ github.repository }}
   APP_NAME: automate
 
+concurrency:
+  group: rust-${{ github.event_name == 'pull_request' && github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
+  deduplicate:
+    name: Check CI Result
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+
+    outputs:
+      cache-hit: ${{ steps.success.outputs.cache-hit }}
+      fingerprint: ${{ steps.fingerprint.outputs.tree }}
+
+    steps:
+      - name: Check out merge result
+        if: github.event_name == 'pull_request'
+        uses: actions/checkout@v7
+
+      - name: Fingerprint merge result
+        id: fingerprint
+        if: github.event_name == 'pull_request'
+        run: echo "tree=$(git rev-parse HEAD^{tree})" >> "$GITHUB_OUTPUT"
+
+      - name: Find successful result
+        id: success
+        if: github.event_name == 'pull_request'
+        uses: actions/cache/restore@v6
+        continue-on-error: true
+        with:
+          path: .ci-success
+          key: rust-ci-v1-${{ steps.fingerprint.outputs.tree }}
+          lookup-only: true
+
   version:
     name: Start Release
     runs-on: ubuntu-latest
+    needs: deduplicate
+    if: github.event_name != 'pull_request' || needs.deduplicate.outputs.cache-hit != 'true'
 
     steps:
       - name: Check out code
@@ -40,9 +77,12 @@ jobs:
   test:
     name: Test
     runs-on: ubuntu-latest
+    needs: deduplicate
 
     permissions:
       contents: read
+
+    if: github.event_name != 'pull_request' || needs.deduplicate.outputs.cache-hit != 'true'
 
     steps:
       - uses: actions/checkout@v7
@@ -81,9 +121,12 @@ jobs:
   ui:
     name: Build UI
     runs-on: ubuntu-latest
+    needs: deduplicate
 
     permissions:
       contents: read
+
+    if: github.event_name != 'pull_request' || needs.deduplicate.outputs.cache-hit != 'true'
 
     steps:
       - uses: actions/checkout@v7
@@ -119,7 +162,10 @@ jobs:
     runs-on: ubuntu-latest
 
     needs:
+      - deduplicate
       - ui
+
+    if: github.event_name != 'pull_request' || needs.deduplicate.outputs.cache-hit != 'true'
 
     permissions:
       contents: read
@@ -185,8 +231,11 @@ jobs:
     runs-on: ${{ matrix.run_on }}
 
     needs:
+      - deduplicate
       - version
       - ui
+
+    if: github.event_name != 'pull_request' || needs.deduplicate.outputs.cache-hit != 'true'
 
     strategy:
       matrix:
@@ -233,7 +282,7 @@ jobs:
 
     steps:
       - name: Run setup script
-        if: ${{ matrix.setup }}
+        if: matrix.setup
         run: ${{ matrix.setup }}
         
       - name: Check out code
@@ -302,6 +351,72 @@ jobs:
         with:
           name: ${{ env.APP_NAME }}-${{ matrix.os }}-${{ matrix.arch }}${{ matrix.extension }}
           path: target/${{ matrix.target }}/release/${{ env.APP_NAME }}${{ matrix.extension }}
+
+  ci:
+    name: CI
+    runs-on: ubuntu-latest
+
+    needs:
+      - deduplicate
+      - version
+      - test
+      - ui
+      - e2e
+      - build
+
+    if: always()
+
+    permissions:
+      contents: read
+
+    steps:
+      - name: Verify CI result
+        env:
+          CACHE_HIT: ${{ needs.deduplicate.outputs.cache-hit }}
+          DEDUPLICATE_RESULT: ${{ needs.deduplicate.result }}
+          VERSION_RESULT: ${{ needs.version.result }}
+          TEST_RESULT: ${{ needs.test.result }}
+          UI_RESULT: ${{ needs.ui.result }}
+          E2E_RESULT: ${{ needs.e2e.result }}
+          BUILD_RESULT: ${{ needs.build.result }}
+        run: |
+          if [ "$CACHE_HIT" = "true" ]; then
+            echo "This merge tree has already passed CI."
+            exit 0
+          fi
+
+          failed=0
+          for job in \
+            "Check CI Result=$DEDUPLICATE_RESULT" \
+            "Start Release=$VERSION_RESULT" \
+            "Test=$TEST_RESULT" \
+            "Build UI=$UI_RESULT" \
+            "End-to-End Tests=$E2E_RESULT" \
+            "Build=$BUILD_RESULT"
+          do
+            name="${job%%=*}"
+            result="${job#*=}"
+            if [ "$result" != "success" ]; then
+              echo "::error::$name completed with result '$result'."
+              failed=1
+            fi
+          done
+
+          exit "$failed"
+
+      - name: Create success marker
+        if: github.event_name == 'pull_request' && needs.deduplicate.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p .ci-success
+          echo "${{ needs.deduplicate.outputs.fingerprint }}" > .ci-success/merge-tree
+
+      - name: Save successful result
+        if: github.event_name == 'pull_request' && needs.deduplicate.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        continue-on-error: true
+        with:
+          path: .ci-success
+          key: rust-ci-v1-${{ needs.deduplicate.outputs.fingerprint }}
 
   docker-build:
     name: Docker Build
