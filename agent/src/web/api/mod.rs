@@ -33,6 +33,8 @@ mod connections;
 mod kv;
 mod queue;
 pub mod scope;
+#[cfg(test)]
+mod tenancy_tests;
 mod user;
 mod workflows;
 
