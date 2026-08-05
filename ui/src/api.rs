@@ -5,6 +5,12 @@
 //! renews it from the stored refresh token and retries the request once; interactive sign-in is
 //! handled separately via a popup (see [`crate::auth::begin_login`]). A `401` that survives a refresh
 //! is surfaced as [`ApiError::Unauthorized`] so callers can prompt for sign-in.
+//!
+//! # Demo mode
+//!
+//! This is also the one place that knows about [`crate::fixtures`]. When the URL asks for demo mode
+//! every call is served from an in-memory store instead of the network, which is why no page needs
+//! a demo branch of its own — and why a page cannot accidentally leave one out.
 
 use automate_api::{
     AdminUser, Connection, ConnectionSummary, IntegrationInfo, KeyValueEntry, OptionItem,
@@ -15,6 +21,22 @@ use serde::Serialize;
 use serde::de::DeserializeOwned;
 
 use crate::auth;
+#[cfg(debug_assertions)]
+use crate::fixtures;
+
+/// Serves a call from the demo store when demo mode is active.
+///
+/// Written as a macro so each call site reads as one line above the real
+/// request, and so the whole thing vanishes from a release build rather than
+/// relying on the optimiser to notice that it cannot be reached.
+macro_rules! demo {
+    ($($body:tt)*) => {
+        #[cfg(debug_assertions)]
+        if fixtures::is_demo() {
+            return { $($body)* };
+        }
+    };
+}
 
 /// The base path of the REST API. Requests are made relative to the current origin so the same
 /// bundle works behind any host.
@@ -44,6 +66,13 @@ impl std::fmt::Display for ApiError {
             ApiError::Server(msg) => write!(f, "{msg}"),
         }
     }
+}
+
+/// The refusal the demo store returns when it is asked for something it does not
+/// hold, standing in for the agent's own 404.
+#[cfg(debug_assertions)]
+fn not_found(what: &str) -> ApiError {
+    ApiError::Server(format!("That {what} no longer exists."))
 }
 
 #[derive(serde::Deserialize)]
@@ -171,6 +200,8 @@ async fn delete(path: &str) -> Result<(), ApiError> {
 
 /// Fetches the signed-in user's identity, if any.
 pub async fn me() -> Result<Option<AdminUser>, ApiError> {
+    demo!(Ok(Some(fixtures::admin_user())));
+
     let resp = send::<()>(Verb::Get, "/me", None).await?;
     if resp.status() == 204 {
         return Ok(None);
@@ -186,11 +217,15 @@ pub async fn me() -> Result<Option<AdminUser>, ApiError> {
 
 /// Lists every key-value entry across all partitions.
 pub async fn list_kv() -> Result<Vec<KeyValueEntry>, ApiError> {
+    demo!(Ok(fixtures::kv_entries()));
+
     get_json("/kv").await
 }
 
 /// Deletes a single key-value entry.
 pub async fn delete_kv(partition: &str, key: &str) -> Result<(), ApiError> {
+    demo!(fixtures::delete_kv(partition, key); Ok(()));
+
     delete(&format!(
         "/kv/{}?key={}",
         urlencode(partition),
@@ -201,6 +236,8 @@ pub async fn delete_kv(partition: &str, key: &str) -> Result<(), ApiError> {
 
 /// Lists every queued message across all partitions.
 pub async fn list_queue() -> Result<Vec<QueueMessage>, ApiError> {
+    demo!(Ok(fixtures::queue_messages()));
+
     get_json("/queue").await
 }
 
@@ -217,6 +254,8 @@ pub async fn trigger_queue(
     key: &str,
     payload: serde_json::Value,
 ) -> Result<(), ApiError> {
+    demo!(fixtures::trigger_queue(partition, key, payload); Ok(()));
+
     post_empty(
         &format!("/queue/{}/trigger", urlencode(partition)),
         &TriggerRequest {
@@ -229,6 +268,8 @@ pub async fn trigger_queue(
 
 /// Removes a queued message.
 pub async fn delete_queue(partition: &str, key: &str) -> Result<(), ApiError> {
+    demo!(fixtures::delete_queue(partition, key); Ok(()));
+
     delete(&format!(
         "/queue/{}?key={}",
         urlencode(partition),
@@ -239,6 +280,8 @@ pub async fn delete_queue(partition: &str, key: &str) -> Result<(), ApiError> {
 
 /// The services this account has linked.
 pub async fn list_service_connections() -> Result<Vec<ConnectionSummary>, ApiError> {
+    demo!(Ok(fixtures::service_connections()));
+
     get_json("/connections").await
 }
 
@@ -248,6 +291,8 @@ pub async fn create_service_connection(
     name: &str,
     key: &str,
 ) -> Result<ConnectionSummary, ApiError> {
+    demo!(Ok(fixtures::create_service_connection(provider, name)));
+
     let body = serde_json::json!({ "provider": provider, "name": name, "key": key });
     let response = send(Verb::Post, "/connections", Some(&body)).await?;
 
@@ -267,8 +312,15 @@ pub async fn rename_service_connection(
     id: &str,
     name: &str,
 ) -> Result<ConnectionSummary, ApiError> {
+    demo!(fixtures::rename_service_connection(id, name).ok_or(not_found("connection")));
+
     let body = serde_json::json!({ "name": name });
-    let response = send(Verb::Patch, &format!("/connections/{}", urlencode(id)), Some(&body)).await?;
+    let response = send(
+        Verb::Patch,
+        &format!("/connections/{}", urlencode(id)),
+        Some(&body),
+    )
+    .await?;
 
     if !response.ok() {
         return Err(error_from_response(response).await);
@@ -282,6 +334,8 @@ pub async fn rename_service_connection(
 
 /// Unlinks a service.
 pub async fn delete_service_connection(id: &str) -> Result<(), ApiError> {
+    demo!(fixtures::delete_service_connection(id); Ok(()));
+
     delete(&format!("/connections/{}", urlencode(id))).await
 }
 
@@ -290,11 +344,15 @@ pub async fn delete_service_connection(id: &str) -> Result<(), ApiError> {
 /// Fetched rather than compiled in, so a workflow type added to the agent is one
 /// this can offer without being rebuilt.
 pub async fn list_workflow_types() -> Result<Vec<WorkflowTypeDescriptor>, ApiError> {
+    demo!(Ok(fixtures::workflow_types()));
+
     get_json("/workflow-types").await
 }
 
 /// The workflows this account has configured.
 pub async fn list_workflows() -> Result<Vec<Workflow>, ApiError> {
+    demo!(Ok(fixtures::workflows()));
+
     get_json("/workflows").await
 }
 
@@ -305,6 +363,11 @@ pub async fn create_workflow(
     schedule: Option<&str>,
     enabled: bool,
 ) -> Result<Workflow, ApiError> {
+    demo!(
+        fixtures::create_workflow(type_id, config, schedule, enabled)
+            .ok_or(not_found("workflow type"))
+    );
+
     let body = serde_json::json!({
         "type": type_id,
         "config": config,
@@ -326,6 +389,8 @@ pub async fn update_workflow(
     schedule: Option<&str>,
     enabled: bool,
 ) -> Result<Workflow, ApiError> {
+    demo!(fixtures::update_workflow(id, config, schedule, enabled).ok_or(not_found("workflow")));
+
     let body = serde_json::json!({
         "config": config,
         "schedule": schedule,
@@ -345,6 +410,8 @@ pub async fn update_workflow(
 
 /// Issues a new webhook address, and stops the old one working.
 pub async fn rotate_webhook(id: &str) -> Result<Workflow, ApiError> {
+    demo!(fixtures::rotate_webhook(id).ok_or(not_found("workflow")));
+
     json_response(
         send(
             Verb::Post,
@@ -358,6 +425,8 @@ pub async fn rotate_webhook(id: &str) -> Result<Workflow, ApiError> {
 
 /// Removes a workflow.
 pub async fn delete_workflow(id: &str) -> Result<(), ApiError> {
+    demo!(fixtures::delete_workflow(id); Ok(()));
+
     delete(&format!("/workflows/{}", urlencode(id))).await
 }
 
@@ -367,6 +436,8 @@ pub async fn list_connection_options(
     source: &str,
     parent: Option<&str>,
 ) -> Result<Vec<OptionItem>, ApiError> {
+    demo!(Ok(fixtures::connection_options(source, parent)));
+
     let mut url = format!(
         "/connections/{}/options/{}",
         urlencode(connection),
@@ -395,11 +466,15 @@ async fn json_response<T: serde::de::DeserializeOwned>(
 
 /// Lists the integrations configured on the agent.
 pub async fn list_integrations() -> Result<Vec<IntegrationInfo>, ApiError> {
+    demo!(Ok(fixtures::integrations()));
+
     get_json("/integrations").await
 }
 
 /// Lists the accounts currently connected to an integration.
 pub async fn list_connections(integration: &str) -> Result<Vec<Connection>, ApiError> {
+    demo!(Ok(fixtures::integration_connections(integration)));
+
     get_json(&format!(
         "/integrations/{}/connections",
         urlencode(integration)
@@ -410,6 +485,8 @@ pub async fn list_connections(integration: &str) -> Result<Vec<Connection>, ApiE
 /// Severs a connection. For GitHub this uninstalls the App from the account; for
 /// an OAuth2 provider it discards the stored credential.
 pub async fn disconnect(integration: &str, connection: &str) -> Result<(), ApiError> {
+    demo!(fixtures::disconnect(integration, connection); Ok(()));
+
     delete(&format!(
         "/integrations/{}/connections/{}",
         urlencode(integration),
@@ -426,6 +503,13 @@ struct StartResponse {
 /// Begins connecting an integration, returning the provider authorization URL to open in a popup.
 /// The agent has already set the transient state cookie the callback verifies.
 pub async fn start_setup(integration: &str) -> Result<String, ApiError> {
+    // There is no provider to send anybody to, and opening a popup at a URL that
+    // cannot work is worse than saying so.
+    demo!(Err(ApiError::Server(
+        "Connecting an integration needs a running agent, so it is unavailable in demo mode."
+            .to_string(),
+    )));
+
     let resp = send(
         Verb::Post,
         &format!("/integrations/{}/setup/start", urlencode(integration)),

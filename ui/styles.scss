@@ -9,7 +9,8 @@
 //   4. Layout chrome (app bar, shell, footer)
 //   5. Pages (landing, dashboard, auth)
 //   6. Partition browser (db / queue)
-//   7. Responsive
+//   7. Control gallery (debug builds only)
+//   8. Responsive
 // =============================================================================
 
 // -----------------------------------------------------------------------------
@@ -2167,7 +2168,110 @@ footer {
 }
 
 // -----------------------------------------------------------------------------
-// 7. Responsive
+// 7. Control gallery (debug builds only)
+//
+// Deliberately plain. The gallery exists to show what the controls look like,
+// so anything it draws around them has to be quieter than they are — otherwise
+// a control reviewed here looks different from the same control in a page.
+// -----------------------------------------------------------------------------
+
+.gallery {
+  display: grid;
+  grid-template-columns: 200px minmax(0, 1fr);
+  gap: 1.5rem;
+  align-items: start;
+  margin-top: 1.5rem;
+
+  &__nav {
+    @include card;
+    display: flex;
+    flex-direction: column;
+    padding: 0.5rem;
+    position: sticky;
+    top: 1rem;
+  }
+
+  &__link {
+    padding: 0.4rem 0.6rem;
+    border-radius: $radius-sm;
+    color: $text-regular;
+    font-size: 0.9rem;
+
+    &:hover {
+      background: $fill-light;
+      color: $text-primary;
+    }
+
+    &--active {
+      background: $brand-tint;
+      color: $brand;
+      font-weight: 600;
+    }
+  }
+
+  &__body {
+    min-width: 0;
+  }
+
+  &__heading {
+    margin-bottom: 1.25rem;
+  }
+
+  &__title {
+    font-size: 1.35rem;
+  }
+
+  &__blurb {
+    margin: 0.25rem 0 0;
+    color: $text-secondary;
+    font-size: 0.92rem;
+  }
+}
+
+.specimen {
+  @include card;
+  padding: 1rem 1.25rem 1.25rem;
+  margin-bottom: 1rem;
+
+  &__caption {
+    border-bottom: 1px solid $border-lighter;
+    padding-bottom: 0.5rem;
+    margin-bottom: 1rem;
+  }
+
+  &__label {
+    font-size: 0.95rem;
+  }
+
+  &__note {
+    margin: 0.25rem 0 0;
+    color: $text-secondary;
+    font-size: 0.85rem;
+    max-width: 68ch;
+  }
+
+  // The controls sit on the card's own background rather than a tinted one, so
+  // what is on screen here is what is on screen in a page.
+  &__stage {
+    display: block;
+  }
+
+  &__row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.75rem;
+  }
+
+  &__stack {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+  }
+}
+
+// -----------------------------------------------------------------------------
+// 8. Responsive
 // -----------------------------------------------------------------------------
 
 @media (max-width: 860px) {
@@ -2195,6 +2299,16 @@ footer {
 
   .browser__list {
     max-height: 240px;
+  }
+
+  .gallery {
+    grid-template-columns: minmax(0, 1fr);
+
+    &__nav {
+      position: static;
+      flex-direction: row;
+      flex-wrap: wrap;
+    }
   }
 
   .workflows {

@@ -15,7 +15,6 @@ use crate::components::{
     Alert, AlertKind, BrowserPartition, ConnectMenu, ConnectionsPanel, PageActions,
     PartitionBrowser, RefreshButton,
 };
-use crate::fixtures;
 use crate::search::{SearchVocabulary, VocabularyContext};
 
 use super::{kv, queue};
@@ -58,10 +57,6 @@ impl<T> Load<T> {
 /// flips back to [`Load::Loading`], so refreshing an already-loaded page keeps
 /// the browser mounted and the user's selection preserved.
 async fn fetch_kv(state: UseStateHandle<Load<Vec<KeyValueEntry>>>) {
-    if fixtures::is_demo() {
-        state.set(Load::Ready(fixtures::kv_entries()));
-        return;
-    }
     match api::list_kv().await {
         Ok(entries) => state.set(Load::Ready(entries)),
         Err(error) => state.set(Load::Failed(error)),
@@ -70,10 +65,6 @@ async fn fetch_kv(state: UseStateHandle<Load<Vec<KeyValueEntry>>>) {
 
 /// Fetches the job queues, replacing the current state in place.
 async fn fetch_queue(state: UseStateHandle<Load<Vec<QueueMessage>>>) {
-    if fixtures::is_demo() {
-        state.set(Load::Ready(fixtures::queue_messages()));
-        return;
-    }
     match api::list_queue().await {
         Ok(messages) => state.set(Load::Ready(messages)),
         Err(error) => state.set(Load::Failed(error)),
@@ -124,20 +115,8 @@ pub fn admin() -> Html {
     };
 
     let on_delete_kv = {
-        let kv_state = kv_state.clone();
         let refresh = refresh.clone();
         Callback::from(move |(partition, key): (String, String)| {
-            if fixtures::is_demo() {
-                if let Load::Ready(entries) = &*kv_state {
-                    let remaining = entries
-                        .iter()
-                        .filter(|entry| !(entry.partition == partition && entry.key == key))
-                        .cloned()
-                        .collect();
-                    kv_state.set(Load::Ready(remaining));
-                }
-                return;
-            }
             let refresh = refresh.clone();
             spawn_local(async move {
                 let _ = api::delete_kv(&partition, &key).await;
@@ -147,20 +126,8 @@ pub fn admin() -> Html {
     };
 
     let on_delete_queue = {
-        let queue_state = queue_state.clone();
         let refresh = refresh.clone();
         Callback::from(move |(partition, key): (String, String)| {
-            if fixtures::is_demo() {
-                if let Load::Ready(messages) = &*queue_state {
-                    let remaining = messages
-                        .iter()
-                        .filter(|m| !(m.partition == partition && m.key == key))
-                        .cloned()
-                        .collect();
-                    queue_state.set(Load::Ready(remaining));
-                }
-                return;
-            }
             let refresh = refresh.clone();
             spawn_local(async move {
                 let _ = api::delete_queue(&partition, &key).await;
@@ -173,9 +140,6 @@ pub fn admin() -> Html {
         let refresh = refresh.clone();
         Callback::from(
             move |(partition, key, payload): (String, String, serde_json::Value)| {
-                if fixtures::is_demo() {
-                    return;
-                }
                 let refresh = refresh.clone();
                 spawn_local(async move {
                     let _ = api::trigger_queue(&partition, &key, payload).await;

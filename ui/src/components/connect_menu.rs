@@ -9,8 +9,8 @@ use automate_api::IntegrationInfo;
 use wasm_bindgen_futures::spawn_local;
 use yew::prelude::*;
 
-use crate::api;
 use super::menu_button::{MenuButton, MenuButtonOption};
+use crate::api;
 
 /// A link/plug glyph shown on the trigger, echoing the "connect" action.
 fn connect_icon() -> Html {

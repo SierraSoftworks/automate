@@ -228,6 +228,14 @@ The project uses GitHub Actions for CI/CD:
 
 - Use `tracing_batteries` for tracing support (available via `use tracing_batteries::prelude::*`, or more simply through `use crate::prelude::*` which re-exports it)
 - The web UI is a Yew client-side SPA (WebAssembly) that talks to the agent over the `/api/v1` REST API
+- **Demo mode** (debug builds only): append `?demo` to any UI URL to serve every API
+  call from the in-memory fixtures in `ui/src/fixtures/` instead of the network, so the
+  UI can be run and reviewed with `trunk serve` and no agent. The substitution happens
+  inside `ui/src/api.rs`; pages must not branch on demo mode themselves. Mutations stick
+  for the lifetime of the tab.
+- **Control gallery** (debug builds only): `/demo/controls` and `/demo/controls/{control}`
+  render every shared component in each state it can be in. Add a specimen there when you
+  add or change a component in `ui/src/components/`.
 - Admin authentication is server-driven OIDC: the agent performs the full Authorization Code + PKCE flow (`/api/v1/auth/login` → provider → `/api/v1/auth/callback`) and stores the ID token in an `HttpOnly` session cookie. Mutating API requests require a double-submit CSRF token (`GET /api/v1/csrf` sets a cookie; the UI echoes it in the `X-CSRF-Token` header). The browser never handles tokens.
 - Database operations use `tokio-rusqlite` for multi-threaded SQLite access
 - The `filter` module provides an interpreted language operating over `FilterValue`s for configurable filtering

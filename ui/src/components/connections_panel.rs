@@ -11,7 +11,6 @@ use yew::prelude::*;
 
 use crate::api;
 use crate::components::{Alert, AlertKind};
-use crate::fixtures;
 
 /// One integration and whatever we currently know about its connections.
 #[derive(Clone, PartialEq)]
@@ -67,9 +66,7 @@ pub fn connections_panel(props: &ConnectionsPanelProps) -> Html {
         let rows = rows.clone();
         let error = error.clone();
         use_effect_with(props.reload, move |_| {
-            if !fixtures::is_demo() {
-                spawn_local(load(rows, error));
-            }
+            spawn_local(load(rows, error));
             || ()
         });
     }
