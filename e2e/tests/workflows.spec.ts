@@ -41,10 +41,9 @@ test.afterEach(async ({ request }) => {
 /** Opens, fills in, and submits the modal for a new RSS workflow. */
 async function addRssWorkflow(page: import("@playwright/test").Page, name: string) {
   await page.getByRole("button", { name: "Add Workflow" }).click();
-  await page.getByLabel("What should it watch?").selectOption("rss");
+  await page.getByRole("menuitem", { name: "RSS Feed" }).click();
 
   const form = page.getByRole("dialog", { name: "Add RSS Feed workflow" });
-  await expect(page.getByLabel("What should it watch?")).toHaveCount(0);
 
   await form.getByLabel("Name").fill(name);
   await form.getByLabel("Feed URL").fill("https://example.com/rss/");
@@ -73,13 +72,12 @@ test("a workflow configured through the descriptor-driven form is listed once it
   await expect(row).toContainText("every day at midnight");
 
   await expect(page.getByRole("dialog")).toHaveCount(0);
-  await expect(page.getByLabel("What should it watch?")).toHaveCount(0);
 
-  // Reopening the flow must start with a fresh picker. In particular, selecting
+  // Reopening the flow must start with a fresh menu. In particular, selecting
   // RSS again should open its form immediately rather than requiring a detour
   // through a different workflow type to make the native select emit a change.
   await page.getByRole("button", { name: "Add Workflow" }).click();
-  await page.getByLabel("What should it watch?").selectOption("rss");
+  await page.getByRole("menuitem", { name: "RSS Feed" }).click();
   await expect(page.getByRole("dialog", { name: "Add RSS Feed workflow" })).toBeVisible();
   await page.getByRole("button", { name: "Cancel", exact: true }).last().click();
 });

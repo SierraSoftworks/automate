@@ -28,10 +28,10 @@ async function openWorkflowPicker(page: Parameters<typeof gotoApp>[0]) {
 
 async function openWorkflowForm(
   page: Parameters<typeof gotoApp>[0],
-  type: string | { label: string },
+  type: string,
 ) {
   await openWorkflowPicker(page);
-  await page.getByLabel("What should it watch?").selectOption(type);
+  await page.getByRole("menuitem", { name: type, exact: true }).click();
   return page.getByRole("dialog");
 }
 
@@ -48,7 +48,7 @@ test.afterEach(async ({ request }) => {
 test("no fields are asked for until a workflow type has been chosen", async ({ page }) => {
   await openWorkflowPicker(page);
 
-  await expect(page.getByLabel("What should it watch?")).toBeVisible();
+  await expect(page.getByRole("menu")).toBeVisible();
 
   // Nothing beyond the picker: there is no such thing as a field common to
   // every workflow type, so a form drawn before a type is chosen would be
@@ -58,7 +58,7 @@ test("no fields are asked for until a workflow type has been chosen", async ({ p
 });
 
 test("choosing a workflow type draws the fields that type asked for", async ({ page }) => {
-  const form = await openWorkflowForm(page, "rss");
+  const form = await openWorkflowForm(page, "RSS Feed");
 
   await expect(form).toContainText("Watches a feed and files a task for each new entry.");
 
@@ -75,7 +75,7 @@ test("choosing a workflow type draws the fields that type asked for", async ({ p
 });
 
 test("filter expressions are checked while they are being edited", async ({ page }) => {
-  const dialog = await openWorkflowForm(page, "rss");
+  const dialog = await openWorkflowForm(page, "RSS Feed");
   const filter = dialog.getByLabel("Filter");
   const editor = dialog.locator(".filter-input");
 
@@ -100,7 +100,7 @@ test("filter expressions are checked while they are being edited", async ({ page
 });
 
 test("text inputs preserve spaces while typing and normalize them on blur", async ({ page }) => {
-  const form = await openWorkflowForm(page, "rss");
+  const form = await openWorkflowForm(page, "RSS Feed");
 
   const name = form.getByLabel("Name");
   const raw = "  Release notes daily  ";
@@ -122,7 +122,7 @@ test("text inputs preserve spaces while typing and normalize them on blur", asyn
 test("text areas preserve multiline whitespace while editing and normalize it on blur", async ({
   page,
 }) => {
-  const form = await openWorkflowForm(page, { label: "Webhook" });
+  const form = await openWorkflowForm(page, "Webhook");
 
   const description = form.getByLabel("Task description");
   const raw = "  Started by Ada\n\nDeployment complete  ";
@@ -146,12 +146,12 @@ test("choosing a different type replaces the previous type's fields rather than 
   // Without that, fields that happen to share a name carry their values across
   // and fields that do not are left on screen collecting values the new type
   // will never read.
-  let form = await openWorkflowForm(page, "rss");
+  let form = await openWorkflowForm(page, "RSS Feed");
   await expect(form.getByLabel("Feed URL")).toBeVisible();
   await expect(form.getByLabel("Name")).toBeVisible();
 
   await form.getByRole("button", { name: "Cancel" }).click();
-  form = await openWorkflowForm(page, "xkcd");
+  form = await openWorkflowForm(page, "XKCD");
 
   await expect(form).toContainText("Files a task for each new XKCD comic.");
   await expect(
@@ -172,7 +172,7 @@ test("a picker whose choices come from an account says so until an account is ch
   // The projects in a Todoist account can only be listed once we know which
   // account. An empty menu would read as a broken form rather than as a step
   // the person has not taken yet, so the form says which step.
-  const form = await openWorkflowForm(page, "rss");
+  const form = await openWorkflowForm(page, "RSS Feed");
 
   const unavailable = form.locator(".dynamic-form__unavailable");
   await expect(unavailable.first()).toContainText(
@@ -193,7 +193,7 @@ test("a picker whose choices come from an account says so until an account is ch
 });
 
 test("a connection picker offers the accounts that have actually been linked", async ({ page }) => {
-  const form = await openWorkflowForm(page, "rss");
+  const form = await openWorkflowForm(page, "RSS Feed");
 
   const picker = form.getByLabel("Todoist account");
   await expect(picker.getByRole("option", { name: connection.name })).toHaveCount(1);
@@ -207,7 +207,7 @@ test("a workflow type explains how to set one up, without getting in the way of 
   // know where in the provider's interface the address goes. It starts
   // collapsed, because somebody adding their fourth feed should not have to
   // scroll past an explanation of RSS to reach the fields.
-  const form = await openWorkflowForm(page, { label: "RSS Feed" });
+  const form = await openWorkflowForm(page, "RSS Feed");
 
   const guidance = form.locator(".documentation");
   await expect(guidance.getByRole("button", { name: "How does this work?" })).toBeVisible();

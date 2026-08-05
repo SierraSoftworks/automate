@@ -17,6 +17,7 @@ mod form;
 mod helpers;
 mod json_highlight;
 mod layout;
+mod menu_button;
 mod page_title;
 mod partition_browser;
 mod refresh_button;
@@ -38,6 +39,7 @@ pub use form::{
 pub use helpers::Center;
 pub use json_highlight::JsonHighlight;
 pub use layout::Layout;
+pub use menu_button::{MenuButton, MenuButtonOption};
 pub use page_title::PageTitle;
 pub use partition_browser::{BrowserEntry, BrowserPartition, PartitionBrowser};
 pub use refresh_button::RefreshButton;

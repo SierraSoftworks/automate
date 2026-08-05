@@ -446,7 +446,7 @@ pub enum ButtonKind {
 }
 
 impl ButtonKind {
-    fn class(self) -> Option<&'static str> {
+    pub(crate) fn class(self) -> Option<&'static str> {
         match self {
             Self::Default => None,
             Self::Primary => Some("btn--primary"),

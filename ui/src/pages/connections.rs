@@ -9,7 +9,9 @@ use automate_api::{ConnectionKind, ConnectionStatus, ConnectionSummary};
 use yew::prelude::*;
 
 use crate::api;
-use crate::components::{Alert, AlertKind, Button, ButtonKind, Field, Select, SelectOption, TextInput};
+use crate::components::{
+    Alert, AlertKind, Button, ButtonKind, Field, MenuButton, MenuButtonOption, TextInput,
+};
 use crate::util::short_relative;
 
 /// The services that can be linked by pasting in a token.
@@ -37,7 +39,7 @@ pub fn connections() -> Html {
     let connections = use_state(|| None::<Vec<ConnectionSummary>>);
     let error = use_state(|| None::<String>);
     let reload = use_state(|| 0u32);
-    let adding = use_state(|| false);
+    let chosen = use_state(|| None::<String>);
 
     {
         let connections = connections.clone();
@@ -61,35 +63,40 @@ pub fn connections() -> Html {
         Callback::from(move |_| reload.set(*reload + 1))
     };
 
-    let on_add = {
-        let adding = adding.clone();
-        Callback::from(move |_| adding.set(true))
+    let on_provider = {
+        let chosen = chosen.clone();
+        Callback::from(move |provider: String| chosen.set(Some(provider)))
     };
 
     let on_cancel_add = {
-        let adding = adding.clone();
-        Callback::from(move |_| adding.set(false))
+        let chosen = chosen.clone();
+        Callback::from(move |_| chosen.set(None))
     };
 
     let on_linked = {
-        let (adding, reload) = (adding.clone(), reload.clone());
+        let (chosen, reload) = (chosen.clone(), reload.clone());
         Callback::from(move |_| {
-            adding.set(false);
+            chosen.set(None);
             reload.set(*reload + 1);
         })
     };
+
+    let provider_options: Vec<MenuButtonOption> = PASTEABLE_PROVIDERS
+        .iter()
+        .map(|(id, label)| MenuButtonOption::new(*id, *label))
+        .collect();
 
     html! {
         <section class="connections">
             <div class="connections__header">
                 <h2 class="connections__title">{ "Connections" }</h2>
-                <Button
+                <MenuButton
+                    label="Add Connection"
+                    options={provider_options}
+                    onselect={on_provider}
                     kind={ButtonKind::Primary}
-                    onclick={on_add}
-                    disabled={connections.is_none() || *adding}
-                >
-                    { "Add Connection" }
-                </Button>
+                    disabled={connections.is_none() || chosen.is_some()}
+                />
             </div>
 
             <p class="connections__intro">
@@ -105,8 +112,8 @@ pub fn connections() -> Html {
                 />
             }
 
-            if *adding {
-                <LinkService on_linked={on_linked} oncancel={on_cancel_add} />
+            if let Some(provider) = (*chosen).clone() {
+                <LinkService {provider} on_linked={on_linked} oncancel={on_cancel_add} />
             }
 
             {
@@ -137,6 +144,7 @@ pub fn connections() -> Html {
 
 #[derive(Properties, PartialEq)]
 struct LinkServiceProps {
+    provider: String,
     on_linked: Callback<()>,
     oncancel: Callback<()>,
 }
@@ -144,22 +152,17 @@ struct LinkServiceProps {
 /// The form for linking a service with a token the user pastes in.
 #[function_component(LinkService)]
 fn link_service(props: &LinkServiceProps) -> Html {
-    let provider = use_state(|| None::<String>);
     let name = use_state(String::new);
     let key = use_state(String::new);
     let busy = use_state(|| false);
     let error = use_state(|| None::<String>);
 
     let onsubmit = {
-        let (provider, name, key) = (provider.clone(), name.clone(), key.clone());
+        let (provider, name, key) = (props.provider.clone(), name.clone(), key.clone());
         let (busy, error) = (busy.clone(), error.clone());
         let on_linked = props.on_linked.clone();
 
         Callback::from(move |_: MouseEvent| {
-            let Some(chosen) = (*provider).clone() else {
-                return;
-            };
-
             if key.trim().is_empty() {
                 error.set(Some("Paste the token this service issued you.".into()));
                 return;
@@ -170,21 +173,21 @@ fn link_service(props: &LinkServiceProps) -> Html {
             let label = if name.trim().is_empty() {
                 PASTEABLE_PROVIDERS
                     .iter()
-                    .find(|(id, _)| *id == chosen)
+                    .find(|(id, _)| *id == provider)
                     .map(|(_, label)| (*label).to_string())
-                    .unwrap_or_else(|| chosen.clone())
+                    .unwrap_or_else(|| provider.clone())
             } else {
                 name.trim().to_string()
             };
 
-            let key = key.clone();
+            let (provider, key) = (provider.clone(), key.clone());
             let (busy, error) = (busy.clone(), error.clone());
             let on_linked = on_linked.clone();
             let token = (*key).clone();
 
             busy.set(true);
             wasm_bindgen_futures::spawn_local(async move {
-                match api::create_service_connection(&chosen, &label, &token).await {
+                match api::create_service_connection(&provider, &label, &token).await {
                     Ok(_) => {
                         on_linked.emit(());
                     }
@@ -195,15 +198,6 @@ fn link_service(props: &LinkServiceProps) -> Html {
         })
     };
 
-    let options: Vec<SelectOption> = PASTEABLE_PROVIDERS
-        .iter()
-        .map(|(id, label)| SelectOption::new(*id, *label))
-        .collect();
-
-    let on_provider = {
-        let provider = provider.clone();
-        Callback::from(move |value: Option<String>| provider.set(value))
-    };
     let on_name = {
         let name = name.clone();
         Callback::from(move |value: String| name.set(value))
@@ -217,92 +211,69 @@ fn link_service(props: &LinkServiceProps) -> Html {
         Callback::from(move |_: MouseEvent| oncancel.emit(()))
     };
 
-    let provider_label = provider.as_ref().and_then(|chosen| {
-        PASTEABLE_PROVIDERS
-            .iter()
-            .find(|(id, _)| id == chosen)
-            .map(|(_, label)| *label)
-    });
+    let provider_label = PASTEABLE_PROVIDERS
+        .iter()
+        .find(|(id, _)| *id == props.provider)
+        .map(|(_, label)| *label)
+        .unwrap_or(props.provider.as_str());
 
     html! {
-        <>
-            if provider_label.is_none() {
-                <div class="connections__type-picker">
-                    <Field id="connection-provider" label="Service" required=true>
-                        <Select
-                            id="connection-provider"
-                            value={(*provider).clone().map(AttrValue::from)}
-                            onchange={on_provider}
-                            {options}
-                            placeholder="Choose a service"
+        <div class="form-modal" role="dialog" aria-modal="true" aria-labelledby="add-connection-title">
+            <div class="form-modal__panel">
+                <div class="form-modal__header">
+                    <h3 id="add-connection-title" class="form-modal__title">
+                        { format!("Add {provider_label} connection") }
+                    </h3>
+                </div>
+
+                <div class="form-modal__body">
+                    if let Some(message) = &*error {
+                        <Alert
+                            kind={AlertKind::Error}
+                            title="We could not link that service."
+                            message={message.clone()}
+                        />
+                    }
+
+                    <Field
+                        id="connection-name"
+                        label="Name"
+                        help="Optional. Useful once you have linked more than one account on the same service."
+                    >
+                        <TextInput
+                            id="connection-name"
+                            value={(*name).clone()}
+                            onchange={on_name}
+                            placeholder="Personal"
                         />
                     </Field>
 
-                    <Button kind={ButtonKind::Subtle} onclick={on_cancel.clone()} disabled={*busy}>
-                        { "Cancel" }
-                    </Button>
-                </div>
-            }
+                    <Field
+                        id="connection-key"
+                        label="Token"
+                        required=true
+                        help={AttrValue::from(where_to_find_the_token(&props.provider))}
+                    >
+                        <TextInput
+                            id="connection-key"
+                            value={(*key).clone()}
+                            onchange={on_key}
+                            secret=true
+                            placeholder="Paste the token here"
+                        />
+                    </Field>
 
-            if let Some(provider_label) = provider_label {
-                <div class="form-modal" role="dialog" aria-modal="true" aria-labelledby="add-connection-title">
-                    <div class="form-modal__panel">
-                        <div class="form-modal__header">
-                            <h3 id="add-connection-title" class="form-modal__title">
-                                { format!("Add {provider_label} connection") }
-                            </h3>
-                        </div>
-
-                        <div class="form-modal__body">
-                            if let Some(message) = &*error {
-                                <Alert
-                                    kind={AlertKind::Error}
-                                    title="We could not link that service."
-                                    message={message.clone()}
-                                />
-                            }
-
-                            <Field
-                                id="connection-name"
-                                label="Name"
-                                help="Optional. Useful once you have linked more than one account on the same service."
-                            >
-                                <TextInput
-                                    id="connection-name"
-                                    value={(*name).clone()}
-                                    onchange={on_name}
-                                    placeholder="Personal"
-                                />
-                            </Field>
-
-                            <Field
-                                id="connection-key"
-                                label="Token"
-                                required=true
-                                help={provider.as_ref().map(|p| AttrValue::from(where_to_find_the_token(p)))}
-                            >
-                                <TextInput
-                                    id="connection-key"
-                                    value={(*key).clone()}
-                                    onchange={on_key}
-                                    secret=true
-                                    placeholder="Paste the token here"
-                                />
-                            </Field>
-
-                            <div class="connections__form-actions">
-                                <Button kind={ButtonKind::Primary} onclick={onsubmit} busy={*busy}>
-                                    { "Link service" }
-                                </Button>
-                                <Button kind={ButtonKind::Subtle} onclick={on_cancel} disabled={*busy}>
-                                    { "Cancel" }
-                                </Button>
-                            </div>
-                        </div>
+                    <div class="connections__form-actions">
+                        <Button kind={ButtonKind::Primary} onclick={onsubmit} busy={*busy}>
+                            { "Link service" }
+                        </Button>
+                        <Button kind={ButtonKind::Subtle} onclick={on_cancel} disabled={*busy}>
+                            { "Cancel" }
+                        </Button>
                     </div>
                 </div>
-            }
-        </>
+            </div>
+        </div>
     }
 }
 

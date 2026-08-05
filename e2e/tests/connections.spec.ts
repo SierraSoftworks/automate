@@ -24,10 +24,9 @@ test.afterEach(async ({ request }) => {
 /** Opens the provider-specific modal for a new Todoist connection. */
 async function openTodoistConnection(page: import("@playwright/test").Page) {
   await page.getByRole("button", { name: "Add Connection" }).click();
-  await page.getByLabel("Service").selectOption("todoist");
+  await page.getByRole("menuitem", { name: "Todoist" }).click();
 
   const form = page.getByRole("dialog", { name: "Add Todoist connection" });
-  await expect(page.getByLabel("Service")).toHaveCount(0);
   return form;
 }
 
