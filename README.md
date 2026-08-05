@@ -68,8 +68,17 @@ governs whether `X-Forwarded-For` is trusted when the admin `acl` evaluates
 
 ### Accounts and isolation
 
-Every stored record belongs to an **account**, named by the OIDC username
-claim (`preferred_username` by default; set `username_claim` under
+Records are only divided between accounts once you ask for it, with
+`multi_tenant = true` under `[web.auth]`. Until then everything belongs to
+the installation's own account, whether or not people sign in — an
+installation that has been running with an identity provider already has
+its workflows and connections in one place, and reading the signed-in
+identity as an account name would take all of them away from the people
+using them without saying so. Signing in still decides who may do what;
+it just does not decide where things are kept.
+
+With it enabled, every stored record belongs to an **account**, named by
+the OIDC username claim (`preferred_username` by default; set `username_claim` under
 `[web.auth.oidc]` to use a different one). Accounts are isolated at the
 storage layer rather than by convention: the handle a job or request
 handler holds is scoped to one account and has no method that names

@@ -240,22 +240,12 @@ pub async fn api_auth<S: Services + Send + Sync + 'static>(
     // Determine which account the request acts as. With no identity provider
     // there is nobody to identify, so everything belongs to the installation's
     // local account — which is what a single-user install has always used.
-    let account = match &claims {
-        Some(claims) => {
-            match username_from_claims(
-                claims,
-                config.web.oidc().and_then(|o| o.username_claim.as_deref()),
-            ) {
-                Ok(account) => account,
-                Err(err) => {
-                    warn!("Rejected a sign-in whose account could not be determined: {err}");
-                    return Ok(
-                        req.into_response(json_error(StatusCode::FORBIDDEN, err.description()))
-                    );
-                }
-            }
+    let account = match account_for(&config, claims.as_ref()) {
+        Ok(account) => account,
+        Err(err) => {
+            warn!("Rejected a sign-in whose account could not be determined: {err}");
+            return Ok(req.into_response(json_error(StatusCode::FORBIDDEN, err.description())));
         }
-        None => local_tenant(&config),
     };
 
     let mut principal = Principal::new(
@@ -296,6 +286,17 @@ pub async fn api_auth<S: Services + Send + Sync + 'static>(
                 warn!(error = %err, "Could not record a sign-in in the user registry.");
                 services.session().record_human_error(&err);
             }
+        }
+
+        // Acting as somebody else is only meaningful where people have records
+        // of their own. In a single-account installation every request already
+        // reaches everything, so the header would silently do nothing — which is
+        // a worse answer than saying it is not available.
+        if !config.web.auth.multi_tenant && req.headers().contains_key(IMPERSONATE_HEADER) {
+            return Ok(req.into_response(json_error(
+                StatusCode::BAD_REQUEST,
+                "This installation keeps everything in one account, so there is nobody to act as. Enable web.auth.multi_tenant first.",
+            )));
         }
 
         match resolve_impersonation(&req, &principal, &registry).await {
@@ -363,6 +364,32 @@ async fn record_impersonation(
 }
 
 /// The account an installation with no identity provider acts as.
+/// Which account a request acts as.
+///
+/// Signing in tells us who somebody is. Whether that should give them records of
+/// their own is a separate question, and one the operator answers: an
+/// installation that has been running with an identity provider already has
+/// every workflow and connection under its single account, so reading the
+/// signed-in identity as an account name would move all of them out from under
+/// the people using them. Nothing is partitioned until `multi_tenant` says so.
+///
+/// Separated from the middleware so it can be tested without standing up an
+/// identity provider — the decision is small and the thing it protects against
+/// is an upgrade, which is exactly the case that is awkward to reach through a
+/// request.
+fn account_for(
+    config: &crate::config::Config,
+    claims: Option<&serde_json::Map<String, serde_json::Value>>,
+) -> Result<TenantId, human_errors::Error> {
+    match claims {
+        Some(claims) if config.web.auth.multi_tenant => username_from_claims(
+            claims,
+            config.web.oidc().and_then(|o| o.username_claim.as_deref()),
+        ),
+        _ => Ok(local_tenant(config)),
+    }
+}
+
 fn local_tenant(config: &crate::config::Config) -> TenantId {
     config
         .web
@@ -458,6 +485,9 @@ mod tests {
         AppContext::new_mock(|config| {
             config.web.auth.user_acl = Some(Filter::new(user_acl).unwrap());
             config.web.auth.admin_acl = Some(Filter::new(admin_acl).unwrap());
+            // Most of what is tested here — impersonation, per-account records —
+            // only exists once an operator has asked for it.
+            config.web.auth.multi_tenant = true;
         })
         .await
         .unwrap()
@@ -573,6 +603,133 @@ mod tests {
             .unwrap();
 
         assert_eq!(accounts[0].username.as_str(), "alice@example.com");
+    }
+
+    /// A signed-in identity, as the provider would give it.
+    fn claims_for(username: &str) -> serde_json::Map<String, serde_json::Value> {
+        serde_json::json!({ "preferred_username": username, "sub": "abc123" })
+            .as_object()
+            .unwrap()
+            .clone()
+    }
+
+    async fn config_with(multi_tenant: bool) -> std::sync::Arc<crate::config::Config> {
+        AppContext::new_mock(move |config| {
+            config.web.auth.user_acl = Some(Filter::new("true").unwrap());
+            config.web.auth.multi_tenant = multi_tenant;
+        })
+        .await
+        .unwrap()
+        .config()
+    }
+
+    #[tokio::test]
+    async fn signing_in_does_not_move_anybody_out_of_the_installations_account() {
+        // The upgrade this protects. An installation already running with an
+        // identity provider has everything under one account; reading the
+        // identity as an account name would take every workflow away from the
+        // people using it, and they would be told nothing.
+        let config = config_with(false).await;
+
+        assert_eq!(
+            account_for(&config, Some(&claims_for("alice"))).unwrap(),
+            TenantId::local(),
+        );
+    }
+
+    #[tokio::test]
+    async fn once_an_operator_asks_for_it_a_sign_in_names_the_account() {
+        let config = config_with(true).await;
+
+        assert_eq!(
+            account_for(&config, Some(&claims_for("alice"))).unwrap(),
+            TenantId::new("alice").unwrap(),
+        );
+    }
+
+    #[tokio::test]
+    async fn an_installation_with_nobody_to_identify_uses_its_own_account() {
+        for multi_tenant in [false, true] {
+            let config = config_with(multi_tenant).await;
+
+            assert_eq!(
+                account_for(&config, None).unwrap(),
+                TenantId::local(),
+                "with no identity provider there is nobody to partition by",
+            );
+        }
+    }
+
+    #[actix_web::test]
+    async fn a_single_account_installation_keeps_everything_in_one_place() {
+        // The upgrade this protects: an installation that has been running with
+        // an identity provider already has every workflow and connection under
+        // its single account. Reading the signed-in identity as an account name
+        // would move all of them out from under the people using them, so
+        // nothing is partitioned until an operator says so.
+        let context = AppContext::new_mock(|config| {
+            config.web.auth.user_acl = Some(Filter::new("true").unwrap());
+            config.web.auth.multi_tenant = false;
+        })
+        .await
+        .unwrap();
+        let app = app!(context);
+
+        // A record that was already there before anybody signed in.
+        context
+            .tenant(TenantId::local())
+            .kv()
+            .set("notes", "existing", "still here")
+            .await
+            .unwrap();
+
+        let entries: Vec<automate_api::KeyValueEntry> = test::call_and_read_body_json(
+            &app,
+            test::TestRequest::get().uri("/api/v1/kv").to_request(),
+        )
+        .await;
+
+        assert!(
+            entries.iter().any(|entry| entry.key == "existing"),
+            "a signed-in request should still reach the records that were already there",
+        );
+
+        let accounts = UserRegistry::new(context.tenant(TenantId::system()))
+            .list()
+            .await
+            .unwrap();
+
+        assert_eq!(
+            accounts[0].username,
+            TenantId::local(),
+            "everybody should still be working in the installation's own account",
+        );
+    }
+
+    #[actix_web::test]
+    async fn acting_as_somebody_else_is_refused_where_there_is_nobody_to_act_as() {
+        // Silently ignoring the header would be worse: an administrator would
+        // believe they were looking at another person's records while actually
+        // looking at the only set there is.
+        let context = AppContext::new_mock(|config| {
+            config.web.auth.user_acl = Some(Filter::new("true").unwrap());
+            config.web.auth.admin_acl = Some(Filter::new("true").unwrap());
+            config.web.auth.multi_tenant = false;
+        })
+        .await
+        .unwrap();
+        let app = app!(context);
+
+        let response = test::call_service(
+            &app,
+            test::TestRequest::get()
+                .uri("/api/v1/me")
+                .insert_header((IMPERSONATE_HEADER, "alice"))
+                .to_request(),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     }
 
     #[actix_web::test]
