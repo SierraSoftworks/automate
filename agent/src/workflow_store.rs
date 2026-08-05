@@ -189,7 +189,7 @@ impl<S: Services> WorkflowStore<S> {
 
                 Ok(Some(schedule))
             }
-            WorkflowTrigger::Webhook { .. } => Ok(None),
+            WorkflowTrigger::Webhook { .. } | WorkflowTrigger::RoutedWebhook { .. } => Ok(None),
         }
     }
 
@@ -516,7 +516,7 @@ impl<S: Services> WorkflowStore<S> {
     ) -> Result<automate_api::WebhookToken, Error> {
         let existing = self.get(id).await?;
 
-        if existing.webhook.is_none() {
+        if !Self::is_webhook(&existing.type_id)? || existing.webhook.is_none() {
             return Err(human_errors::user(
                 format!("The workflow '{id}' is not one that is triggered by a webhook."),
                 &["Only webhook workflows have an address to rotate."],
@@ -612,10 +612,13 @@ impl<S: Services> WorkflowStore<S> {
         // reliably know what address it is reached on from outside — a reverse
         // proxy may have rewritten it — and a confidently wrong URL is worse
         // than one the browser completes from where it is already talking to.
-        let webhook_path = self
-            .webhook_token(&record)
-            .unwrap_or(None)
-            .map(|token| format!("/webhooks/w/{token}"));
+        let webhook_path = if Self::is_webhook(&record.type_id)? {
+            self.webhook_token(&record)
+                .unwrap_or(None)
+                .map(|token| format!("/webhooks/w/{token}"))
+        } else {
+            None
+        };
 
         Ok(Workflow {
             id: record.id,

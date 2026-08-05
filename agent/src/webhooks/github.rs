@@ -60,15 +60,7 @@ const RESOLVING_ACTIONS: &[&str] = &[
     "unassigned",
 ];
 
-/// What one person asked us to do with the deliveries their GitHub sends.
-///
-/// This one keeps its shared secret, where the other webhook workflows dropped
-/// theirs. The address alone proves that whoever posted knew the URL; GitHub's
-/// `X-Hub-Signature-256` proves that GitHub posted it, and that the body has not
-/// been altered on the way. That is a stronger claim, and it is worth having
-/// here in particular because these deliveries cause writes to somebody's
-/// repositories — approving and merging pull requests — rather than merely
-/// filing a task somebody can ignore.
+/// What one person asked us to do with deliveries from a GitHub App installation.
 #[derive(Clone, Default, Serialize, Deserialize)]
 pub struct GitHubWebhookConfig {
     /// What to call this workflow, so it can be told apart from the others in a
@@ -83,12 +75,6 @@ pub struct GitHubWebhookConfig {
     /// [`crate::publishers::TodoistTarget`] makes for the same reason.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub connection: Option<automate_api::ConnectionId>,
-
-    /// The shared secret configured on the GitHub webhook, used to verify the
-    /// `X-Hub-Signature-256` HMAC. Deliveries are rejected when this is unset,
-    /// because the events it carries drive writes to your repositories.
-    #[serde(default)]
-    pub secret: String,
 
     /// How this workflow treats `pull_request` events, including whether it
     /// treats them at all.
@@ -114,7 +100,7 @@ impl Display for GitHubWebhookConfig {
     }
 }
 
-/// The entry point for GitHub's organization-level webhook.
+/// The job which processes one workflow's routed GitHub App delivery.
 ///
 /// GitHub delivers every event type to a single endpoint, so this job performs
 /// the work which is common to all of them - signature verification and event
@@ -126,8 +112,12 @@ pub struct GitHubWebhook;
 /// The setup notes shown while somebody is configuring one of these.
 const DOCUMENTATION: &str = r#"## What this does
 
-Listens to one GitHub organisation's (or repository's) webhook deliveries and
-acts on them as they arrive, rather than by polling. Two independent things can
+Listens to one GitHub App installation's deliveries and acts on them as they
+arrive, rather than by polling. Automate receives these through the webhook
+configured on the GitHub App and routes them by installation automatically;
+there is no webhook to configure for this workflow.
+
+Two independent things can
 be switched on, and both are off until you say otherwise:
 
 - **Auto-merge** turns on GitHub's own auto-merge for pull requests you select,
@@ -138,48 +128,6 @@ be switched on, and both are off until you say otherwise:
 
 With both off this workflow still keeps the GitHub notifications inbox in sync,
 which is the only thing it does without being asked.
-
-## Getting the address
-
-Save the workflow first. Its address is generated when it is created and shown
-on the workflow afterwards; there is nothing to paste into GitHub until then.
-
-Then, in GitHub:
-
-1. Go to the organisation's webhook settings at
-   `https://github.com/organizations/<org>/settings/hooks`, or a single
-   repository's at `https://github.com/<owner>/<repo>/settings/hooks`, and
-   choose **Add webhook**.
-2. Set **Payload URL** to this workflow's address.
-3. Set **Content type** to `application/json`. The form-encoded option will not
-   parse.
-4. Fill in **Secret** — see below.
-5. Under **Which events**, select the ones you actually want. Pull request
-   events feed auto-merge; issue comments, pull request reviews, assignments
-   and the Dependabot, code scanning and secret scanning alerts feed reminders.
-
-GitHub sends a `ping` when the webhook is created, which is accepted and
-ignored; a green tick in its **Recent Deliveries** tab means the address is
-right.
-
-## The webhook secret
-
-Unlike the other webhook workflows, this one insists on a shared secret. The
-address alone proves somebody knew the URL; GitHub's `X-Hub-Signature-256`
-header proves that *GitHub* sent the delivery and that nothing rewrote it on
-the way. That stronger claim is worth having here in particular, because these
-deliveries can approve and merge pull requests in your repositories rather than
-merely filing a task you can ignore.
-
-Generate a long random string, paste the same value into GitHub's **Secret**
-field and into **Webhook secret** here. They have to match exactly: GitHub
-computes the signature with its copy and we check it with ours. While this
-field is empty every delivery is refused, which fails closed rather than
-quietly accepting anything.
-
-See GitHub's notes on
-[validating webhook deliveries](https://docs.github.com/en/webhooks/using-webhooks/validating-webhook-deliveries)
-for what is being checked.
 
 ## Auto-merge
 
@@ -229,7 +177,7 @@ impl GitHubWebhook {
     /// body keyed with the webhook secret.
     ///
     /// See https://docs.github.com/en/webhooks/using-webhooks/validating-webhook-deliveries
-    fn verify_signature(
+    pub(crate) fn verify_signature(
         secret: &str,
         body: &str,
         signature_header: &str,
@@ -251,7 +199,7 @@ impl GitHubWebhook {
 
         let mut mac = HmacSha256::new_from_slice(secret.as_bytes()).wrap_user_err(
             "Failed to create HMAC instance with the provided secret.",
-            &["Ensure that you have provided a valid webhooks.github.secret in your configuration."],
+            &["Ensure that connections.github.app.webhook_secret is configured."],
         )?;
 
         mac.update(body.as_bytes());
@@ -259,7 +207,7 @@ impl GitHubWebhook {
         mac.verify_slice(&expected_signature).wrap_user_err(
             "Webhook signature verification failed (signatures did not match).".to_string(),
             &[
-                "Ensure that the configured webhooks.github.secret matches the secret set on the webhook in GitHub.",
+                "Ensure that connections.github.app.webhook_secret matches the secret set on the GitHub App webhook.",
             ],
         )?;
 
@@ -333,7 +281,7 @@ impl crate::workflows::ConfigurableWorkflow for GitHubWebhook {
                 "Reacts to what happens in your GitHub organisation, as it happens rather than on a poll."
                     .to_string(),
             documentation: DOCUMENTATION.to_string(),
-            trigger: WorkflowTrigger::Webhook {
+            trigger: WorkflowTrigger::RoutedWebhook {
                 source: "github".to_string(),
             },
             fields: [
@@ -359,16 +307,6 @@ impl crate::workflows::ConfigurableWorkflow for GitHubWebhook {
                     "Which installation of the GitHub App this workflow serves — the GitHub account you installed it on. Its deliveries are the ones this workflow handles, and its repositories are the ones auto-merge can write to.",
                 )
                 .required(),
-                FieldDescriptor::new(
-                    crate::config_path!(GitHubWebhookConfig: secret),
-                    "Webhook secret",
-                    FieldKind::Text {
-                        placeholder: Some("a long random string".into()),
-                    },
-                )
-                .with_help(
-                    "The secret you set on the webhook in GitHub. Unlike the other webhooks, this one is checked: these deliveries can approve and merge your pull requests, so we want proof that GitHub sent them and that nothing altered them on the way. Deliveries are ignored while this is empty.",
-                ),
             ]
             .into_iter()
             .chain(Self::auto_merge_fields())
@@ -548,36 +486,11 @@ impl Job for GitHubWebhook {
 
         let event = &job.event;
 
-        // Unlike the observability webhooks, GitHub deliveries cause us to write
-        // to repositories, so an unsigned delivery is rejected rather than
-        // trusted.
-        if config.secret.is_empty() {
-            warn!(
-                "Received a GitHub webhook for a workflow with no secret configured; rejecting request."
-            );
-            return Ok(());
-        }
-
-        let Some(signature) = Self::header(event, "x-hub-signature-256") else {
-            warn!(
-                "Received a GitHub webhook without an X-Hub-Signature-256 header; rejecting request."
-            );
-            return Ok(());
-        };
-
-        if let Err(err) = Self::verify_signature(&config.secret, &event.body, signature) {
-            warn!(
-                "Failed to verify GitHub webhook signature, rejecting request: {}",
-                err
-            );
-            return Ok(());
-        }
-
         // GitHub identifies each delivery with a GUID which is preserved across
         // its own retries, making it a natural idempotency key for the jobs we
         // fan out to.
-        let delivery =
-            Self::header(event, "x-github-delivery").map(|id| Cow::Owned(id.to_string()));
+        let delivery = Self::header(event, "x-github-delivery")
+            .map(|id| Cow::Owned(format!("{id}/{}", job.workflow)));
         let event_type = Self::header(event, "x-github-event").unwrap_or_default();
 
         if event_type == "ping" {
@@ -1193,7 +1106,7 @@ mod tests {
     /// is the difference between "switched off" and "written before this was
     /// configurable", and those have to behave the same way.
     async fn services_with(
-        secret: &str,
+        _legacy_secret: &str,
         auto_merge: serde_json::Value,
         attention: serde_json::Value,
     ) -> (
@@ -1210,7 +1123,6 @@ mod tests {
                 type_id: "github".into(),
                 config: serde_json::json!({
                     "name": "SierraSoftworks",
-                    "secret": secret,
                     "auto_merge": auto_merge,
                     "attention": attention,
                 }),
@@ -1247,7 +1159,6 @@ mod tests {
                 config: serde_json::json!({
                     "name": "SierraSoftworks",
                     "connection": connection,
-                    "secret": "secret",
                     "auto_merge": on(),
                     "attention": off(),
                 }),
@@ -1332,60 +1243,6 @@ mod tests {
     #[test]
     fn verify_signature_rejects_an_unprefixed_signature() {
         assert!(GitHubWebhook::verify_signature("secret", BODY, "deadbeef").is_err());
-    }
-
-    #[tokio::test]
-    async fn unsigned_deliveries_are_rejected() {
-        let (services, workflow) = services_with("secret", on(), on()).await;
-        let job = event(workflow, &[("X-GitHub-Event", "pull_request")]);
-
-        run(&services, &job)
-            .await
-            .expect("an unsigned delivery should be rejected without erroring");
-
-        assert_eq!(dispatched(&services).await, 0);
-    }
-
-    #[tokio::test]
-    async fn deliveries_are_rejected_while_the_workflow_has_no_secret() {
-        // The signature is the only thing telling us GitHub sent this rather
-        // than somebody who found the URL, and these deliveries can merge pull
-        // requests, so a workflow that cannot check one does nothing at all.
-        let (services, workflow) = services_with("", on(), on()).await;
-        let job = event(
-            workflow,
-            &[
-                ("X-GitHub-Event", "pull_request"),
-                ("X-Hub-Signature-256", &sign("secret", BODY)),
-            ],
-        );
-
-        run(&services, &job)
-            .await
-            .expect("an unverifiable delivery should be rejected without erroring");
-
-        assert_eq!(dispatched(&services).await, 0);
-        assert_eq!(refreshes(&services).await, 0);
-    }
-
-    #[tokio::test]
-    async fn a_delivery_signed_with_another_workflows_secret_is_rejected() {
-        // Each workflow now carries its own secret, so a delivery signed for one
-        // of somebody's organisations must not be accepted by another.
-        let (services, workflow) = services_with("secret", on(), on()).await;
-        let job = event(
-            workflow,
-            &[
-                ("X-GitHub-Event", "pull_request"),
-                ("X-Hub-Signature-256", &sign("a-different-secret", BODY)),
-            ],
-        );
-
-        run(&services, &job)
-            .await
-            .expect("a mis-signed delivery should be rejected without erroring");
-
-        assert_eq!(dispatched(&services).await, 0);
     }
 
     #[tokio::test]
@@ -2022,7 +1879,6 @@ mod tests {
             vec![
                 "name",
                 "connection",
-                "secret",
                 "auto_merge.enabled",
                 "auto_merge.filter",
                 "auto_merge.approve",

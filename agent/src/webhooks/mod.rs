@@ -13,6 +13,7 @@ mod tailscale;
 mod terraform;
 
 pub use github::{GitHubAttentionEvent, GitHubAttentionKind, GitHubPullRequestEvent};
+pub(crate) use github::{GitHubWebhook, GitHubWebhookConfig};
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct WebhookEvent {

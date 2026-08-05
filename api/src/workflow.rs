@@ -55,6 +55,13 @@ pub enum WorkflowTrigger {
         /// The provider whose payloads this accepts, e.g. `github`.
         source: String,
     },
+
+    /// Runs when a provider's shared webhook receives an event which belongs to
+    /// this workflow's selected connection.
+    RoutedWebhook {
+        /// The provider whose shared endpoint receives the payload.
+        source: String,
+    },
 }
 
 impl WorkflowTrigger {
@@ -62,7 +69,9 @@ impl WorkflowTrigger {
     pub fn partition(&self) -> String {
         match self {
             Self::Cron { .. } => "cron".to_string(),
-            Self::Webhook { source } => format!("webhooks/{source}"),
+            Self::Webhook { source } | Self::RoutedWebhook { source } => {
+                format!("webhooks/{source}")
+            }
         }
     }
 }
@@ -358,6 +367,13 @@ mod tests {
             .partition(),
             "webhooks/github"
         );
+        assert_eq!(
+            WorkflowTrigger::RoutedWebhook {
+                source: "github".into()
+            }
+            .partition(),
+            "webhooks/github"
+        );
     }
 
     #[test]
@@ -369,6 +385,14 @@ mod tests {
 
         assert_eq!(json["kind"], "webhook");
         assert_eq!(json["source"], "github");
+
+        let routed = serde_json::to_value(WorkflowTrigger::RoutedWebhook {
+            source: "github".into(),
+        })
+        .unwrap();
+
+        assert_eq!(routed["kind"], "routed_webhook");
+        assert_eq!(routed["source"], "github");
     }
 
     #[test]

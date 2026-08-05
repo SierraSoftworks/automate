@@ -362,6 +362,11 @@ pub struct GitHubAppConfig {
     /// The App's PEM-encoded private key, including its BEGIN and END lines.
     pub private_key: String,
 
+    /// The secret GitHub uses to sign deliveries sent to the App's shared
+    /// webhook endpoint.
+    #[serde(default)]
+    pub webhook_secret: String,
+
     /// The App's URL slug, used to build the link the install wizard sends
     /// people to.
     pub slug: String,
