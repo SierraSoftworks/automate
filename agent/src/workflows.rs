@@ -31,6 +31,16 @@ use crate::job::Job;
 
 /// A [`Job`] that a user can create instances of from the API.
 pub trait ConfigurableWorkflow: Job {
+    /// The shape of a stored configuration for this type.
+    ///
+    /// Usually the same as [`Job::JobType`], because a scheduled workflow is
+    /// dispatched by handing its configuration to its handler. They part company
+    /// when something other than a schedule starts the work: a webhook workflow
+    /// is handed a delivery, and its configuration is what says how to treat
+    /// one. Conflating the two made the queue payload and the form describe each
+    /// other, which is only true by coincidence.
+    type ConfigType: serde::Serialize + serde::de::DeserializeOwned + Send + 'static;
+
     /// The stable identifier this type is stored under, e.g. `rss`.
     ///
     /// Distinct from [`Job::partition`] because a partition is a routing detail
@@ -45,7 +55,7 @@ pub trait ConfigurableWorkflow: Job {
     ///
     /// Defaults to the type's own name, which suits the workflows that can only
     /// sensibly exist once.
-    fn describe(config: &Self::JobType) -> String {
+    fn describe(config: &Self::ConfigType) -> String {
         let _ = config;
         Self::descriptor().name
     }
@@ -98,8 +108,8 @@ where
 /// Shared by [`WorkflowType::validate`] and [`WorkflowType::describe`], so that
 /// the two cannot disagree about what a valid configuration is.
 trait DeserializeConfig: ConfigurableWorkflow {
-    fn deserialize(&self, config: &serde_json::Value) -> Result<Self::JobType, Error> {
-        <Self::JobType as serde::Deserialize>::deserialize(config).map_err(|err| {
+    fn deserialize(&self, config: &serde_json::Value) -> Result<Self::ConfigType, Error> {
+        <Self::ConfigType as serde::Deserialize>::deserialize(config).map_err(|err| {
             // serde's message names the offending field, which is the one thing
             // somebody fixing this actually needs, so it is passed through
             // rather than replaced with something tidier and less useful.
@@ -345,6 +355,8 @@ mod tests {
             }
         }
         impl ConfigurableWorkflow for Unnamed {
+            type ConfigType = ();
+
             fn type_id() -> &'static str {
                 "test-unnamed"
             }

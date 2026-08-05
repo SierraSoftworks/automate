@@ -33,6 +33,8 @@ crate::register_job!(XkcdWorkflow);
 crate::register_workflow_type!(XkcdWorkflow);
 
 impl crate::workflows::ConfigurableWorkflow for XkcdWorkflow {
+    type ConfigType = XkcdConfig;
+
     fn type_id() -> &'static str {
         "xkcd"
     }

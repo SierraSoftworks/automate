@@ -36,6 +36,8 @@ crate::register_job!(CalendarWorkflow);
 crate::register_workflow_type!(CalendarWorkflow);
 
 impl crate::workflows::ConfigurableWorkflow for CalendarWorkflow {
+    type ConfigType = CalendarWorkflowConfig;
+
     fn type_id() -> &'static str {
         "calendar"
     }

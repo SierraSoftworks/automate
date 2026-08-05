@@ -27,6 +27,8 @@ crate::register_job!(YnabStocksWorkflow);
 crate::register_workflow_type!(YnabStocksWorkflow);
 
 impl crate::workflows::ConfigurableWorkflow for YnabStocksWorkflow {
+    type ConfigType = YnabStocksConfig;
+
     fn type_id() -> &'static str {
         "ynab-stocks"
     }

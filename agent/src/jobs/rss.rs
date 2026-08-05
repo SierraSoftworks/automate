@@ -43,6 +43,8 @@ crate::register_job!(RssWorkflow);
 crate::register_workflow_type!(RssWorkflow);
 
 impl crate::workflows::ConfigurableWorkflow for RssWorkflow {
+    type ConfigType = RssConfig;
+
     fn type_id() -> &'static str {
         "rss"
     }

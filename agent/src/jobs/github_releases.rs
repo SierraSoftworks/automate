@@ -30,6 +30,8 @@ crate::register_job!(GitHubReleasesWorkflow);
 crate::register_workflow_type!(GitHubReleasesWorkflow);
 
 impl crate::workflows::ConfigurableWorkflow for GitHubReleasesWorkflow {
+    type ConfigType = GitHubReleasesConfig;
+
     fn type_id() -> &'static str {
         "github-releases"
     }

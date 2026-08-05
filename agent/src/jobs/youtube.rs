@@ -34,6 +34,8 @@ crate::register_job!(YouTubeWorkflow);
 crate::register_workflow_type!(YouTubeWorkflow);
 
 impl crate::workflows::ConfigurableWorkflow for YouTubeWorkflow {
+    type ConfigType = YouTubeConfig;
+
     fn type_id() -> &'static str {
         "youtube"
     }
