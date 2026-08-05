@@ -6,7 +6,7 @@ use yew::prelude::*;
 use yew_router::prelude::*;
 
 use crate::app::Route;
-use crate::components::{AppBar, PageTitle};
+use crate::components::{AppBar, PageTitle, SearchBar};
 use crate::fixtures;
 use crate::pages::Protected;
 use crate::search::{SearchContext, SearchFilter, SearchVocabulary, VocabularyContext};
@@ -39,13 +39,13 @@ impl PageActions {
 }
 
 /// The shared chrome for every admin view. It renders the persistent app bar
-/// (which hosts the unified search), the page-specific title, and gates the
+/// with primary navigation, the page-specific title and toolbar, and gates the
 /// routed page behind authentication — all within a single 1280px-wide content
 /// column. The search query is provided here so both the app bar input and the
 /// routed page can share it.
 #[function_component(AdminShell)]
 pub fn admin_shell(props: &AdminShellProps) -> Html {
-    // The shared search query. It lives here, above both the app bar (which owns
+    // The shared search query. It lives here, above both the toolbar (which owns
     // the input) and the routed page (which consumes the parsed filter), so the
     // page's per-second re-render never disturbs the input's focus.
     let query = use_state(String::new);
@@ -62,7 +62,7 @@ pub fn admin_shell(props: &AdminShellProps) -> Html {
     };
 
     // The completion vocabulary (partition names, keys, kinds) lives here too so
-    // the app bar can offer value completions for data owned by the routed page.
+    // the search bar can offer value completions for data owned by the routed page.
     // The page publishes it via `VocabularyContext::set`.
     let vocabulary = use_state(|| Rc::new(SearchVocabulary::default()));
     let set_vocabulary = {
@@ -91,18 +91,32 @@ pub fn admin_shell(props: &AdminShellProps) -> Html {
     // The shell is shared, so what it is a shell *for* has to come from the
     // route. Hard-coding one page's title here meant every other page claimed to
     // be the data browser.
-    let (title, subtitle) = match use_route::<Route>().unwrap_or(Route::Admin) {
+    let route = use_route::<Route>().unwrap_or(Route::Admin);
+    {
+        let query = query.clone();
+        use_effect_with(route.clone(), move |_| {
+            query.set(String::new());
+            || ()
+        });
+    }
+    let (title, subtitle, search_placeholder, search_autocomplete) = match &route {
         Route::Connections => (
             "Connections",
             "The services this account is linked to, and the credentials used to reach them.",
+            "Search connections…",
+            false,
         ),
         Route::Workflows => (
             "Workflows",
             "The things Automate watches for you, and what it does when they change.",
+            "Search workflows…",
+            false,
         ),
         _ => (
             "Admin",
             "Browse the key-value store and job queues across every partition.",
+            "Search… (try partition:cron or key:ynab)",
+            true,
         ),
     };
 
@@ -110,15 +124,19 @@ pub fn admin_shell(props: &AdminShellProps) -> Html {
         <ContextProvider<SearchContext> context={search}>
             <ContextProvider<VocabularyContext> context={vocabulary_ctx}>
                 <div class="app-shell">
-                    <AppBar />
+                    <AppBar><AdminNav /></AppBar>
                     <main class="app-main">
                         <div class="app-container">
                             <ContextProvider<PageActions> context={(*page_actions).clone()}>
                                 <Protected>
-                                    <PageTitle title={title} subtitle={subtitle}>
+                                    <PageTitle title={title} subtitle={subtitle} />
+                                    <div class="page-toolbar">
+                                        <SearchBar
+                                            placeholder={search_placeholder}
+                                            autocomplete={search_autocomplete}
+                                        />
                                         { (*actions).clone() }
-                                    </PageTitle>
-                                    <AdminNav />
+                                    </div>
                                     { props.children.clone() }
                                 </Protected>
                             </ContextProvider<PageActions>>

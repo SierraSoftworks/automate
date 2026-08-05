@@ -25,7 +25,7 @@ mod webhook_address;
 
 pub use admin_shell::{AdminShell, PageActions};
 pub use alert::{Alert, AlertKind};
-pub use app_bar::AppBar;
+pub use app_bar::{AppBar, SearchBar};
 pub use connect_menu::ConnectMenu;
 pub use connections_panel::ConnectionsPanel;
 pub use documentation::Documentation;

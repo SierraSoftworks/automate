@@ -306,15 +306,18 @@ pub async fn create_service_connection(
         .map_err(|err| ApiError::Server(err.to_string()))
 }
 
-/// Renames a linked service.
-#[allow(dead_code)]
-pub async fn rename_service_connection(
+/// Updates a linked service, optionally replacing its write-only API key.
+pub async fn update_service_connection(
     id: &str,
     name: &str,
+    key: Option<&str>,
 ) -> Result<ConnectionSummary, ApiError> {
-    demo!(fixtures::rename_service_connection(id, name).ok_or(not_found("connection")));
+    demo!(fixtures::update_service_connection(id, name, key).ok_or(not_found("connection")));
 
-    let body = serde_json::json!({ "name": name });
+    let body = match key.filter(|key| !key.trim().is_empty()) {
+        Some(key) => serde_json::json!({ "name": name, "key": key }),
+        None => serde_json::json!({ "name": name }),
+    };
     let response = send(
         Verb::Patch,
         &format!("/connections/{}", urlencode(id)),

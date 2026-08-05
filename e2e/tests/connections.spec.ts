@@ -65,6 +65,57 @@ test("a service linked with a pasted token appears in the list and can be unlink
   await expect(page.locator(".connection").filter({ hasText: name })).toHaveCount(0);
 });
 
+test("an API-key connection can be edited without revealing its existing credential", async ({
+  page,
+  request,
+}) => {
+  const name = uniqueName(NAME_PREFIX);
+  const renamed = uniqueName(`${NAME_PREFIX} renamed`);
+  const replacement = `e2e-replacement-${Math.random().toString(36).slice(2)}-do-not-echo`;
+
+  const created = await request.post("/api/v1/connections", {
+    data: { provider: "todoist", name, key: "e2e-original-key" },
+  });
+  expect(created.status()).toBe(201);
+
+  await gotoApp(page, "/admin/connections");
+  const row = page.locator(".connection").filter({ hasText: name });
+  await row.getByRole("button", { name: "Edit" }).click();
+
+  const form = page.getByRole("dialog", { name: `Edit ${name} connection` });
+  const key = form.getByLabel("New API key");
+  await expect(key).toHaveAttribute("type", "password");
+  await expect(key).toHaveValue("");
+  await expect(form.getByText("Write-only. Leave blank to keep the existing API key.")).toBeVisible();
+
+  await form.getByLabel("Name").fill(renamed);
+  await key.fill(replacement);
+  await form.getByRole("button", { name: "Save changes" }).click();
+
+  await expect(page.locator(".connection").filter({ hasText: renamed })).toHaveCount(1);
+  await expect(form).toHaveCount(0);
+  expect(await page.locator("body").innerText()).not.toContain(replacement);
+  expect(await page.content()).not.toContain(replacement);
+
+  const listed = await request.get("/api/v1/connections");
+  expect(await listed.text()).not.toContain(replacement);
+});
+
+test("a connection that needs reauthorization offers the reconnect workflow", async ({ page }) => {
+  await gotoApp(page, "/admin/connections?demo");
+
+  const row = page.locator(".connection").filter({ hasText: "Spotify" });
+  const reconnect = row.getByRole("button", { name: "Reconnect", exact: true });
+  await expect(row.locator("span.connection__status--warning")).toHaveText("Needs reconnecting");
+  await expect(row.getByRole("button", { name: "Needs reconnecting" })).toHaveCount(0);
+  await expect(row.getByRole("button", { name: "Edit" })).toHaveCount(0);
+
+  await reconnect.click();
+  await expect(row.getByRole("alert")).toContainText(
+    "Connecting an integration needs a running agent",
+  );
+});
+
 test("a token is never shown again once it has been saved", async ({ page }) => {
   // Credentials travel one way by design. If this ever fails, a token is
   // recoverable by anybody who can load the page — including from a cached
