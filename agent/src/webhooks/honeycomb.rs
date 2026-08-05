@@ -42,6 +42,53 @@ fn default_todoist_config() -> crate::publishers::TodoistTarget {
 
 pub struct HoneycombWebhook;
 
+/// The setup notes shown while somebody is configuring one of these.
+const DOCUMENTATION: &str = r#"## What this does
+
+Files a Todoist task when a Honeycomb trigger fires, linking to the query
+result so you can go and look at the traces that caused it. Tasks are raised at
+the highest priority, on the assumption that a trigger you configured is a
+trigger you meant.
+
+Only the firing edge is acted on: Honeycomb also posts when a trigger returns
+to normal, and those deliveries are ignored rather than completing anything.
+This type files tasks and never closes them.
+
+## Getting the address
+
+Save the workflow first. Its address is generated when it is created and shown
+on the workflow afterwards; there is nothing to paste into Honeycomb until
+then.
+
+Then, in Honeycomb:
+
+1. Under your team's **Integrations** settings, add a **Webhook** recipient.
+   Give it a name you will recognise and set its URL to this workflow's
+   address.
+2. Honeycomb's webhook recipients also offer a shared secret. Leave it empty —
+   it is not checked here. The address is unguessable and can be rotated, which
+   is what a shared secret would have been proving, and having two things to
+   keep in step means one of them eventually drifts.
+3. Open each trigger you want here and add that recipient to it.
+
+A recipient with no triggers attached delivers nothing, which is the usual
+reason a freshly configured workflow stays quiet.
+
+## Choosing which triggers to file
+
+The filter runs against each trigger and can match on `id` and `name` — the
+trigger's identifier and its display name as Honeycomb sends them. That is a
+deliberately small surface; if you need more than this, use several recipients
+in Honeycomb instead.
+
+```
+name startswith "prod:"
+```
+
+Leave it empty to file every trigger that fires, which is the sensible default
+when the recipient is only attached to triggers you chose.
+"#;
+
 crate::register_job!(HoneycombWebhook);
 crate::register_workflow_type!(HoneycombWebhook);
 
@@ -63,6 +110,7 @@ impl crate::workflows::ConfigurableWorkflow for HoneycombWebhook {
             id: Self::type_id().to_string(),
             name: "Honeycomb".to_string(),
             description: "Files a task when a Honeycomb trigger fires.".to_string(),
+            documentation: DOCUMENTATION.to_string(),
             trigger: WorkflowTrigger::Webhook {
                 // Must name the same partition this job consumes from, or a
                 // delivery would be queued somewhere nothing is reading.

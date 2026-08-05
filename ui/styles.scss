@@ -1439,6 +1439,83 @@ footer {
   }
 }
 
+// The setup guidance a workflow type ships with.
+.documentation {
+  margin: 0 0 1.25rem;
+
+  &__toggle {
+    padding: 0;
+    font-size: 0.8125rem;
+    font-weight: 500;
+    color: $brand;
+    background: none;
+    border: none;
+    text-decoration: underline;
+    cursor: pointer;
+
+    &:hover { color: $brand-dark; }
+  }
+
+  &__body {
+    margin-top: 0.75rem;
+    padding: 1rem 1.25rem;
+    font-size: 0.875rem;
+    line-height: 1.6;
+    color: $text-regular;
+    background: $brand-tint;
+    border: 1px solid $brand-tint-border;
+    border-radius: $radius;
+
+    h2, h3, h4 {
+      margin: 1.25rem 0 0.5rem;
+      font-size: 0.9375rem;
+      font-weight: 600;
+      color: $text-primary;
+
+      &:first-child { margin-top: 0; }
+    }
+
+    p { margin: 0 0 0.75rem; }
+    p:last-child { margin-bottom: 0; }
+
+    ul, ol {
+      margin: 0 0 0.75rem;
+      padding-left: 1.25rem;
+    }
+
+    li { margin-bottom: 0.25rem; }
+
+    a {
+      color: $brand;
+      text-decoration: underline;
+    }
+
+    code {
+      padding: 0.1rem 0.3rem;
+      font-family: $font-mono;
+      font-size: 0.8125rem;
+      background: $bg-white;
+      border: 1px solid $brand-tint-border;
+      border-radius: $radius-sm;
+    }
+
+    pre {
+      margin: 0 0 0.75rem;
+      padding: 0.75rem;
+      overflow-x: auto;
+      background: $bg-white;
+      border: 1px solid $brand-tint-border;
+      border-radius: $radius-sm;
+
+      code {
+        padding: 0;
+        border: none;
+        background: none;
+      }
+    }
+  }
+}
+
 // A form drawn from a workflow type's description rather than written by hand.
 .dynamic-form {
   display: flex;

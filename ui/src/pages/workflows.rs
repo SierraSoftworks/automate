@@ -18,7 +18,8 @@ use yew::prelude::*;
 use crate::api;
 use crate::components::dynamic_form::{set_at, value_at};
 use crate::components::{
-    Alert, AlertKind, Button, ButtonKind, DynamicForm, Field, FetchedOptions, Select, SelectOption,
+    Alert, AlertKind, Button, ButtonKind, Documentation, DynamicForm, Field, FetchedOptions, Select,
+    SelectOption,
     Switch, TextInput, WebhookAddress,
 };
 
@@ -445,6 +446,8 @@ fn render_new_form(
     html! {
         <>
                 <p class="workflows__form-description">{ descriptor.description.clone() }</p>
+
+                <Documentation markdown={descriptor.documentation.clone()} />
 
                 if let Some(message) = (**error).clone() {
                     <Alert

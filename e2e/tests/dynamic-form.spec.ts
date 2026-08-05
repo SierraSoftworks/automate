@@ -133,3 +133,38 @@ test("a connection picker offers the accounts that have actually been linked", a
   const picker = form.getByLabel("Todoist account");
   await expect(picker.getByRole("option", { name: connection.name })).toHaveCount(1);
 });
+
+test("a workflow type explains how to set one up, without getting in the way of the form", async ({
+  page,
+}) => {
+  // The guidance is the difference between a form somebody can fill in and one
+  // they have to guess at — a webhook type in particular is useless until you
+  // know where in the provider's interface the address goes. It starts
+  // collapsed, because somebody adding their fourth feed should not have to
+  // scroll past an explanation of RSS to reach the fields.
+  await gotoApp(page, "/admin/workflows");
+
+  const form = page.locator(".workflows__form");
+  await form.getByLabel("What should it watch?").selectOption({ label: "RSS Feed" });
+
+  const guidance = form.locator(".documentation");
+  await expect(guidance.getByRole("button", { name: "How does this work?" })).toBeVisible();
+  await expect(guidance.locator(".documentation__body")).toBeHidden();
+
+  await guidance.getByRole("button", { name: "How does this work?" }).click();
+
+  const body = guidance.locator(".documentation__body");
+  await expect(body).toBeVisible();
+
+  // Rendered as Markdown rather than shown as its source.
+  await expect(body.locator("h2, h3, p").first()).toBeVisible();
+  await expect(body).not.toContainText("##");
+
+  // Links leave for someone else's site, so they must not take the half-filled
+  // form with them.
+  const links = body.locator("a");
+  for (let i = 0; i < (await links.count()); i++) {
+    await expect(links.nth(i)).toHaveAttribute("target", "_blank");
+    await expect(links.nth(i)).toHaveAttribute("rel", /noopener/);
+  }
+});

@@ -26,6 +26,57 @@ impl Display for GitHubReleasesConfig {
 #[derive(Clone)]
 pub struct GitHubReleasesWorkflow;
 
+/// The setup notes shown while somebody is configuring one of these.
+const DOCUMENTATION: &str = r#"## What this does
+
+Watches one repository's releases and files a Todoist task for each new one,
+carrying the release notes into the task's body so you can decide whether an
+upgrade is worth your afternoon without opening GitHub.
+
+The first run files every release on the repository's first page of results —
+up to thirty of them — rather than only what appears afterwards. Every run
+after that only sees releases published since the newest one it has seen, so
+the burst happens once.
+
+## Naming the repository
+
+**Repository** is `owner/name` as it appears in the repository's own address —
+`SierraSoftworks/automate` for `https://github.com/SierraSoftworks/automate`.
+Not the full URL, and not a display name.
+
+Only repositories the agent can read are usable. A public repository needs
+nothing further; a private one needs a GitHub API token configured on the
+installation as `connections.github.api_key`, and will otherwise fail every run
+with a not-found error, which is what GitHub returns rather than admitting the
+repository exists.
+
+This is a poll, not a subscription: no webhook is set up on the repository and
+nothing is written to it, so you do not need any access beyond reading.
+
+## Choosing which releases to file
+
+The filter runs against each release and can match on `tag`, `name`,
+`published`, `link`, `draft` and `prerelease`. The two worth knowing about are
+the booleans — plenty of projects cut release candidates far more often than
+releases, and a task per candidate is how a useful workflow becomes noise.
+
+```
+prerelease == false && draft == false
+```
+
+Matching on the tag is the other common case, for repositories that release
+several components from one place:
+
+```
+tag startswith "cli/"
+```
+
+## Scheduling
+
+This polls the GitHub API, which is rate limited, so a failed run backs off for
+an hour before it tries again. `@daily` suits most repositories.
+"#;
+
 crate::register_job!(GitHubReleasesWorkflow);
 crate::register_workflow_type!(GitHubReleasesWorkflow);
 
@@ -47,6 +98,7 @@ impl crate::workflows::ConfigurableWorkflow for GitHubReleasesWorkflow {
             id: <Self as crate::workflows::ConfigurableWorkflow>::type_id().to_string(),
             name: "GitHub Releases".to_string(),
             description: "Files a task for each new release of a repository.".to_string(),
+            documentation: DOCUMENTATION.to_string(),
             trigger: WorkflowTrigger::Cron {
                 default_schedule: "@daily".to_string(),
             },

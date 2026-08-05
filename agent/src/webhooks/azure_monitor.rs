@@ -45,6 +45,58 @@ fn default_todoist_config() -> crate::publishers::TodoistTarget {
 
 pub struct AzureMonitorWebhook;
 
+/// The setup notes shown while somebody is configuring one of these.
+const DOCUMENTATION: &str = r#"## What this does
+
+Files a Todoist task when an Azure Monitor alert fires, and completes it when
+the alert resolves. Both are keyed on the alert's id, so a flapping alert
+reuses one task rather than leaving a trail of them. The task links back to the
+alert in the Azure portal and its priority follows the alert's severity, with
+Sev0 raised most urgently.
+
+## Getting the address
+
+Save the workflow first. Its address is generated when it is created and shown
+on the workflow afterwards; there is nothing to paste into Azure until then.
+
+Then, in the Azure portal, open **Monitor → Alerts → Action groups** and
+either create a group or edit an existing one:
+
+1. Under **Actions**, add an action of type **Webhook**.
+2. Set the URI to this workflow's address.
+3. Turn **Enable the common alert schema** on.
+4. Attach the action group to the alert rules whose alerts you want here.
+
+Step 3 is not optional. Without the common alert schema, Azure sends a
+different payload shape for every monitor service — metric alerts, log alerts
+and Service Health each have their own — and none of them will parse. If
+nothing at all is arriving, that toggle is the first thing to check.
+
+## Choosing which alerts to file
+
+The filter runs against each alert and can match on `alert_id`, `alert_rule`,
+`severity`, `monitor_condition`, `monitor_service` and `alert_target_ids`.
+
+`severity` is the number from Azure's `Sev0` to `Sev4`, so a *smaller* value is
+more urgent and a `<=` comparison is what you want:
+
+```
+severity <= 1
+```
+
+`alert_target_ids` is a list of the affected resource ids, so membership works
+for scoping a workflow to one resource:
+
+```
+"/subscriptions/.../resourceGroups/prod/providers/..." in alert_target_ids
+```
+
+Leave the filter empty to file every alert the action group sends. Note that
+the filter is only consulted when an alert fires — a resolution always
+completes its task, so tightening the filter later cannot strand a task that is
+already open.
+"#;
+
 crate::register_job!(AzureMonitorWebhook);
 crate::register_workflow_type!(AzureMonitorWebhook);
 
@@ -68,6 +120,7 @@ impl crate::workflows::ConfigurableWorkflow for AzureMonitorWebhook {
             description:
                 "Files a task when an Azure Monitor alert fires, and completes it when the alert resolves."
                     .to_string(),
+            documentation: DOCUMENTATION.to_string(),
             trigger: WorkflowTrigger::Webhook {
                 // Must name the same partition this job consumes from, or a
                 // delivery would be queued somewhere nothing is reading.

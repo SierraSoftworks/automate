@@ -10,6 +10,7 @@ mod app_bar;
 mod connect_menu;
 mod connections_panel;
 mod entity;
+mod documentation;
 pub mod dynamic_form;
 mod form;
 mod helpers;
@@ -26,6 +27,7 @@ pub use app_bar::AppBar;
 pub use connect_menu::ConnectMenu;
 pub use connections_panel::ConnectionsPanel;
 pub use entity::{DbEntity, EntityMetadata};
+pub use documentation::Documentation;
 pub use dynamic_form::{DynamicForm, FetchedOptions};
 #[allow(unused_imports)]
 pub use form::{

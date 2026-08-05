@@ -241,6 +241,32 @@ pub struct WorkflowTypeDescriptor {
     /// A sentence describing what workflows of this type do.
     pub description: String,
 
+    /// The setup notes shown alongside the form, as Markdown.
+    ///
+    /// Markdown rather than a plain string because of what setting one of these
+    /// up actually involves. Pointing a provider at a workflow means reading a
+    /// paragraph of prose, following a link into that provider's own settings,
+    /// and copying a filter expression that has to survive being read
+    /// character-for-character. A `String` can carry the words but not the link
+    /// or the code block, and a form that cannot show either sends people to
+    /// search the web for the half of the instructions it left out.
+    ///
+    /// Every one of these is written here, in this crate, by whoever added the
+    /// workflow type. None of it is ever supplied by a user, at any point —
+    /// there is no field that collects it and no path that stores it. That is
+    /// what makes it safe for the browser to render as HTML: the text is source
+    /// code that shipped with the agent, so trusting it is the same act as
+    /// trusting the rest of the binary.
+    ///
+    /// Distinct from [`WorkflowTypeDescriptor::description`], which is the
+    /// one-line summary shown against this type in a menu of them. That one has
+    /// to fit on a row; this one has to explain a setup. Collapsing them would
+    /// mean either a menu of paragraphs or instructions of one sentence.
+    ///
+    /// Headings start at `##`, because the page supplies the title.
+    #[serde(default)]
+    pub documentation: String,
+
     pub trigger: WorkflowTrigger,
 
     pub fields: Vec<FieldDescriptor>,
@@ -419,6 +445,50 @@ mod tests {
         assert!(json.get("help").is_none());
         assert!(json.get("default").is_none());
         assert_eq!(json["required"], false);
+    }
+
+    #[test]
+    fn a_type_carries_its_setup_notes_alongside_its_one_line_summary() {
+        // The two are separate fields on the wire because they are shown in
+        // different places: the summary in a menu of types, the notes beside the
+        // form. A renderer that found only one of them would have to guess which.
+        let descriptor = WorkflowTypeDescriptor {
+            id: "rss".into(),
+            name: "RSS Feed".into(),
+            description: "Watches a feed and files a task for each new entry.".into(),
+            documentation: "## Finding the feed\n\nUse the feed's own address.".into(),
+            trigger: WorkflowTrigger::Cron {
+                default_schedule: "@daily".into(),
+            },
+            fields: vec![],
+        };
+
+        let json = serde_json::to_value(&descriptor).unwrap();
+        assert_eq!(
+            json["description"],
+            "Watches a feed and files a task for each new entry.",
+        );
+        assert_eq!(
+            json["documentation"],
+            "## Finding the feed\n\nUse the feed's own address.",
+        );
+    }
+
+    #[test]
+    fn a_descriptor_written_before_setup_notes_existed_still_loads() {
+        // Descriptors are served rather than compiled in, so a stored or cached
+        // one from an older agent has to load with nothing to show rather than
+        // failing and taking the whole list of types with it.
+        let stored = serde_json::json!({
+            "id": "rss",
+            "name": "RSS Feed",
+            "description": "Watches a feed and files a task for each new entry.",
+            "trigger": { "kind": "cron", "default_schedule": "@daily" },
+            "fields": [],
+        });
+
+        let descriptor: WorkflowTypeDescriptor = serde_json::from_value(stored).unwrap();
+        assert!(descriptor.documentation.is_empty());
     }
 
     #[test]

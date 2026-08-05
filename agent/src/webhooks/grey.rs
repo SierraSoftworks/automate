@@ -164,6 +164,75 @@ fn default_todoist_config() -> crate::publishers::TodoistTarget {
 #[derive(Clone)]
 pub struct GreyWebhook;
 
+/// The setup notes shown while somebody is configuring one of these.
+const DOCUMENTATION: &str = r#"## What this does
+
+Turns the state changes reported by
+[Grey](https://github.com/SierraSoftworks/grey) into a single Todoist task per
+monitor that tells a coherent story: raised when the monitor goes unhealthy,
+updated when it recovers, and closed out afterwards if the incident turned out
+not to matter. One monitor is one task, so a flapping probe does not produce a
+task per flap.
+
+What it deliberately does *not* do is tell you immediately. Monitors blip, and
+an alert for every blip is an alert nobody reads, so the three waiting periods
+below decide what actually reaches you.
+
+## Getting the address
+
+Save the workflow first. Its address is generated when it is created and shown
+on the workflow afterwards; there is nothing to paste into Grey until then.
+
+Then add a webhook to Grey's own configuration pointing at that address, and
+restart or reload Grey so it picks the change up. Grey's `docs/guide/webhooks.md`
+in [its repository](https://github.com/SierraSoftworks/grey) describes the
+configuration block and the payload it sends.
+
+There is no shared secret to configure. The address is unguessable and can be
+rotated, which is what Grey's HMAC would have been proving.
+
+**Status page** is optional and purely cosmetic: when set, each task links back
+to it so you can see the wider picture without hunting for the address.
+
+## The three waiting periods
+
+These are what turn a stream of state changes into something worth reading.
+
+**Wait before alerting** (default 5 minutes) is how long a monitor has to stay
+unhealthy before you hear about it. The task is scheduled that far ahead rather
+than created immediately, so a monitor that recovers inside the window has its
+pending alert quietly withdrawn and never becomes a task at all.
+
+**Wait before confirming recovery** (default 60 minutes) is how long a monitor
+has to stay healthy before the incident is treated as over. A relapse inside
+this window is recognised as the same incident and re-escalated immediately,
+rather than starting the alert delay again — an operator is already watching
+it, so making them wait five more minutes helps nobody.
+
+**Keep incidents longer than** (default 5 minutes) decides what happens once a
+monitor recovers. Incidents shorter than this are completed for you; anything
+longer stays in Todoist for you to review, with the total impact time recorded
+on it. Grey debounces recovery internally for five minutes, and that five
+minutes is discounted before this comparison, so the duration you are setting a
+threshold against is real impact rather than Grey's settling window.
+
+## Choosing which monitors to act on
+
+The filter runs against each state change and can match on `event`,
+`entity.type`, `entity.name`, `state.current`, `state.previous`,
+`state.healthy`, `state.was_healthy` and `state.availability`. A monitor's own
+tags are available as `tags.<name>` (or `entity.tags.<name>`), which is usually
+the most useful of the lot:
+
+```
+entity.type == "probe" && tags.environment == "production"
+```
+
+Leave it empty to act on every change Grey reports. Be careful narrowing it
+after the fact: a filter that admits the unhealthy event but rejects the
+recovery leaves a task open with nothing to close it.
+"#;
+
 crate::register_job!(GreyWebhook);
 crate::register_workflow_type!(GreyWebhook);
 
@@ -186,6 +255,7 @@ impl crate::workflows::ConfigurableWorkflow for GreyWebhook {
             name: "Grey".to_string(),
             description: "Raises a task when one of your Grey monitors goes unhealthy, and closes the story out when it recovers."
                 .to_string(),
+            documentation: DOCUMENTATION.to_string(),
             trigger: WorkflowTrigger::Webhook {
                 source: "grey".to_string(),
             },

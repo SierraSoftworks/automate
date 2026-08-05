@@ -50,6 +50,63 @@ fn default_todoist_config() -> TodoistTarget {
 
 pub struct TerraformWebhook;
 
+/// The setup notes shown while somebody is configuring one of these.
+const DOCUMENTATION: &str = r#"## What this does
+
+Files a Todoist task for each notification a Terraform Cloud workspace sends —
+a run that errored, a run waiting for confirmation, a drift assessment that
+found something. The task links to the run and quotes the notification's own
+messages, so you can tell whether it needs you before opening Terraform.
+
+Priority follows the trigger: errored runs, runs needing attention and failed
+or drifted assessments are raised urgently, completed runs are filed quietly,
+and everything else lower still.
+
+## Getting the address
+
+Save the workflow first. Its address is generated when it is created and shown
+on the workflow afterwards; there is nothing to paste into Terraform until
+then.
+
+Then, in Terraform Cloud, open the workspace, go to **Settings →
+Notifications**, and add a notification configuration:
+
+1. Choose **Webhook** as the destination.
+2. Set the **Webhook URL** to this workflow's address.
+3. Fill in **Token** — see below.
+4. Select the triggers you want. Runs and assessments are both supported.
+
+HashiCorp's
+[notification documentation](https://developer.hashicorp.com/terraform/cloud-docs/workspaces/settings/notifications)
+covers the same ground from their side, including the verification request they
+send when the configuration is saved.
+
+## The HMAC token
+
+Terraform signs each notification with an HMAC over the body and sends the
+digest in `X-TFE-Notification-Signature`. Checking it proves that Terraform
+sent the delivery and that nothing rewrote the payload on the way, which the
+address on its own cannot: a delivery that lies about which workspace drifted
+or which run failed is worth as little as no delivery at all.
+
+Generate a long random string, paste the same value into Terraform's **Token**
+field and into **HMAC token** here. They have to match exactly, since Terraform
+computes the signature with its copy and we check it with ours.
+
+**A workflow with no token refuses every delivery.** An empty token is not
+treated as "skip the check" — that would leave a workflow silently
+unauthenticated at exactly the moment somebody forgot to finish setting it up,
+so a missing token fails closed instead. It also means the check cannot be
+turned off by clearing the field.
+
+## Where the tasks go
+
+There is no filter on this type: every notification Terraform is configured to
+send becomes a task, so choose the triggers on the Terraform side rather than
+here. The Todoist fields decide which account, project and section they land
+in.
+"#;
+
 impl TerraformWebhook {
     /// Verifies the `X-TFE-Notification-Signature` header, which Terraform Cloud
     /// populates with the hex-encoded HMAC-SHA512 of the raw request body, keyed
@@ -121,6 +178,7 @@ impl crate::workflows::ConfigurableWorkflow for TerraformWebhook {
             name: "Terraform Cloud".to_string(),
             description: "Files a task for each notification a Terraform Cloud workspace sends."
                 .to_string(),
+            documentation: DOCUMENTATION.to_string(),
             trigger: WorkflowTrigger::Webhook {
                 // Must name the same partition this job consumes from, or a
                 // delivery would be queued somewhere nothing is reading.

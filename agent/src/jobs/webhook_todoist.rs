@@ -97,6 +97,72 @@ impl Display for WebhookTodoistTask {
 #[derive(Clone)]
 pub struct WebhookTodoistWorkflow;
 
+/// The setup notes shown while somebody is configuring one of these.
+const DOCUMENTATION: &str = r#"## What this does
+
+Gives you an address to post JSON at, and files a Todoist task for each
+delivery that arrives. Unlike the other webhook types, this one knows nothing
+about the sender: the body is parsed as JSON and handed straight to your filter
+and your templates, which address it by path. That is what makes it the right
+choice for a service Automate has never heard of — your CI, your doorbell, an
+internal tool nobody outside your company has heard of.
+
+Deliveries whose body is not JSON are discarded with a line in the log, because
+there is nothing this workflow could do with them.
+
+## Getting the address
+
+Save the workflow first. Its address is generated when it is created, and is
+shown on the workflow afterwards — there is nothing to copy in beforehand, and
+the field you would paste it into does not exist until then.
+
+The address is the only thing standing between this endpoint and anybody who
+found it, so treat it as a credential: put it wherever the sender keeps its
+secrets rather than in a checked-in config file, and rotate it if it leaks.
+Rotation gives the workflow a new address and immediately stops the old one
+working, so plan to update the sender at the same time.
+
+Configure the sender to `POST` to it with a JSON body. No particular content
+type, header or signature is required.
+
+## Writing the title and description
+
+Both are templates. Write `${{ some.path }}` to insert a value from the
+delivery's body, addressed by dotted path:
+
+```
+[${{ repository.name }}] deployed to ${{ deployment.environment }}
+```
+
+A path that is not present renders as nothing rather than failing the delivery,
+since a sender is free to omit fields and a missing one should not cost you the
+notification. Rendered output is length-capped, so a template aimed at a large
+field cannot produce an unbounded task.
+
+## Choosing which deliveries to file
+
+The filter uses the same dotted paths. There are no suggestions to offer here,
+because only you know what your sender posts — send yourself one delivery and
+look at it before writing this.
+
+```
+action == "completed" && conclusion != "success"
+```
+
+Two things to know about how JSON maps onto the filter. Arrays become lists, so
+membership works:
+
+```
+"bug" in issue.labels
+```
+
+Objects do not: a path that stops at an object is treated as absent, so filter
+on `issue.title` rather than on `issue`. An array of objects is likewise a list
+of nothings.
+
+Leave the filter empty to file every delivery.
+"#;
+
 crate::register_job!(WebhookTodoistWorkflow);
 crate::register_workflow_type!(WebhookTodoistWorkflow);
 
@@ -119,6 +185,7 @@ impl crate::workflows::ConfigurableWorkflow for WebhookTodoistWorkflow {
             name: "Webhook".to_string(),
             description: "Files a task when something posts to this workflow's own URL."
                 .to_string(),
+            documentation: DOCUMENTATION.to_string(),
             trigger: WorkflowTrigger::Webhook {
                 source: "generic".to_string(),
             },

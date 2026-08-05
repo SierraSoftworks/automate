@@ -52,6 +52,52 @@ fn default_todoist_config() -> crate::publishers::TodoistTarget {
 
 pub struct GrafanaWebhook;
 
+/// The setup notes shown while somebody is configuring one of these.
+const DOCUMENTATION: &str = r#"## What this does
+
+Files a Todoist task when a Grafana alert starts firing, and completes that
+same task when the alert resolves. Both halves are keyed on the alert rule, so
+an alert that fires, resolves and fires again reuses one task rather than
+leaving a trail of them.
+
+The task links to the alert's dashboard where the payload names one, and its
+body carries the alert's `summary` annotation. Priority comes from the alert's
+`severity` label: `critical` is raised urgently, then `error`, then `warning`,
+and anything else lowest. Labelling your rules is therefore worth doing, or
+everything arrives at the same priority.
+
+## Getting the address
+
+Save the workflow first. Its address is generated when it is created and shown
+on the workflow afterwards; there is nothing to paste into Grafana until then.
+
+Then, in Grafana, go to **Alerting → Contact points → Add contact point**,
+choose the **Webhook** integration, and set its URL to this workflow's address.
+Leave the HTTP method as `POST`. No authentication is needed — the address is
+unguessable and can be rotated, which is the same protection a bearer token
+would have given while being one fewer thing to keep in step.
+
+A contact point on its own delivers nothing. Add a notification policy (or a
+rule-level routing) that sends the alerts you care about to it, then use
+Grafana's **Test** button to confirm a delivery arrives.
+
+## Choosing which alerts to file
+
+The filter runs against the whole delivery and can match on `receiver`,
+`status`, `org_id`, `title`, `state`, `message` and `alerts.status`. Leaving it
+empty files every alert Grafana routes here, which is reasonable if the
+notification policy is already doing the selecting.
+
+```
+state == "alerting" && title contains "production"
+```
+
+Note that a filter which rejects a delivery rejects it in both directions: if a
+firing alert was filed and its resolution does not match the same filter, the
+task will not be completed. Filter on things that do not change between the two
+— the rule, the folder, the environment — rather than on the status.
+"#;
+
 crate::register_job!(GrafanaWebhook);
 crate::register_workflow_type!(GrafanaWebhook);
 
@@ -75,6 +121,7 @@ impl crate::workflows::ConfigurableWorkflow for GrafanaWebhook {
             description:
                 "Files a task when a Grafana alert starts firing, and completes it when the alert resolves."
                     .to_string(),
+            documentation: DOCUMENTATION.to_string(),
             trigger: WorkflowTrigger::Webhook {
                 // Must name the same partition this job consumes from, or a
                 // delivery would be queued somewhere nothing is reading.

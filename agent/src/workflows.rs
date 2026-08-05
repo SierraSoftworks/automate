@@ -309,6 +309,34 @@ mod tests {
     }
 
     #[test]
+    fn every_registered_type_explains_how_to_set_one_up() {
+        // A descriptor says what to ask for; it does not say where to find the
+        // answers. Pointing a provider at a workflow means knowing which of that
+        // provider's several settings pages to open and what to paste where, and
+        // a type that ships without saying so leaves everybody who creates one to
+        // go and search for it.
+        for (type_id, workflow) in registry() {
+            let documentation = workflow.descriptor().documentation;
+
+            assert!(
+                !documentation.trim().is_empty(),
+                "'{type_id}' has no documentation. Add a `documentation` to its descriptor covering what it produces, where the thing it needs comes from, and what its options change.",
+            );
+
+            let first = documentation
+                .lines()
+                .find(|line| !line.trim().is_empty())
+                .unwrap_or_default()
+                .trim_start();
+
+            assert!(
+                !(first.starts_with("# ") || first == "#"),
+                "'{type_id}' opens its documentation with a top-level '#' heading. The page already shows the type's name above this, so demote every heading by one and start at '##'.",
+            );
+        }
+    }
+
+    #[test]
     fn looking_up_an_unknown_type_says_so_rather_than_panicking() {
         let Err(err) = lookup("not-a-real-workflow-type") else {
             panic!("an unknown workflow type should not resolve to a handler");
@@ -365,6 +393,7 @@ mod tests {
                     id: <Self as ConfigurableWorkflow>::type_id().to_string(),
                     name: "Unnamed".to_string(),
                     description: String::new(),
+                    documentation: String::new(),
                     trigger: automate_api::WorkflowTrigger::Cron {
                         default_schedule: "@daily".to_string(),
                     },

@@ -47,6 +47,66 @@ fn default_todoist_config() -> crate::publishers::TodoistTarget {
 #[derive(Clone)]
 pub struct SentryAlertsWebhook;
 
+/// The setup notes shown while somebody is configuring one of these.
+const DOCUMENTATION: &str = r#"## What this does
+
+Files a Todoist task when Sentry reports a newly created issue or fires an
+issue alert. The task's title carries the issue's short id and links to it in
+Sentry; its body is the culprit — the function or file Sentry blamed — so a
+glance is usually enough to decide whether it needs you now.
+
+Priority follows the issue's level: `fatal` and `error` are raised, `warning`
+sits below them, and `info` and `debug` lowest.
+
+## Two payload shapes
+
+Sentry has two entirely different ways of posting to a webhook, and this
+workflow accepts both:
+
+- An **internal integration** posts *issue* events, and only those whose action
+  is `created` are filed. Sentry re-notifies as an issue is assigned, resolved
+  and ignored, and a task per update would bury the one that said the error was
+  new.
+- An **issue alert rule** with a webhook action posts a different document
+  entirely, describing the alert rather than the issue. Those are filed as they
+  arrive, since the alert rule has already done the selecting.
+
+Which one you set up decides what the filter can see, so it is worth knowing
+which you configured.
+
+## Getting the address
+
+Save the workflow first. Its address is generated when it is created and shown
+on the workflow afterwards; there is nothing to paste into Sentry until then.
+
+Then, in Sentry, either:
+
+- **For issue events**: open your organisation's settings, go to *Developer
+  Settings* → **Custom Integrations**, create an internal integration, set its
+  webhook URL to this workflow's address, and subscribe it to **issue**
+  events; or
+- **For alerts**: open **Alerts**, edit or create an issue alert rule, and add
+  a *Send a notification via a webhook* action pointing at this workflow's
+  address.
+
+Sentry signs its deliveries, but nothing is checked here: the address is
+unguessable and can be rotated, which is what a signature would have been
+proving, and one thing to keep in step is better than two.
+
+## Choosing which issues to file
+
+The filter runs against each delivery. Both shapes answer to `issue_id`,
+`issue_title`, `issue_level` and `project_name`. Only the integration payload
+carries `action`, `issue_type` and `project_platform`, so a filter naming those
+will silently reject every alert-rule delivery.
+
+```
+issue_level in ["fatal", "error"]
+```
+
+Leave it empty to file everything Sentry sends here.
+"#;
+
 crate::register_job!(SentryAlertsWebhook);
 crate::register_workflow_type!(SentryAlertsWebhook);
 
@@ -69,6 +129,7 @@ impl crate::workflows::ConfigurableWorkflow for SentryAlertsWebhook {
             name: "Sentry".to_string(),
             description: "Files a task when Sentry reports a new issue or fires an alert."
                 .to_string(),
+            documentation: DOCUMENTATION.to_string(),
             trigger: WorkflowTrigger::Webhook {
                 source: "sentry".to_string(),
             },

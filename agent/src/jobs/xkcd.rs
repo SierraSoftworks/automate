@@ -29,6 +29,40 @@ impl Display for XkcdConfig {
 #[derive(Clone)]
 pub struct XkcdWorkflow;
 
+/// The setup notes shown while somebody is configuring one of these.
+const DOCUMENTATION: &str = r#"## What this does
+
+Watches [xkcd](https://xkcd.com/) and files a Todoist task for each new comic,
+with the comic itself embedded in the task's body along with its hover text —
+which is half the joke, and the half most feed readers drop.
+
+There is nothing to point this at. The feed it reads is
+[xkcd's own](https://xkcd.com/rss.xml), so the only decisions are where the
+tasks go and how often to look. There is also no reason to have two of these:
+they would read the same feed and share the same record of what has been seen,
+so the second one would find nothing to file.
+
+The first run files every comic currently in the feed — four of them, as xkcd
+publishes it — rather than only what arrives afterwards.
+
+## Scheduling
+
+This polls rather than being pushed to, so the schedule is what decides how
+soon a new comic reaches you. xkcd publishes on Mondays, Wednesdays and
+Fridays, so `@daily` is enough; anything faster only adds requests.
+
+## Choosing which comics to file
+
+The filter runs against each comic and can match on `title`, `url` and
+`has_image`. Leaving it empty files every comic, which is the usual answer.
+The one case worth a filter is the occasional interactive comic that has no
+image to embed:
+
+```
+has_image == true
+```
+"#;
+
 crate::register_job!(XkcdWorkflow);
 crate::register_workflow_type!(XkcdWorkflow);
 
@@ -46,6 +80,7 @@ impl crate::workflows::ConfigurableWorkflow for XkcdWorkflow {
             id: <Self as crate::workflows::ConfigurableWorkflow>::type_id().to_string(),
             name: "XKCD".to_string(),
             description: "Files a task for each new XKCD comic.".to_string(),
+            documentation: DOCUMENTATION.to_string(),
             trigger: WorkflowTrigger::Cron {
                 default_schedule: "@daily".to_string(),
             },

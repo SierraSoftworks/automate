@@ -738,6 +738,7 @@ mod tests {
                 id: <Self as ConfigurableWorkflow>::type_id().to_string(),
                 name: "Half Broken".to_string(),
                 description: "Exists only so that a refused entry can be tested.".to_string(),
+                documentation: "## Not a real workflow\n\nThis type exists so that a stored configuration the handler refuses can be tested.".to_string(),
                 trigger: WorkflowTrigger::Cron {
                     default_schedule: "@daily".to_string(),
                 },

@@ -47,6 +47,55 @@ fn default_todoist_config() -> crate::publishers::TodoistTarget {
 #[derive(Clone)]
 pub struct TailscaleWebhook;
 
+/// The setup notes shown while somebody is configuring one of these.
+const DOCUMENTATION: &str = r#"## What this does
+
+Files a Todoist task for each event your tailnet reports, using Tailscale's own
+wording as the title and quoting the event's payload into the body so it can be
+triaged without going to look. Tailscale batches events, so one delivery can
+produce several tasks.
+
+Priority follows what the event means for you. Things that block somebody — a
+node or user waiting for approval, an expired node key, IP forwarding that is
+not enabled — are raised urgently. Policy updates, new nodes and user changes
+are filed normally. Deletions and webhook changes lower still.
+
+## Getting the address
+
+Save the workflow first. Its address is generated when it is created and shown
+on the workflow afterwards; there is nothing to paste into Tailscale until
+then.
+
+Then, in the [Tailscale admin console](https://login.tailscale.com/admin), open
+**Settings → Webhooks** and add a webhook endpoint:
+
+1. Set the endpoint URL to this workflow's address.
+2. Choose the event types to subscribe to. Only what you subscribe to is
+   delivered, so this is the coarse filter and the one below is the fine one.
+
+Tailscale's
+[webhook documentation](https://tailscale.com/kb/1213/webhooks) lists every
+event type and what its payload contains.
+
+Tailscale signs deliveries and offers a secret, which is not checked here: the
+address is unguessable and can be rotated, so the secret would be a second
+thing to configure that proves nothing the address has not already proven.
+
+## Choosing which events to file
+
+The filter runs against each event in a delivery and can match on `type`,
+`tailnet` and `message`. `type` is the event name exactly as Tailscale spells
+it — `nodeNeedsApproval`, `policyUpdate`, `nodeKeyExpired` and so on.
+
+```
+type in ["nodeNeedsApproval", "userNeedsApproval", "nodeKeyExpired"]
+```
+
+Leave it empty to file every event this webhook is subscribed to. Tailscale
+sends a `test` event when you create the endpoint, which is a quick way to
+confirm the address is right before you narrow the filter.
+"#;
+
 crate::register_job!(TailscaleWebhook);
 crate::register_workflow_type!(TailscaleWebhook);
 
@@ -69,6 +118,7 @@ impl crate::workflows::ConfigurableWorkflow for TailscaleWebhook {
             name: "Tailscale".to_string(),
             description: "Files a task when your tailnet reports something that needs a person."
                 .to_string(),
+            documentation: DOCUMENTATION.to_string(),
             trigger: WorkflowTrigger::Webhook {
                 source: "tailscale".to_string(),
             },
