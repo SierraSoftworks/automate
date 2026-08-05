@@ -48,13 +48,30 @@ for (const { path, title, subtitle, nav } of pages) {
 
 test("following a nav link changes the page without a reload", async ({ page }) => {
   await gotoApp(page, "/admin/workflows");
+  await page.locator("input[type=search]").fill("GitHub");
 
   await page.getByRole("link", { name: "Connections" }).click();
 
   await expect(page).toHaveURL(/\/admin\/connections$/);
   await expect(page.getByRole("heading", { level: 1, name: "Connections" })).toBeVisible();
   await expect(page.locator(".admin-nav__link--active")).toHaveText("Connections");
+  await expect(page.locator("input[type=search]")).toHaveValue("");
 });
+
+for (const { path, title, action } of [
+  { path: "/admin/workflows", title: "Workflows", action: "Add Workflow" },
+  { path: "/admin/connections", title: "Connections", action: "Add Connection" },
+]) {
+  test(`${title} uses the flat list layout`, async ({ page }) => {
+    await gotoApp(page, path);
+
+    await expect(page.locator("header .admin-nav")).toBeVisible();
+    await expect(page.getByRole("heading", { level: 1, name: title })).toHaveCount(1);
+    await expect(page.getByRole("heading", { level: 2, name: title })).toHaveCount(0);
+    await expect(page.locator(".page-toolbar input[type=search]")).toBeVisible();
+    await expect(page.locator(".page-toolbar").getByRole("button", { name: action })).toBeVisible();
+  });
+}
 
 test("a hard refresh on a deep link lands on the same page it was showing", async ({ page }) => {
   // Client-side routes do not exist on the server, so a refresh asks the agent

@@ -56,11 +56,17 @@ fn search_icon() -> Html {
     }
 }
 
-/// The persistent top-level application bar shown across every admin view. It
-/// hosts the brand mark, the unified search field, and the signed-in user chip,
-/// and stays consistent as the user moves between pages.
-#[function_component(AppBar)]
-pub fn app_bar() -> Html {
+/// The unified search field shared by the routed admin pages.
+#[derive(Properties, PartialEq)]
+pub struct SearchBarProps {
+    pub placeholder: AttrValue,
+
+    #[prop_or_default]
+    pub autocomplete: bool,
+}
+
+#[function_component(SearchBar)]
+pub fn search_bar(props: &SearchBarProps) -> Html {
     let auth = use_context::<AuthHandle>().expect("AuthHandle context must be provided");
     let search = use_context::<SearchContext>();
     let vocabulary = use_context::<VocabularyContext>();
@@ -77,7 +83,7 @@ pub fn app_bar() -> Html {
     // every property. The dropdown is context-aware: typing a partial field
     // name suggests matching `field:` prefixes, and once a field is scoped
     // (`partition:`) it suggests the concrete values for that field.
-    let search = match (signed_in, search) {
+    match (signed_in, search) {
         (true, Some(search)) => {
             let query_str = search.query.to_string();
 
@@ -90,7 +96,7 @@ pub fn app_bar() -> Html {
                 .unwrap_or_default();
             let head = query_str[..query_str.len() - active_token.len()].to_string();
 
-            let suggestions: Vec<Suggestion> = if active_token.is_empty() {
+            let suggestions: Vec<Suggestion> = if !props.autocomplete || active_token.is_empty() {
                 Vec::new()
             } else if let Some((field, partial)) = active_token.split_once(':') {
                 // Value completion: the token is scoped to a field, so suggest
@@ -248,7 +254,7 @@ pub fn app_bar() -> Html {
                     <input
                         type="search"
                         class="app-bar__search-input"
-                        placeholder="Search… (try partition:cron or key:ynab)"
+                        placeholder={props.placeholder.clone()}
                         value={search.query.clone()}
                         oninput={oninput}
                         onkeydown={onkeydown}
@@ -261,7 +267,20 @@ pub fn app_bar() -> Html {
             }
         }
         _ => html! { <div class="app-bar__spacer" /> },
-    };
+    }
+}
+
+/// The persistent top-level application bar shown across every admin view. It
+/// hosts the brand mark, primary navigation, and the signed-in user chip.
+#[derive(Properties, PartialEq)]
+pub struct AppBarProps {
+    #[prop_or_default]
+    pub children: Html,
+}
+
+#[function_component(AppBar)]
+pub fn app_bar(props: &AppBarProps) -> Html {
+    let auth = use_context::<AuthHandle>().expect("AuthHandle context must be provided");
 
     let user = match &auth.user {
         Some(user) => {
@@ -297,7 +316,7 @@ pub fn app_bar() -> Html {
                     />
                     <span class="app-bar__brand-name">{ "Automate" }</span>
                 </a>
-                { search }
+                { props.children.clone() }
                 { user }
             </div>
         </header>

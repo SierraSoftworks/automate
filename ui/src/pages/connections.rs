@@ -10,8 +10,10 @@ use yew::prelude::*;
 
 use crate::api;
 use crate::components::{
-    Alert, AlertKind, Button, ButtonKind, Field, MenuButton, MenuButtonOption, TextInput,
+    Alert, AlertKind, Button, ButtonKind, Field, MenuButton, MenuButtonOption, PageActions,
+    TextInput,
 };
+use crate::search::{MatchContext, SearchContext};
 use crate::util::short_relative;
 
 /// The services that can be linked by pasting in a token.
@@ -86,24 +88,42 @@ pub fn connections() -> Html {
         .map(|(id, label)| MenuButtonOption::new(*id, *label))
         .collect();
 
+    let page_actions = use_context::<PageActions>();
+    {
+        let page_actions = page_actions.clone();
+        let provider_options = provider_options.clone();
+        let on_provider = on_provider.clone();
+        let disabled = connections.is_none() || chosen.is_some();
+        use_effect_with(disabled, move |_| {
+            if let Some(actions) = &page_actions {
+                actions.set(html! {
+                    <div class="page-title__actions">
+                        <MenuButton
+                            label="Add Connection"
+                            options={provider_options}
+                            onselect={on_provider}
+                            kind={ButtonKind::Primary}
+                            {disabled}
+                        />
+                    </div>
+                });
+            }
+            move || {
+                if let Some(actions) = page_actions {
+                    actions.clear();
+                }
+            }
+        });
+    }
+
+    let search = use_context::<SearchContext>();
+    let filter = search
+        .as_ref()
+        .map(|search| search.filter.clone())
+        .unwrap_or_default();
+
     html! {
-        <section class="connections">
-            <div class="connections__header">
-                <h2 class="connections__title">{ "Connections" }</h2>
-                <MenuButton
-                    label="Add Connection"
-                    options={provider_options}
-                    onselect={on_provider}
-                    kind={ButtonKind::Primary}
-                    disabled={connections.is_none() || chosen.is_some()}
-                />
-            </div>
-
-            <p class="connections__intro">
-                { "Workflows publish through the services you link here. Credentials are \
-                   encrypted before they are stored and are never shown again once saved." }
-            </p>
-
+        <section class="connections-page">
             if let Some(message) = &*error {
                 <Alert
                     kind={AlertKind::Error}
@@ -124,17 +144,44 @@ pub fn connections() -> Html {
                             { "You have not linked any services yet." }
                         </p>
                     },
-                    Some(list) => html! {
-                        <ul class="connections__list">
-                            { for list.iter().map(|connection| html! {
-                                <li key={connection.id.to_string()}>
-                                    <ConnectionRow
-                                        connection={connection.clone()}
-                                        on_changed={on_changed.clone()}
-                                    />
-                                </li>
-                            }) }
-                        </ul>
+                    Some(list) => {
+                        let visible: Vec<&ConnectionSummary> = list
+                            .iter()
+                            .filter(|connection| {
+                                let text = format!(
+                                    "{} {} {} {} {}",
+                                    connection.name,
+                                    connection.provider,
+                                    connection.kind.as_str(),
+                                    connection.account.as_deref().unwrap_or_default(),
+                                    connection.status.as_str(),
+                                )
+                                .to_lowercase();
+                                filter.matches(&MatchContext {
+                                    partition: "connections",
+                                    key: &connection.name,
+                                    kind: connection.kind.as_str(),
+                                    text: &text,
+                                })
+                            })
+                            .collect();
+
+                        if visible.is_empty() {
+                            html! { <p class="connections__empty">{ "No connections match your search." }</p> }
+                        } else {
+                            html! {
+                                <ul class="connections__list">
+                                    { for visible.into_iter().map(|connection| html! {
+                                        <li key={connection.id.to_string()}>
+                                            <ConnectionRow
+                                                connection={connection.clone()}
+                                                on_changed={on_changed.clone()}
+                                            />
+                                        </li>
+                                    }) }
+                                </ul>
+                            }
+                        }
                     },
                 }
             }

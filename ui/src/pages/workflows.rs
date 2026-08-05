@@ -20,8 +20,9 @@ use crate::api;
 use crate::components::dynamic_form::{set_at, value_at};
 use crate::components::{
     Alert, AlertKind, Button, ButtonGroup, ButtonKind, Documentation, DynamicForm, FetchedOptions,
-    Field, MenuButton, MenuButtonOption, Switch, TextInput, WebhookAddress,
+    Field, MenuButton, MenuButtonOption, PageActions, Switch, TextInput, WebhookAddress,
 };
+use crate::search::{MatchContext, SearchContext};
 
 /// What a form hands back when it is submitted.
 #[derive(Clone, PartialEq)]
@@ -111,6 +112,53 @@ pub fn workflows() -> Html {
         .and_then(|id| types.iter().find(|descriptor| &descriptor.id == id))
         .cloned();
 
+    let page_actions = use_context::<PageActions>();
+    {
+        let page_actions = page_actions.clone();
+        let type_options = type_options.clone();
+        let on_type = on_type.clone();
+        let disabled = *loading || chosen_descriptor.is_some();
+        use_effect_with((type_options.clone(), disabled), move |_| {
+            if let Some(actions) = &page_actions {
+                actions.set(html! {
+                    <div class="page-title__actions">
+                        <MenuButton
+                            label="Add Workflow"
+                            options={type_options}
+                            onselect={on_type}
+                            kind={ButtonKind::Primary}
+                            {disabled}
+                        />
+                    </div>
+                });
+            }
+            move || {
+                if let Some(actions) = page_actions {
+                    actions.clear();
+                }
+            }
+        });
+    }
+
+    let search = use_context::<SearchContext>();
+    let filter = search
+        .as_ref()
+        .map(|search| search.filter.clone())
+        .unwrap_or_default();
+    let visible_workflows: Vec<&Workflow> = workflows
+        .iter()
+        .filter(|workflow| {
+            let text = format!("{} {} {}", workflow.name, workflow.type_id, workflow.config)
+                .to_lowercase();
+            filter.matches(&MatchContext {
+                partition: "workflows",
+                key: &workflow.name,
+                kind: &workflow.type_id,
+                text: &text,
+            })
+        })
+        .collect();
+
     let body = if *loading {
         html! { <p class="workflows__empty">{ "Loading…" }</p> }
     } else if workflows.is_empty() {
@@ -119,10 +167,12 @@ pub fn workflows() -> Html {
                 { "You have no workflows yet. Add one to have Automate watch something for you." }
             </p>
         }
+    } else if visible_workflows.is_empty() {
+        html! { <p class="workflows__empty">{ "No workflows match your search." }</p> }
     } else {
         html! {
             <ul class="workflows__list">
-                { for workflows.iter().map(|workflow| html! {
+                { for visible_workflows.into_iter().map(|workflow| html! {
                     <WorkflowRow
                         key={workflow.id.to_string()}
                         workflow={workflow.clone()}
@@ -137,17 +187,6 @@ pub fn workflows() -> Html {
 
     html! {
         <section class="workflows">
-            <div class="workflows__header">
-                <h2 class="workflows__title">{ "Workflows" }</h2>
-                <MenuButton
-                    label="Add Workflow"
-                    options={type_options}
-                    onselect={on_type}
-                    kind={ButtonKind::Primary}
-                    disabled={*loading || chosen_descriptor.is_some()}
-                />
-            </div>
-
             if let Some(message) = (*error).clone() {
                 <Alert
                     kind={AlertKind::Error}

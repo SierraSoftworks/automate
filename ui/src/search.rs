@@ -1,4 +1,4 @@
-//! The unified search filter shared by the admin app bar and the partition
+//! The unified search filter shared by the admin toolbar and the partition
 //! browser.
 //!
 //! A query is a space-separated list of terms. A term may be scoped to a
@@ -110,11 +110,11 @@ impl SearchFilter {
     }
 }
 
-/// The shared search state provided to the app bar (which owns the input) and
+/// The shared search state provided to the toolbar (which owns the input) and
 /// the partition browser (which consumes the parsed filter).
 #[derive(Clone, PartialEq)]
 pub struct SearchContext {
-    /// The raw query string, bound to the app bar's search input.
+    /// The raw query string, bound to the toolbar's search input.
     pub query: AttrValue,
     /// The parsed query, shared so consumers don't re-parse it.
     pub filter: Rc<SearchFilter>,
@@ -124,7 +124,7 @@ pub struct SearchContext {
 
 /// The concrete values available for context-aware completion of scoped search
 /// terms (for example the partition names offered after typing `partition:`).
-/// It is published by the page that owns the data and consumed by the app bar's
+/// It is published by the page that owns the data and consumed by the toolbar's
 /// autocomplete. Each list is expected to be de-duplicated and sorted.
 #[derive(Clone, PartialEq, Default)]
 pub struct SearchVocabulary {
@@ -150,7 +150,7 @@ impl SearchVocabulary {
     }
 }
 
-/// The shared completion vocabulary, provided above both the app bar (which
+/// The shared completion vocabulary, provided above both the toolbar (which
 /// reads it to suggest values) and the routed page (which publishes it from the
 /// loaded data).
 #[derive(Clone, PartialEq)]
