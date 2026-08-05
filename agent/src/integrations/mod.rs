@@ -29,6 +29,12 @@ pub struct SetupRedirect {
 }
 
 /// What to tell the visitor once setup finishes.
+///
+/// Derives [`Debug`] — unlike [`SetupRedirect`], which holds the CSRF state —
+/// because there is nothing in here that is not already being shown to the
+/// person, and a test asserting a setup was refused wants to be able to say what
+/// it got instead.
+#[derive(Debug)]
 pub struct SetupComplete {
     pub heading: String,
     pub message: String,
