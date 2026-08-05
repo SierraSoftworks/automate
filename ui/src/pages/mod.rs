@@ -3,6 +3,8 @@
 mod admin;
 mod auth_callback;
 mod connections;
+#[cfg(debug_assertions)]
+mod demo;
 mod kv;
 mod landing;
 mod login;
@@ -14,8 +16,10 @@ mod workflows;
 pub use admin::Admin;
 pub use auth_callback::AuthCallback;
 pub use connections::Connections;
-pub use workflows::Workflows;
+#[cfg(debug_assertions)]
+pub use demo::DemoControls;
 pub use landing::Landing;
 pub use login::Login;
 pub use not_found::NotFound;
 pub use protected::Protected;
+pub use workflows::Workflows;
