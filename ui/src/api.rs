@@ -430,6 +430,24 @@ pub async fn delete_workflow(id: &str) -> Result<(), ApiError> {
     delete(&format!("/workflows/{}", urlencode(id))).await
 }
 
+/// Runs a scheduled workflow now, without disturbing its schedule.
+pub async fn trigger_workflow(id: &str) -> Result<(), ApiError> {
+    demo!(fixtures::trigger_workflow(id).ok_or(not_found("workflow")));
+
+    let resp = send::<()>(
+        Verb::Post,
+        &format!("/workflows/{}/trigger", urlencode(id)),
+        None,
+    )
+    .await?;
+
+    if resp.ok() {
+        Ok(())
+    } else {
+        Err(error_from_response(resp).await)
+    }
+}
+
 /// The choices a picker should offer, fetched through a linked account.
 pub async fn list_connection_options(
     connection: &str,

@@ -14,7 +14,7 @@
 //! stranded.
 
 use actix_web::{HttpResponse, http::StatusCode, web};
-use automate_api::{WorkflowId, WorkflowTypeDescriptor};
+use automate_api::{WorkflowId, WorkflowTrigger, WorkflowTypeDescriptor};
 
 use super::json_error;
 use super::scope::Scoped;
@@ -246,6 +246,82 @@ pub async fn rotate_webhook(services: Scoped, id: web::Path<String>) -> HttpResp
     }
 }
 
+/// `POST /api/v1/workflows/{workflow}/trigger` — runs a scheduled workflow now.
+///
+/// Dispatches exactly the message the schedule would have, so a run asked for
+/// here and a run that came round on its own are the same run. Anything this
+/// path did differently would be a difference nobody could see until it
+/// mattered.
+///
+/// The schedule is deliberately left alone: running now is not a reason for the
+/// next run to move, and re-arming here would make "run now" quietly skip one.
+pub async fn trigger(services: Scoped, id: web::Path<String>) -> HttpResponse {
+    let id = match parse_id(&id) {
+        Ok(id) => id,
+        Err(response) => return response,
+    };
+
+    let store = services.workflows();
+
+    let stored = match store.find(id).await {
+        Ok(Some(stored)) => stored,
+        Ok(None) => return not_found(id),
+        Err(err) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, err.description()),
+    };
+
+    let workflow_type = match crate::workflows::lookup(&stored.type_id) {
+        Ok(workflow_type) => workflow_type,
+        Err(err) => return json_error(StatusCode::BAD_REQUEST, err.description()),
+    };
+
+    // A webhook workflow runs on the delivery it was sent. There is no delivery
+    // here, and inventing one would run the workflow against a payload nobody
+    // sent it.
+    if !matches!(
+        workflow_type.descriptor().trigger,
+        WorkflowTrigger::Cron { .. }
+    ) {
+        return json_error(
+            StatusCode::BAD_REQUEST,
+            "This workflow runs when its webhook is called, so there is nothing to run on demand.",
+        );
+    }
+
+    // Not refused for a paused workflow. Pausing stops the schedule; asking for
+    // a run is an explicit instruction, and being able to try one is most of the
+    // reason to pause a workflow you are still working on.
+    //
+    // Keyed by the workflow, as the schedule keys it, so asking twice while one
+    // is still waiting collapses onto the run already queued instead of running
+    // the same work twice.
+    if let Err(err) = services
+        .queue()
+        .enqueue(
+            workflow_type.partition(),
+            stored.config,
+            Some(id.to_string().into()),
+            None,
+        )
+        .await
+    {
+        return json_error(StatusCode::INTERNAL_SERVER_ERROR, err.to_string());
+    }
+
+    if let Err(err) = store.mark_run(id, chrono::Utc::now()).await {
+        warn!(error = %err, "Failed to record that a workflow was run on demand.");
+    }
+
+    record(
+        &services,
+        "triggered",
+        id,
+        "Ran this workflow now, outside its schedule.",
+    )
+    .await;
+
+    HttpResponse::NoContent().finish()
+}
+
 /// How a file should be applied.
 #[derive(serde::Deserialize)]
 pub struct ImportQuery {
@@ -360,14 +436,22 @@ mod tests {
     use crate::services::AppContext;
     use crate::web::api::configure;
 
-    /// The schedules currently armed for the local account.
-    async fn armed(context: &AppContext) -> Vec<crate::db::PeekedMessage<serde_json::Value>> {
+    /// The messages waiting in a partition for the local account.
+    async fn queued(
+        context: &AppContext,
+        partition: &'static str,
+    ) -> Vec<crate::db::PeekedMessage<serde_json::Value>> {
         context
             .tenant(TenantId::local())
             .queue()
-            .peek("cron", 10)
+            .peek(partition, 10)
             .await
             .unwrap()
+    }
+
+    /// The schedules currently armed for the local account.
+    async fn armed(context: &AppContext) -> Vec<crate::db::PeekedMessage<serde_json::Value>> {
+        queued(context, "cron").await
     }
 
     async fn context() -> AppContext {
@@ -486,6 +570,126 @@ mod tests {
         assert!(
             armed(&context).await.is_empty(),
             "deleting a workflow should stop it running without waiting for a restart",
+        );
+    }
+
+    #[actix_web::test]
+    async fn a_workflow_can_be_run_on_demand() {
+        let context = context().await;
+        let app = app!(context);
+
+        let req = test::TestRequest::post()
+            .uri("/api/v1/workflows")
+            .set_json(valid_body())
+            .to_request();
+        let created: Workflow = test::call_and_read_body_json(&app, req).await;
+
+        let req = test::TestRequest::post()
+            .uri(&format!("/api/v1/workflows/{}/trigger", created.id))
+            .to_request();
+        assert_eq!(
+            test::call_service(&app, req).await.status(),
+            StatusCode::NO_CONTENT,
+        );
+
+        // The same message the schedule would have dispatched, in the same
+        // partition, so a run asked for and a run that came round are one thing.
+        let dispatched = queued(&context, "rss/todoist").await;
+        assert_eq!(dispatched.len(), 1);
+        assert_eq!(dispatched[0].payload["url"], "https://example.com/rss/");
+    }
+
+    #[actix_web::test]
+    async fn running_a_workflow_on_demand_leaves_its_schedule_where_it_was() {
+        let context = context().await;
+        let app = app!(context);
+
+        let req = test::TestRequest::post()
+            .uri("/api/v1/workflows")
+            .set_json(valid_body())
+            .to_request();
+        let created: Workflow = test::call_and_read_body_json(&app, req).await;
+
+        let before = armed(&context).await;
+
+        let req = test::TestRequest::post()
+            .uri(&format!("/api/v1/workflows/{}/trigger", created.id))
+            .to_request();
+        test::call_service(&app, req).await;
+
+        // Running now is not a reason for the next run to move. Re-arming here
+        // would make asking for a run quietly skip the one that was coming.
+        let after = armed(&context).await;
+        assert_eq!(after.len(), 1);
+        assert_eq!(after[0].hidden_until, before[0].hidden_until);
+    }
+
+    #[actix_web::test]
+    async fn a_paused_workflow_can_still_be_run_on_demand() {
+        // Pausing stops the schedule. Asking for a run is an explicit
+        // instruction, and being able to try one is most of the reason to pause
+        // a workflow you are still working on.
+        let context = context().await;
+        let app = app!(context);
+
+        let mut body = valid_body();
+        body["enabled"] = serde_json::json!(false);
+
+        let req = test::TestRequest::post()
+            .uri("/api/v1/workflows")
+            .set_json(body)
+            .to_request();
+        let created: Workflow = test::call_and_read_body_json(&app, req).await;
+
+        let req = test::TestRequest::post()
+            .uri(&format!("/api/v1/workflows/{}/trigger", created.id))
+            .to_request();
+        assert_eq!(
+            test::call_service(&app, req).await.status(),
+            StatusCode::NO_CONTENT,
+        );
+
+        assert_eq!(queued(&context, "rss/todoist").await.len(), 1);
+    }
+
+    #[actix_web::test]
+    async fn a_webhook_workflow_cannot_be_run_on_demand() {
+        let context = context().await;
+        let app = app!(context);
+
+        let req = test::TestRequest::post()
+            .uri("/api/v1/workflows")
+            .set_json(serde_json::json!({
+                "type": "webhook",
+                "config": {
+                    "name": "Deployments",
+                    "title": "Deployed ${{ environment }}",
+                    "todoist": { "connection": null },
+                },
+            }))
+            .to_request();
+        let created: Workflow = test::call_and_read_body_json(&app, req).await;
+
+        // It runs on the delivery it was sent, and there is no delivery here.
+        let req = test::TestRequest::post()
+            .uri(&format!("/api/v1/workflows/{}/trigger", created.id))
+            .to_request();
+        assert_eq!(
+            test::call_service(&app, req).await.status(),
+            StatusCode::BAD_REQUEST,
+        );
+    }
+
+    #[actix_web::test]
+    async fn running_a_workflow_that_is_not_there_says_so() {
+        let app = app!(context().await);
+
+        let req = test::TestRequest::post()
+            .uri("/api/v1/workflows/copper-tiger-canyon/trigger")
+            .to_request();
+        assert_eq!(
+            test::call_service(&app, req).await.status(),
+            StatusCode::NOT_FOUND,
         );
     }
 

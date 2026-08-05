@@ -254,6 +254,20 @@ pub fn delete_workflow(id: &str) {
     });
 }
 
+/// Runs a workflow now. There is no job host here to run it, so all this can
+/// honestly do is record that it was asked for.
+pub fn trigger_workflow(id: &str) -> Option<()> {
+    with(|state| {
+        let workflow = state
+            .workflows
+            .iter_mut()
+            .find(|workflow| workflow.id.to_string() == id)?;
+
+        workflow.last_run = Some(Utc::now());
+        Some(())
+    })
+}
+
 pub fn connection_options(source: &str, parent: Option<&str>) -> Vec<OptionItem> {
     data::connection_options(source, parent)
 }

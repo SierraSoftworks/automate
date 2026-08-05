@@ -13,6 +13,7 @@ use std::rc::Rc;
 use automate_api::{
     ConnectionSummary, FieldKind, Workflow, WorkflowTrigger, WorkflowTypeDescriptor,
 };
+use gloo_timers::callback::Timeout;
 use yew::prelude::*;
 
 use crate::api;
@@ -183,7 +184,13 @@ struct WorkflowRowProps {
 fn workflow_row(props: &WorkflowRowProps) -> Html {
     let editing = use_state(|| false);
     let busy = use_state(|| false);
-    let error = use_state(|| None::<String>);
+    // The heading as well as the message, because a row can fail at two
+    // different things and "we could not save this change" is untrue of one.
+    let error = use_state(|| None::<(&'static str, String)>);
+    // Set briefly after a run is queued. A run happens elsewhere and finishes
+    // later, so without this the button is the only place that could say the
+    // request was accepted, and it says nothing.
+    let triggered = use_state(|| false);
     let workflow = &props.workflow;
 
     /// Saves a change to this workflow, whatever prompted it.
@@ -191,7 +198,7 @@ fn workflow_row(props: &WorkflowRowProps) -> Html {
         id: String,
         values: WorkflowValues,
         busy: UseStateHandle<bool>,
-        error: UseStateHandle<Option<String>>,
+        error: UseStateHandle<Option<(&'static str, String)>>,
         done: Callback<()>,
     ) {
         wasm_bindgen_futures::spawn_local(async move {
@@ -207,7 +214,7 @@ fn workflow_row(props: &WorkflowRowProps) -> Html {
             .await
             {
                 Ok(_) => done.emit(()),
-                Err(err) => error.set(Some(err.to_string())),
+                Err(err) => error.set(Some(("We could not save this change.", err.to_string()))),
             }
 
             busy.set(false);
@@ -291,6 +298,44 @@ fn workflow_row(props: &WorkflowRowProps) -> Html {
         Callback::from(move |_| editing.set(!*editing))
     };
 
+    // Runs the workflow now. Its schedule is left where it was, so this is an
+    // extra run rather than one brought forward.
+    let on_trigger = {
+        let (id, busy, error, triggered, on_changed) = (
+            workflow.id.to_string(),
+            busy.clone(),
+            error.clone(),
+            triggered.clone(),
+            props.on_changed.clone(),
+        );
+
+        Callback::from(move |_| {
+            let (id, busy, error, triggered, on_changed) = (
+                id.clone(),
+                busy.clone(),
+                error.clone(),
+                triggered.clone(),
+                on_changed.clone(),
+            );
+
+            wasm_bindgen_futures::spawn_local(async move {
+                busy.set(true);
+                error.set(None);
+
+                match api::trigger_workflow(&id).await {
+                    Ok(()) => {
+                        triggered.set(true);
+                        Timeout::new(3_000, move || triggered.set(false)).forget();
+                        on_changed.emit(());
+                    }
+                    Err(err) => error.set(Some(("We could not run this workflow.", err.to_string()))),
+                }
+
+                busy.set(false);
+            });
+        })
+    };
+
     let on_cancel = {
         let editing = editing.clone();
         Callback::from(move |_| editing.set(false))
@@ -331,17 +376,27 @@ fn workflow_row(props: &WorkflowRowProps) -> Html {
                     </Button>
                 }
 
+                // Only for the workflows that have something to run without
+                // being handed a payload first.
+                if let Some(descriptor) = &props.descriptor
+                    && matches!(descriptor.trigger, WorkflowTrigger::Cron { .. })
+                {
+                    <Button
+                        onclick={on_trigger}
+                        disabled={*busy}
+                        title="Run this workflow now, without changing its schedule"
+                    >
+                        if *triggered { { "Queued" } } else { { "Trigger" } }
+                    </Button>
+                }
+
                 <Button kind={ButtonKind::Danger} onclick={on_delete} busy={*busy}>
                     { "Delete" }
                 </Button>
             </div>
 
-            if let Some(message) = (*error).clone() {
-                <Alert
-                    kind={AlertKind::Error}
-                    title="We could not save this change."
-                    message={message}
-                />
+            if let Some((title, message)) = (*error).clone() {
+                <Alert kind={AlertKind::Error} title={title} message={message} />
             }
 
             if let Some(path) = workflow.webhook_path.clone() {

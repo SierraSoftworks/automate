@@ -124,6 +124,10 @@ pub fn configure() -> actix_web::Scope<
                     "/workflows/{workflow}/rotate-webhook",
                     web::post().to(workflows::rotate_webhook),
                 )
+                .route(
+                    "/workflows/{workflow}/trigger",
+                    web::post().to(workflows::trigger),
+                )
                 // Installation-wide endpoints. These take the `Administrative`
                 // extractor, which refuses a request from anyone who is not an
                 // administrator, so the guard cannot be lost by remounting them.
