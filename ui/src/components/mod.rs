@@ -34,7 +34,8 @@ pub use entity::{DbEntity, EntityMetadata};
 pub use filter_input::FilterInput;
 #[allow(unused_imports)]
 pub use form::{
-    Button, ButtonKind, Field, NumberInput, Select, SelectOption, Switch, TextArea, TextInput,
+    Button, ButtonGroup, ButtonKind, Field, NumberInput, Select, SelectOption, Switch, TextArea,
+    TextInput,
 };
 pub use helpers::Center;
 pub use json_highlight::JsonHighlight;
