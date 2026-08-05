@@ -12,6 +12,7 @@ mod connections_panel;
 mod entity;
 mod documentation;
 pub mod dynamic_form;
+mod filter_input;
 mod form;
 mod helpers;
 mod json_highlight;
@@ -29,6 +30,7 @@ pub use connections_panel::ConnectionsPanel;
 pub use entity::{DbEntity, EntityMetadata};
 pub use documentation::Documentation;
 pub use dynamic_form::{DynamicForm, FetchedOptions};
+pub use filter_input::FilterInput;
 #[allow(unused_imports)]
 pub use form::{
     Button, ButtonKind, Field, NumberInput, Select, SelectOption, Switch, TextArea, TextInput,

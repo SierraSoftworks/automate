@@ -13,10 +13,10 @@
 //!
 //! # Errors come from the agent
 //!
-//! Controls show an error but never decide one. What counts as valid depends on
-//! the workflow type, which the agent is the only authority on, so a save that
-//! is refused is reported against the field it names rather than pre-empted
-//! here.
+//! The agent remains the authority on whether a workflow can be saved, so a
+//! refused save is reported against the field it names. Controls may still
+//! provide immediate, non-blocking diagnostics where the agent supplies enough
+//! context, such as filter syntax and supported property names.
 
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -24,7 +24,9 @@ use std::rc::Rc;
 use automate_api::{ConnectionSummary, FieldDescriptor, FieldKind, OptionItem};
 use yew::prelude::*;
 
-use crate::components::{Field, NumberInput, Select, SelectOption, Switch, TextArea, TextInput};
+use crate::components::{
+    Field, FilterInput, NumberInput, Select, SelectOption, Switch, TextArea, TextInput,
+};
 
 /// Reads the value at a dotted path, if there is one.
 pub fn value_at<'a>(config: &'a serde_json::Value, path: &str) -> Option<&'a serde_json::Value> {
@@ -342,23 +344,15 @@ fn dynamic_field(props: &DynamicFieldProps) -> Html {
         },
 
         FieldKind::Filter { fields } => html! {
-            <>
-                <TextInput
-                    id={id.clone()}
-                    value={value.clone()}
-                    onchange={text_update}
-                    onblur={text_blur}
-                    placeholder={Some(AttrValue::from("title contains \"release\""))}
-                    disabled={props.disabled}
-                    invalid={invalid}
-                />
-                if !fields.is_empty() {
-                    <p class="dynamic-form__hint">
-                        { "You can match on: " }
-                        { fields.join(", ") }
-                    </p>
-                }
-            </>
+            <FilterInput
+                id={id.clone()}
+                value={value.clone()}
+                onchange={text_update}
+                onblur={text_blur}
+                fields={fields.clone()}
+                disabled={props.disabled}
+                invalid={invalid}
+            />
         },
     };
 

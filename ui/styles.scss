@@ -1610,10 +1610,39 @@ footer {
     border-radius: $radius-sm;
   }
 
-  &__hint {
+}
+
+.filter-input {
+  display: flex;
+  flex-direction: column;
+
+  &__message,
+  &__fields {
     margin: 0.35rem 0 0;
     font-size: 0.75rem;
+    line-height: 1.45;
+  }
+
+  &__message {
+    &--valid {
+      color: $success;
+    }
+
+    &--warning {
+      color: $warning;
+    }
+
+    &--error {
+      color: $danger;
+    }
+  }
+
+  &__fields {
     color: $text-placeholder;
+
+    code {
+      font-family: $font-mono;
+    }
   }
 }
 

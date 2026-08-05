@@ -64,6 +64,35 @@ test("choosing a workflow type draws the fields that type asked for", async ({ p
   await expect(form.getByRole("button", { name: "Add workflow" })).toBeVisible();
 });
 
+test("filter expressions are checked while they are being edited", async ({ page }) => {
+  await gotoApp(page, "/admin/workflows");
+  await page.getByRole("button", { name: "Add Workflow" }).click();
+  await page.getByLabel("What should it watch?").selectOption("rss");
+
+  const dialog = page.getByRole("dialog", { name: "Add RSS Feed workflow" });
+  const filter = dialog.getByLabel("Filter");
+  const editor = dialog.locator(".filter-input");
+
+  await expect(editor.locator(".filter-input__fields")).toContainText(
+    "Available fields: title, description, link",
+  );
+
+  await filter.fill('title contains "release"');
+  await expect(editor.locator(".filter-input__message--valid")).toContainText(
+    "Valid expression. Uses: title.",
+  );
+  await expect(editor.locator(".filter-input__message--warning")).toHaveCount(0);
+
+  await filter.fill('author == "Ada"');
+  await expect(editor.locator(".filter-input__message--warning")).toHaveText(
+    "Unsupported field: author.",
+  );
+
+  await filter.fill("title ==");
+  await expect(editor.locator(".filter-input__message--error")).toBeVisible();
+  await expect(filter).toHaveClass(/field__input--invalid/);
+});
+
 test("text inputs preserve spaces while typing and normalize them on blur", async ({ page }) => {
   await gotoApp(page, "/admin/workflows");
 
