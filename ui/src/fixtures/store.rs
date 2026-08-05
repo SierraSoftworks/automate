@@ -136,7 +136,11 @@ pub fn create_service_connection(provider: &str, name: &str) -> ConnectionSummar
     })
 }
 
-pub fn rename_service_connection(id: &str, name: &str) -> Option<ConnectionSummary> {
+pub fn update_service_connection(
+    id: &str,
+    name: &str,
+    key: Option<&str>,
+) -> Option<ConnectionSummary> {
     with(|state| {
         let connection = state
             .connections
@@ -144,6 +148,9 @@ pub fn rename_service_connection(id: &str, name: &str) -> Option<ConnectionSumma
             .find(|connection| connection.id.to_string() == id)?;
 
         connection.name = name.to_string();
+        if key.is_some_and(|key| !key.trim().is_empty()) {
+            connection.status = ConnectionStatus::Ok;
+        }
         connection.updated_at = Utc::now();
         Some(connection.clone())
     })

@@ -10,8 +10,8 @@ use yew::prelude::*;
 
 use crate::api;
 use crate::components::{
-    Alert, AlertKind, Button, ButtonKind, Field, MenuButton, MenuButtonOption, PageActions,
-    TextInput,
+    Alert, AlertKind, Button, ButtonGroup, ButtonKind, Field, MenuButton, MenuButtonOption,
+    PageActions, TextInput,
 };
 use crate::search::{MatchContext, SearchContext};
 use crate::util::short_relative;
@@ -332,13 +332,69 @@ struct ConnectionRowProps {
 
 #[function_component(ConnectionRow)]
 fn connection_row(props: &ConnectionRowProps) -> Html {
-    let busy = use_state(|| false);
+    let reconnecting = use_state(|| false);
+    let removing = use_state(|| false);
+    let editing = use_state(|| false);
+    let reconnect_error = use_state(|| None::<String>);
     let connection = props.connection.clone();
+
+    let onedit = {
+        let editing = editing.clone();
+        Callback::from(move |_: MouseEvent| editing.set(true))
+    };
+
+    let oncancel_edit = {
+        let editing = editing.clone();
+        Callback::from(move |_: ()| editing.set(false))
+    };
+
+    let onsaved = {
+        let editing = editing.clone();
+        let on_changed = props.on_changed.clone();
+        Callback::from(move |_: ()| {
+            editing.set(false);
+            on_changed.emit(());
+        })
+    };
+
+    let onreconnect = {
+        let provider = connection.provider.clone();
+        let reconnecting = reconnecting.clone();
+        let reconnect_error = reconnect_error.clone();
+        let on_changed = props.on_changed.clone();
+
+        Callback::from(move |_: MouseEvent| {
+            let provider = provider.clone();
+            let reconnecting = reconnecting.clone();
+            let reconnect_error = reconnect_error.clone();
+            let on_changed = on_changed.clone();
+            reconnecting.set(true);
+            reconnect_error.set(None);
+
+            wasm_bindgen_futures::spawn_local(async move {
+                match api::start_setup(&provider).await {
+                    Ok(url) => {
+                        if let Some(window) = web_sys::window() {
+                            let _ = window.open_with_url_and_target_and_features(
+                                &url,
+                                "automate-connect",
+                                "popup,width=480,height=720",
+                            );
+                        }
+                        on_changed.emit(());
+                    }
+                    Err(err) => reconnect_error.set(Some(err.to_string())),
+                }
+
+                reconnecting.set(false);
+            });
+        })
+    };
 
     let onremove = {
         let id = connection.id.to_string();
         let name = connection.name.clone();
-        let busy = busy.clone();
+        let removing = removing.clone();
         let on_changed = props.on_changed.clone();
 
         Callback::from(move |_: MouseEvent| {
@@ -357,11 +413,11 @@ fn connection_row(props: &ConnectionRowProps) -> Html {
                 return;
             }
 
-            let (id, busy, on_changed) = (id.clone(), busy.clone(), on_changed.clone());
-            busy.set(true);
+            let (id, removing, on_changed) = (id.clone(), removing.clone(), on_changed.clone());
+            removing.set(true);
             wasm_bindgen_futures::spawn_local(async move {
                 let _ = api::delete_service_connection(&id).await;
-                busy.set(false);
+                removing.set(false);
                 on_changed.emit(());
             });
         })
@@ -382,15 +438,159 @@ fn connection_row(props: &ConnectionRowProps) -> Html {
 
             <StatusBadge status={connection.status} />
 
-            <Button
-                kind={ButtonKind::Danger}
-                small=true
-                onclick={onremove}
-                busy={*busy}
-                title="Unlink this service"
-            >
-                { "Unlink" }
-            </Button>
+            <ButtonGroup label="Connection actions">
+                if connection.status == ConnectionStatus::NeedsReauthorization {
+                    <Button
+                        small=true
+                        onclick={onreconnect}
+                        busy={*reconnecting}
+                        disabled={*removing}
+                        title="Reconnect this service"
+                    >
+                        { "Reconnect" }
+                    </Button>
+                } else if connection.kind == ConnectionKind::ApiKey {
+                    <Button small=true onclick={onedit} disabled={*removing} title="Edit this connection">
+                        { "Edit" }
+                    </Button>
+                }
+                <Button
+                    kind={ButtonKind::Danger}
+                    small=true
+                    onclick={onremove}
+                    busy={*removing}
+                    disabled={*reconnecting}
+                    title="Unlink this service"
+                >
+                    { "Unlink" }
+                </Button>
+            </ButtonGroup>
+
+            if let Some(message) = &*reconnect_error {
+                <p class="connection__error" role="alert">{ message }</p>
+            }
+
+            if *editing {
+                <EditConnection connection={connection} {onsaved} oncancel={oncancel_edit} />
+            }
+        </div>
+    }
+}
+
+#[derive(Properties, PartialEq)]
+struct EditConnectionProps {
+    connection: ConnectionSummary,
+    onsaved: Callback<()>,
+    oncancel: Callback<()>,
+}
+
+#[function_component(EditConnection)]
+fn edit_connection(props: &EditConnectionProps) -> Html {
+    let name = use_state(|| props.connection.name.clone());
+    let key = use_state(String::new);
+    let busy = use_state(|| false);
+    let error = use_state(|| None::<String>);
+
+    let on_name = {
+        let name = name.clone();
+        Callback::from(move |value: String| name.set(value))
+    };
+    let on_key = {
+        let key = key.clone();
+        Callback::from(move |value: String| key.set(value))
+    };
+    let on_cancel = {
+        let oncancel = props.oncancel.clone();
+        Callback::from(move |_: MouseEvent| oncancel.emit(()))
+    };
+    let onsubmit = {
+        let id = props.connection.id.to_string();
+        let name = name.clone();
+        let key = key.clone();
+        let busy = busy.clone();
+        let error = error.clone();
+        let onsaved = props.onsaved.clone();
+
+        Callback::from(move |_: MouseEvent| {
+            let id = id.clone();
+            let name = name.trim().to_string();
+            let key = key.trim().to_string();
+            let busy = busy.clone();
+            let error = error.clone();
+            let onsaved = onsaved.clone();
+            busy.set(true);
+            error.set(None);
+
+            wasm_bindgen_futures::spawn_local(async move {
+                match api::update_service_connection(
+                    &id,
+                    &name,
+                    (!key.is_empty()).then_some(key.as_str()),
+                )
+                .await
+                {
+                    Ok(_) => onsaved.emit(()),
+                    Err(err) => error.set(Some(err.to_string())),
+                }
+                busy.set(false);
+            });
+        })
+    };
+
+    html! {
+        <div class="form-modal" role="dialog" aria-modal="true" aria-labelledby="edit-connection-title">
+            <div class="form-modal__panel">
+                <div class="form-modal__header">
+                    <h3 id="edit-connection-title" class="form-modal__title">
+                        { format!("Edit {} connection", props.connection.name) }
+                    </h3>
+                </div>
+                <div class="form-modal__body">
+                    if let Some(message) = &*error {
+                        <Alert
+                            kind={AlertKind::Error}
+                            title="We could not update that connection."
+                            message={message.clone()}
+                        />
+                    }
+
+                    <Field id="edit-connection-name" label="Name" required=true>
+                        <TextInput
+                            id="edit-connection-name"
+                            value={(*name).clone()}
+                            onchange={on_name}
+                        />
+                    </Field>
+
+                    <Field
+                        id="edit-connection-key"
+                        label="New API key"
+                        help="Write-only. Leave blank to keep the existing API key."
+                    >
+                        <TextInput
+                            id="edit-connection-key"
+                            value={(*key).clone()}
+                            onchange={on_key}
+                            secret=true
+                            placeholder="Paste a replacement API key"
+                        />
+                    </Field>
+
+                    <div class="connections__form-actions">
+                        <Button
+                            kind={ButtonKind::Primary}
+                            onclick={onsubmit}
+                            busy={*busy}
+                            disabled={name.trim().is_empty()}
+                        >
+                            { "Save changes" }
+                        </Button>
+                        <Button kind={ButtonKind::Subtle} onclick={on_cancel} disabled={*busy}>
+                            { "Cancel" }
+                        </Button>
+                    </div>
+                </div>
+            </div>
         </div>
     }
 }
