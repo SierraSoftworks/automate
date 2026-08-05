@@ -1,22 +1,34 @@
+use hmac::{Hmac, KeyInit, Mac};
 use serde::{Deserialize, Serialize};
+use sha2::Sha512;
 
 use crate::prelude::*;
 use crate::publishers::TodoistTarget;
 use crate::webhooks::WebhookDelivery;
 
+type HmacSha512 = Hmac<Sha512>;
+
 /// What one person asked us to do with their Terraform Cloud notifications.
 ///
-/// There is deliberately no signing secret here. HMAC signing existed because
-/// the endpoint Terraform posted to was the same for everybody, so the signature
-/// was the only thing distinguishing a real notification from anybody who knew
-/// the URL; a workflow now has its own unguessable URL that its owner can
-/// rotate, and that answers the same question without a secret to keep in step
-/// across two systems.
+/// This keeps its signing token. The per-workflow address answers "did somebody
+/// who knew the URL post this", which is not the question the signature answers:
+/// Terraform's `X-TFE-Notification-Signature` is an HMAC over the body, so it
+/// proves that *Terraform* sent this and that nothing rewrote the payload on the
+/// way. A URL cannot make either claim, and a delivery that lies about which
+/// workspace drifted or which run failed is worth as little as no delivery at
+/// all. This is the same reasoning that kept `X-Hub-Signature-256` on the GitHub
+/// webhook.
 #[derive(Clone, Serialize, Deserialize, Default)]
 pub struct TerraformWebhookConfig {
     /// What to call this workflow, so that somebody watching two organisations
     /// can tell which of them filed a task.
     pub name: String,
+
+    /// The HMAC token configured on the Terraform Cloud notification, used to
+    /// verify the `X-TFE-Notification-Signature` header. Deliveries are refused
+    /// while this is unset — see [`TerraformWebhook::handle`] for why.
+    #[serde(default)]
+    pub secret: String,
 
     #[serde(default = "default_todoist_config")]
     pub todoist: TodoistTarget,
@@ -37,6 +49,55 @@ fn default_todoist_config() -> TodoistTarget {
 }
 
 pub struct TerraformWebhook;
+
+impl TerraformWebhook {
+    /// Verifies the `X-TFE-Notification-Signature` header, which Terraform Cloud
+    /// populates with the hex-encoded HMAC-SHA512 of the raw request body, keyed
+    /// with the token set on the notification configuration.
+    ///
+    /// Unlike GitHub's, the header carries no algorithm prefix — it is the
+    /// digest on its own.
+    ///
+    /// See https://developer.hashicorp.com/terraform/cloud-docs/workspaces/settings/notifications
+    fn verify_signature(
+        secret: &str,
+        body: &str,
+        signature_header: &str,
+    ) -> Result<(), human_errors::Error> {
+        let expected_signature = hex::decode(signature_header.trim()).or_user_err(&[
+            "The signature in the X-TFE-Notification-Signature header is not valid hex.",
+            "Ensure that you are only sending Terraform Cloud notifications to this endpoint.",
+        ])?;
+
+        let mut mac = HmacSha512::new_from_slice(secret.as_bytes()).wrap_user_err(
+            "Failed to create HMAC instance with the provided token.",
+            &["Ensure that you have set a valid HMAC token on this workflow."],
+        )?;
+
+        mac.update(body.as_bytes());
+
+        // `verify_slice` compares in constant time, so a wrong signature cannot
+        // be walked one byte at a time by timing the rejections.
+        mac.verify_slice(&expected_signature).wrap_user_err(
+            "Webhook signature verification failed (signatures did not match).".to_string(),
+            &[
+                "Ensure that the HMAC token on this workflow matches the one set on the notification configuration in Terraform Cloud.",
+            ],
+        )?;
+
+        Ok(())
+    }
+
+    /// HTTP header names are case-insensitive, and what reaches us depends on
+    /// whatever proxy handled the request, so the lookup cannot assume a casing.
+    fn header<'a>(event: &'a WebhookEvent, name: &str) -> Option<&'a str> {
+        event
+            .headers
+            .iter()
+            .find(|(key, _)| key.eq_ignore_ascii_case(name))
+            .map(|(_, value)| value.as_str())
+    }
+}
 
 crate::register_job!(TerraformWebhook);
 crate::register_workflow_type!(TerraformWebhook);
@@ -65,15 +126,29 @@ impl crate::workflows::ConfigurableWorkflow for TerraformWebhook {
                 // delivery would be queued somewhere nothing is reading.
                 source: "terraform".to_string(),
             },
-            fields: [FieldDescriptor::new(
-                crate::config_path!(TerraformWebhookConfig: name),
-                "Name",
-                FieldKind::Text {
-                    placeholder: Some("Infrastructure".into()),
-                },
-            )
-            .with_help("Used to label this workflow, so you can tell it apart from your others.")
-            .required()]
+            fields: [
+                FieldDescriptor::new(
+                    crate::config_path!(TerraformWebhookConfig: name),
+                    "Name",
+                    FieldKind::Text {
+                        placeholder: Some("Infrastructure".into()),
+                    },
+                )
+                .with_help(
+                    "Used to label this workflow, so you can tell it apart from your others.",
+                )
+                .required(),
+                FieldDescriptor::new(
+                    crate::config_path!(TerraformWebhookConfig: secret),
+                    "HMAC token",
+                    FieldKind::Text {
+                        placeholder: Some("a long random string".into()),
+                    },
+                )
+                .with_help(
+                    "The HMAC token you set on the notification configuration in Terraform Cloud. It signs the body of each notification, which is what proves Terraform sent it and that nothing altered it on the way. Notifications are ignored while this is empty.",
+                ),
+            ]
             .into_iter()
             .chain(crate::todoist_target_fields!(
                 TerraformWebhookConfig,
@@ -106,7 +181,46 @@ impl Job for TerraformWebhook {
             return Ok(());
         };
 
-        let payload: NotificationPayload = job.event.json()?;
+        let event = &job.event;
+
+        // Everything below this point happens *before* the payload is parsed, so
+        // that a delivery we cannot attribute to Terraform is never interpreted,
+        // let alone acted on.
+        //
+        // A rejection returns `Ok(())` rather than an error: nothing about a bad
+        // signature improves by trying again, so raising here would only leave
+        // the delivery retrying forever and hiding real failures behind it. The
+        // log line is the record that it happened.
+
+        // No token configured means we refuse, rather than accept anything. The
+        // alternative — treating an empty token as "skip the check" — would make
+        // a workflow silently unauthenticated exactly when somebody forgot to
+        // finish setting it up, and a forgotten field should fail closed. It
+        // also means the token cannot be neutralised by clearing it, and it is
+        // what the GitHub webhook does with its own secret.
+        if config.secret.is_empty() {
+            warn!(
+                "Received a Terraform Cloud notification for a workflow with no HMAC token configured; rejecting request."
+            );
+            return Ok(());
+        }
+
+        let Some(signature) = Self::header(event, "x-tfe-notification-signature") else {
+            warn!(
+                "Received a Terraform Cloud notification without an X-TFE-Notification-Signature header; rejecting request."
+            );
+            return Ok(());
+        };
+
+        if let Err(err) = Self::verify_signature(&config.secret, &event.body, signature) {
+            warn!(
+                "Failed to verify Terraform Cloud notification signature, rejecting request: {}",
+                err
+            );
+            return Ok(());
+        }
+
+        let payload: NotificationPayload = event.json()?;
 
         match &payload {
             NotificationPayload::Standard {
@@ -315,6 +429,17 @@ mod tests {
         "details": {}
     }"#;
 
+    /// The HMAC token these tests pretend was set on both this workflow and the
+    /// Terraform Cloud notification configuration.
+    const TOKEN: &str = "a-long-random-string";
+
+    /// Signs a body the way Terraform Cloud does: bare hex, no algorithm prefix.
+    fn sign(secret: &str, body: &str) -> String {
+        let mut mac = HmacSha512::new_from_slice(secret.as_bytes()).unwrap();
+        mac.update(body.as_bytes());
+        hex::encode(mac.finalize().into_bytes())
+    }
+
     async fn store(
         services: &(impl Services + Send + Sync + 'static),
         config: serde_json::Value,
@@ -332,15 +457,44 @@ mod tests {
             .id
     }
 
-    fn delivery(workflow: automate_api::WorkflowId, body: impl Into<String>) -> WebhookDelivery {
+    /// A workflow configured with `token`, which the tests pass as `""` when
+    /// they want the no-token-configured case.
+    async fn store_with_token(
+        services: &(impl Services + Send + Sync + 'static),
+        token: &str,
+    ) -> automate_api::WorkflowId {
+        store(
+            services,
+            serde_json::json!({ "name": "Infrastructure", "secret": token }),
+        )
+        .await
+    }
+
+    fn delivery_with(
+        workflow: automate_api::WorkflowId,
+        body: impl Into<String>,
+        headers: &[(&str, &str)],
+    ) -> WebhookDelivery {
         WebhookDelivery {
             workflow,
             event: WebhookEvent {
                 body: body.into(),
                 query: String::new(),
-                headers: HashMap::new(),
+                headers: headers
+                    .iter()
+                    .map(|(k, v)| (k.to_string(), v.to_string()))
+                    .collect::<HashMap<_, _>>(),
             },
         }
+    }
+
+    /// A delivery carrying the signature Terraform Cloud would have sent for it.
+    fn delivery(workflow: automate_api::WorkflowId, body: &str) -> WebhookDelivery {
+        delivery_with(
+            workflow,
+            body,
+            &[("X-TFE-Notification-Signature", &sign(TOKEN, body))],
+        )
     }
 
     async fn run(
@@ -413,12 +567,44 @@ mod tests {
         );
     }
 
+    #[test]
+    fn a_notification_signed_with_the_configured_token_is_accepted() {
+        TerraformWebhook::verify_signature(TOKEN, RUN_NOTIFICATION, &sign(TOKEN, RUN_NOTIFICATION))
+            .expect("a signature Terraform itself would have produced should verify");
+    }
+
+    #[test]
+    fn a_notification_signed_with_a_different_token_is_refused() {
+        // Knowing the URL is not knowing the token, which is the whole point of
+        // checking one.
+        let signature = sign("somebody-elses-token", RUN_NOTIFICATION);
+        assert!(TerraformWebhook::verify_signature(TOKEN, RUN_NOTIFICATION, &signature).is_err());
+    }
+
+    #[test]
+    fn a_body_altered_after_signing_no_longer_matches_its_signature() {
+        // The signature covers the body, so replaying a genuine signature over a
+        // payload somebody rewrote in transit has to fail.
+        let signature = sign(TOKEN, RUN_NOTIFICATION);
+        let tampered = RUN_NOTIFICATION.replace("Apply complete!", "Everything is fine");
+        assert!(TerraformWebhook::verify_signature(TOKEN, &tampered, &signature).is_err());
+    }
+
+    #[test]
+    fn a_signature_that_is_not_hex_at_all_is_refused() {
+        // Terraform sends hex; anything else is not a signature we failed to
+        // match, it is a header we cannot even read.
+        assert!(
+            TerraformWebhook::verify_signature(TOKEN, RUN_NOTIFICATION, "not-a-signature").is_err()
+        );
+    }
+
     #[tokio::test]
     async fn a_run_notification_files_a_task_naming_the_workspace_it_came_from() {
         let services = crate::services::ServicesContainer::new_mock()
             .await
             .unwrap();
-        let workflow = store(&services, serde_json::json!({ "name": "Infrastructure" })).await;
+        let workflow = store_with_token(&services, TOKEN).await;
 
         run(&services, &delivery(workflow, RUN_NOTIFICATION))
             .await
@@ -437,7 +623,7 @@ mod tests {
         let services = crate::services::ServicesContainer::new_mock()
             .await
             .unwrap();
-        let workflow = store(&services, serde_json::json!({ "name": "Infrastructure" })).await;
+        let workflow = store_with_token(&services, TOKEN).await;
 
         run(&services, &delivery(workflow, WORKSPACE_NOTIFICATION))
             .await
@@ -456,13 +642,135 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_notification_signed_with_the_wrong_token_files_nothing() {
+        // Each workflow carries its own token, so a notification signed for
+        // somebody else's must not be acted on by this one.
+        let services = crate::services::ServicesContainer::new_mock()
+            .await
+            .unwrap();
+        let workflow = store_with_token(&services, TOKEN).await;
+
+        let job = delivery_with(
+            workflow,
+            RUN_NOTIFICATION,
+            &[(
+                "X-TFE-Notification-Signature",
+                &sign("somebody-elses-token", RUN_NOTIFICATION),
+            )],
+        );
+
+        run(&services, &job)
+            .await
+            .expect("a mis-signed notification should be refused without erroring");
+
+        assert!(filed(&services).await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_notification_whose_body_was_altered_after_signing_files_nothing() {
+        // The signature is what makes the payload trustworthy, so a body that
+        // was rewritten between Terraform signing it and us receiving it must
+        // never reach the parser.
+        let services = crate::services::ServicesContainer::new_mock()
+            .await
+            .unwrap();
+        let workflow = store_with_token(&services, TOKEN).await;
+
+        let job = delivery_with(
+            workflow,
+            RUN_NOTIFICATION.replace("example_workspace", "someone_elses_workspace"),
+            &[(
+                "X-TFE-Notification-Signature",
+                &sign(TOKEN, RUN_NOTIFICATION),
+            )],
+        );
+
+        run(&services, &job)
+            .await
+            .expect("a tampered notification should be refused without erroring");
+
+        assert!(filed(&services).await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_notification_with_no_signature_header_at_all_files_nothing() {
+        // Anybody can post to a URL. Without the header there is nothing to
+        // check, and "nothing to check" is not the same as "checks out".
+        let services = crate::services::ServicesContainer::new_mock()
+            .await
+            .unwrap();
+        let workflow = store_with_token(&services, TOKEN).await;
+
+        let job = delivery_with(workflow, RUN_NOTIFICATION, &[]);
+
+        run(&services, &job)
+            .await
+            .expect("an unsigned notification should be refused without erroring");
+
+        assert!(filed(&services).await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn the_signature_header_is_recognised_whatever_case_it_arrives_in() {
+        // HTTP header names are case-insensitive and whatever proxy sits in
+        // front of us is free to renormalise them, so a lowercase header must
+        // not read as a missing one.
+        let services = crate::services::ServicesContainer::new_mock()
+            .await
+            .unwrap();
+        let workflow = store_with_token(&services, TOKEN).await;
+
+        let job = delivery_with(
+            workflow,
+            RUN_NOTIFICATION,
+            &[(
+                "x-tfe-notification-signature",
+                &sign(TOKEN, RUN_NOTIFICATION),
+            )],
+        );
+
+        run(&services, &job)
+            .await
+            .expect("a correctly signed notification should be processed");
+
+        assert_eq!(filed(&services).await.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn notifications_are_refused_while_the_workflow_has_no_token_configured() {
+        // The token is optional on the form, so it can genuinely be empty. That
+        // is treated as "cannot be verified" rather than "need not be verified":
+        // a half-finished workflow should file nothing rather than file whatever
+        // anybody who found the URL cares to post.
+        let services = crate::services::ServicesContainer::new_mock()
+            .await
+            .unwrap();
+        let workflow = store_with_token(&services, "").await;
+
+        let job = delivery_with(
+            workflow,
+            RUN_NOTIFICATION,
+            &[(
+                "X-TFE-Notification-Signature",
+                &sign(TOKEN, RUN_NOTIFICATION),
+            )],
+        );
+
+        run(&services, &job)
+            .await
+            .expect("an unverifiable notification should be refused without erroring");
+
+        assert!(filed(&services).await.is_empty());
+    }
+
+    #[tokio::test]
     async fn a_delivery_for_a_workflow_that_is_gone_stops_there() {
         // Deliveries queue behind one another, so a workflow can be deleted
         // while one of its own is still waiting to run.
         let services = crate::services::ServicesContainer::new_mock()
             .await
             .unwrap();
-        let workflow = store(&services, serde_json::json!({ "name": "Infrastructure" })).await;
+        let workflow = store_with_token(&services, TOKEN).await;
 
         WorkflowStore::new(&services)
             .with_index(&services)
