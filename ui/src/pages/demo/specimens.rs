@@ -13,7 +13,7 @@ use serde_json::json;
 use yew::prelude::*;
 
 use crate::components::{
-    Alert, AlertKind, BrowserEntry, BrowserPartition, Button, ButtonKind, ConnectMenu,
+    Alert, AlertKind, BrowserEntry, BrowserPartition, Button, ButtonGroup, ButtonKind, ConnectMenu,
     ConnectionsPanel, DbEntity, Documentation, DynamicForm, EntityMetadata, Field, FilterInput,
     JsonHighlight, NumberInput, PageTitle, PartitionBrowser, RefreshButton, Select, SelectOption,
     Switch, TextArea, TextInput, WebhookAddress,
@@ -264,6 +264,32 @@ fn buttons() -> Html {
             { row("Primary", ButtonKind::Primary) }
             { row("Danger", ButtonKind::Danger) }
             { row("Subtle", ButtonKind::Subtle) }
+
+            <Specimen
+                label="Grouped"
+                note="Actions on one thing, joined so they share an edge instead of a gap. The \
+                      outer corners are the only rounded ones, whichever buttons happen to be \
+                      shown."
+            >
+                <div class="specimen__row">
+                    <ButtonGroup label="Workflow actions">
+                        <Button onclick={inert()}>{ "Edit" }</Button>
+                        <Button onclick={inert()}>{ "Trigger" }</Button>
+                        <Button kind={ButtonKind::Danger} onclick={inert()}>{ "Delete" }</Button>
+                    </ButtonGroup>
+
+                    <ButtonGroup label="Workflow actions">
+                        <Button onclick={inert()} disabled=true>{ "Edit" }</Button>
+                        <Button kind={ButtonKind::Danger} onclick={inert()} busy=true>
+                            { "Delete" }
+                        </Button>
+                    </ButtonGroup>
+
+                    <ButtonGroup label="Workflow actions">
+                        <Button kind={ButtonKind::Danger} onclick={inert()}>{ "Delete" }</Button>
+                    </ButtonGroup>
+                </div>
+            </Specimen>
         </>
     }
 }

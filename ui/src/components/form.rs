@@ -501,3 +501,28 @@ pub fn button(props: &ButtonProps) -> Html {
         </button>
     }
 }
+
+#[derive(Properties, PartialEq)]
+pub struct ButtonGroupProps {
+    /// What the set of actions is for, for anything reading the page aloud. A
+    /// group with no name is one a screen reader can only announce as a group.
+    #[prop_or_default]
+    pub label: Option<AttrValue>,
+
+    #[prop_or_default]
+    pub children: Children,
+}
+
+/// Several actions on one thing, joined into a single control.
+///
+/// The shared edge is what says they belong together, and it costs less width
+/// than the gaps between free-standing buttons — which is what a row has to give
+/// up to say what the actions are being done to.
+#[function_component(ButtonGroup)]
+pub fn button_group(props: &ButtonGroupProps) -> Html {
+    html! {
+        <div class="btn-group" role="group" aria-label={props.label.clone()}>
+            { props.children.clone() }
+        </div>
+    }
+}

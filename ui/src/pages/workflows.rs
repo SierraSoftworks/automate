@@ -19,8 +19,8 @@ use yew::prelude::*;
 use crate::api;
 use crate::components::dynamic_form::{set_at, value_at};
 use crate::components::{
-    Alert, AlertKind, Button, ButtonKind, Documentation, DynamicForm, FetchedOptions, Field,
-    MenuButton, MenuButtonOption, Switch, TextInput, WebhookAddress,
+    Alert, AlertKind, Button, ButtonGroup, ButtonKind, Documentation, DynamicForm, FetchedOptions,
+    Field, MenuButton, MenuButtonOption, Switch, TextInput, WebhookAddress,
 };
 
 /// What a form hands back when it is submitted.
@@ -328,7 +328,9 @@ fn workflow_row(props: &WorkflowRowProps) -> Html {
                         Timeout::new(3_000, move || triggered.set(false)).forget();
                         on_changed.emit(());
                     }
-                    Err(err) => error.set(Some(("We could not run this workflow.", err.to_string()))),
+                    Err(err) => {
+                        error.set(Some(("We could not run this workflow.", err.to_string())))
+                    }
                 }
 
                 busy.set(false);
@@ -370,29 +372,31 @@ fn workflow_row(props: &WorkflowRowProps) -> Html {
                     </span>
                 </div>
 
-                if props.descriptor.is_some() {
-                    <Button onclick={on_edit} disabled={*busy}>
-                        if *editing { { "Close" } } else { { "Edit" } }
-                    </Button>
-                }
+                <ButtonGroup label="Workflow actions">
+                    if props.descriptor.is_some() {
+                        <Button onclick={on_edit} disabled={*busy}>
+                            if *editing { { "Close" } } else { { "Edit" } }
+                        </Button>
+                    }
 
-                // Only for the workflows that have something to run without
-                // being handed a payload first.
-                if let Some(descriptor) = &props.descriptor
-                    && matches!(descriptor.trigger, WorkflowTrigger::Cron { .. })
-                {
-                    <Button
-                        onclick={on_trigger}
-                        disabled={*busy}
-                        title="Run this workflow now, without changing its schedule"
-                    >
-                        if *triggered { { "Queued" } } else { { "Trigger" } }
-                    </Button>
-                }
+                    // Only for the workflows that have something to run without
+                    // being handed a payload first.
+                    if let Some(descriptor) = &props.descriptor
+                        && matches!(descriptor.trigger, WorkflowTrigger::Cron { .. })
+                    {
+                        <Button
+                            onclick={on_trigger}
+                            disabled={*busy}
+                            title="Run this workflow now, without changing its schedule"
+                        >
+                            if *triggered { { "Queued" } } else { { "Trigger" } }
+                        </Button>
+                    }
 
-                <Button kind={ButtonKind::Danger} onclick={on_delete} busy={*busy}>
-                    { "Delete" }
-                </Button>
+                    <Button kind={ButtonKind::Danger} onclick={on_delete} busy={*busy}>
+                        { "Delete" }
+                    </Button>
+                </ButtonGroup>
             </div>
 
             if let Some((title, message)) = (*error).clone() {

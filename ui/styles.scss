@@ -245,6 +245,39 @@ pre {
   }
 }
 
+// Several actions on one thing, joined into a single control. Sharing an edge
+// says they belong together and costs a pair of borders instead of a gap.
+.btn-group {
+  display: inline-flex;
+
+  > .btn {
+    position: relative;
+    border-radius: 0;
+    // Collapses the doubled border between neighbours to a single line.
+    margin-left: -1px;
+
+    &:first-child {
+      margin-left: 0;
+      border-radius: $radius-sm 0 0 $radius-sm;
+    }
+
+    &:last-child {
+      border-radius: 0 $radius-sm $radius-sm 0;
+    }
+
+    &:only-child {
+      border-radius: $radius-sm;
+    }
+
+    // The button being pointed at draws its whole outline, including the edge
+    // its neighbour is otherwise overlapping.
+    &:hover:not(:disabled),
+    &:focus-visible {
+      z-index: 1;
+    }
+  }
+}
+
 // -----------------------------------------------------------------------------
 // Form fields
 //
