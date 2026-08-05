@@ -72,6 +72,7 @@ pub fn github_app(api_url: impl Into<String>) -> GitHubAppConfig {
     GitHubAppConfig {
         app_id: "123".to_string(),
         private_key: GITHUB_APP_PRIVATE_KEY.clone(),
+        webhook_secret: "github-webhook-secret".to_string(),
         slug: "my-automate".to_string(),
         api_url: Some(api_url.into()),
         acl: None,

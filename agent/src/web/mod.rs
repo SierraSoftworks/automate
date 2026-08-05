@@ -59,9 +59,7 @@ pub async fn run_web_server(context: AppContext) -> Result<(), human_errors::Err
                 .service(api::configure())
                 .service(integrations::configure())
                 .service(integrations::configure_oauth_callback())
-                // Every webhook now belongs to a workflow and is reached at that
-                // workflow's own address. There is no longer a path that accepts
-                // a delivery on the installation's behalf.
+                .route("/webhooks/github", web::post().to(webhooks::deliver_github))
                 .route("/webhooks/w/{token}", web::post().to(webhooks::deliver))
                 .route("/robots.txt", web::get().to(ui::robots))
                 .default_service(web::get().to(ui::serve))

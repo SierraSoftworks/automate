@@ -22,12 +22,13 @@ api_key = "${{ env.GITHUB_API_KEY }}"
 # `[oauth2.*]` provider keys — an `[oauth2.github]` provider alongside this one
 # is refused at start-up rather than resolved arbitrarily.
 #
-# Point the App's webhook at https://your-automate-host/webhooks/github and set
-# its webhook secret to the same value as webhooks.github.secret.
+# Point the App's webhook at https://your-automate-host/webhooks/github and use
+# the same secret there and in webhook_secret below.
 # [connections.github.app]
 # app_id = "123456"
 # slug = "my-automate"  # the App's URL slug, from its public page
 # private_key = "${{ env.GITHUB_APP_PRIVATE_KEY }}"
+# webhook_secret = "${{ env.GITHUB_APP_WEBHOOK_SECRET }}"
 # Where the App's management calls are addressed, defaulting to
 # https://api.github.com. A GitHub Enterprise Server instance serves its API
 # from its own host instead, so an App registered there needs this.
