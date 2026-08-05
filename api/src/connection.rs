@@ -1,5 +1,6 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use serde_json::{Map, Value};
 
 use crate::ConnectionId;
 
@@ -92,6 +93,19 @@ pub struct ConnectionSummary {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub expires_at: Option<DateTime<Utc>>,
 
+    /// Facts about the linked account which the provider told us, such as
+    /// whether a GitHub account is a user or an organisation.
+    ///
+    /// Carried through to the browser so a listing can say something more useful
+    /// than the provider's name, and so the integrations page and the
+    /// connections page describe the same account the same way.
+    ///
+    /// Nothing secret belongs in here. It is not sealed, it is rendered, and it
+    /// is the one part of a connection that leaves the agent — which is the
+    /// whole reason this type has no credential on it.
+    #[serde(default, skip_serializing_if = "Map::is_empty")]
+    pub metadata: Map<String, Value>,
+
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -115,6 +129,7 @@ mod tests {
             // Populated so that every optional field is present in the output
             // and the assertion below covers the whole shape.
             expires_at: Some(Utc::now()),
+            metadata: Map::from_iter([("account_type".into(), Value::String("User".into()))]),
             created_at: Utc::now(),
             updated_at: Utc::now(),
         };
@@ -134,12 +149,23 @@ mod tests {
                 "expires_at",
                 "id",
                 "kind",
+                "metadata",
                 "name",
                 "provider",
                 "status",
                 "updated_at",
             ],
             "a field was added to the connection summary; check it cannot carry a credential"
+        );
+
+        // `metadata` is the one field here whose contents are not fixed by this
+        // type, so the rule that nothing secret goes in it is the only thing
+        // protecting it. This asserts the part that makes the rule matter: what
+        // is put there really does reach the browser verbatim.
+        assert_eq!(
+            rendered["metadata"],
+            serde_json::json!({ "account_type": "User" }),
+            "metadata is rendered as-is, so a credential placed in it would be published"
         );
     }
 
@@ -190,6 +216,10 @@ mod tests {
 
         assert_eq!(summary.status, ConnectionStatus::Ok);
         assert_eq!(summary.expires_at, None);
+        // A summary that predates metadata has to keep deserialising, because
+        // the same shape is what an older agent's stored records and an older
+        // browser's cached payloads look like.
+        assert!(summary.metadata.is_empty());
     }
 }
 

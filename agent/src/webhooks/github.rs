@@ -1757,7 +1757,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn installation_events_maintain_the_registry() {
+    async fn installation_events_maintain_the_connection() {
         let (services, workflow) = services_with("secret", off(), on()).await;
 
         let body = |action: &str| {
@@ -1793,32 +1793,32 @@ mod tests {
                     .expect("the installation event should be handled");
             };
 
+        let linked = async |services: &crate::services::ServicesContainer<crate::db::TenantDb>| {
+            crate::connections::ConnectionStore::for_services(services)
+                .list_for_provider(crate::integrations::github_app::GITHUB_PROVIDER)
+                .await
+                .expect("list the linked GitHub accounts")
+        };
+
         deliver(body("created"), &services).await;
 
-        let recorded = services
-            .kv()
-            .get::<crate::services::GitHubInstallation>(
-                crate::integrations::github_app::INSTALLATIONS_PARTITION,
-                "notheotherben",
-            )
-            .await
-            .expect("read the registry")
-            .expect("the installation should be recorded");
-        assert_eq!(recorded.id, 42);
-        assert_eq!(recorded.account_type, "User");
+        let recorded = linked(&services).await;
+        assert_eq!(recorded.len(), 1);
+        assert_eq!(recorded[0].account.as_deref(), Some("notheotherben"));
+        // The account type rides on the connection now; there is no second
+        // record left for it to live in.
+        assert_eq!(
+            recorded[0]
+                .metadata
+                .get(crate::integrations::github_app::ACCOUNT_TYPE)
+                .and_then(serde_json::Value::as_str),
+            Some("User")
+        );
 
         deliver(body("deleted"), &services).await;
 
         assert!(
-            services
-                .kv()
-                .get::<crate::services::GitHubInstallation>(
-                    crate::integrations::github_app::INSTALLATIONS_PARTITION,
-                    "notheotherben",
-                )
-                .await
-                .expect("read the registry")
-                .is_none(),
+            linked(&services).await.is_empty(),
             "uninstalling should forget the account"
         );
     }

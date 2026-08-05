@@ -26,6 +26,7 @@
 #![allow(dead_code)]
 
 use chrono::{DateTime, Utc};
+use serde_json::{Map, Value};
 
 use automate_api::{ConnectionId, ConnectionKind, ConnectionStatus, ConnectionSummary};
 
@@ -118,6 +119,35 @@ pub struct Connection {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub expires_at: Option<DateTime<Utc>>,
 
+    /// Facts about the linked account which the provider told us and which we
+    /// want to keep, but which are neither credentials nor something every
+    /// provider has: a GitHub installation's `account_type` — `User` or
+    /// `Organization` — being the first of them.
+    ///
+    /// It exists so that such a fact has somewhere to live on the connection
+    /// itself. Without it the only way to keep one was a second record beside
+    /// the connection, and two records describing one linked account are two
+    /// records that can disagree about it.
+    ///
+    /// # What must never go in here
+    ///
+    /// Anything secret. Unlike [`Connection::secret`] this is not sealed — it is
+    /// stored in the clear, it is included in a `{:?}`, and it is copied onto
+    /// [`ConnectionSummary`] and sent to the browser. A token, a webhook secret,
+    /// a signing key: none of those belong here, and the sealed credential is
+    /// where they go instead. If you are unsure whether a value is safe to
+    /// publish, it is not.
+    ///
+    /// A map rather than a bare [`serde_json::Value`] so that a connection's
+    /// metadata is always an object. That gives merging a single obvious
+    /// meaning — see [`ConnectionStore::update_metadata`] — and means no stored
+    /// record can turn out to have a number where the rest have fields.
+    ///
+    /// Defaulted, and omitted when empty, so a connection written before this
+    /// existed loads unchanged and does not grow an empty object at rest.
+    #[serde(default, skip_serializing_if = "Map::is_empty")]
+    pub metadata: Map<String, Value>,
+
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 
@@ -139,6 +169,7 @@ impl Connection {
             account: self.account.clone(),
             status: self.status,
             expires_at: self.expires_at,
+            metadata: self.metadata.clone(),
             created_at: self.created_at,
             updated_at: self.updated_at,
         }
@@ -233,6 +264,27 @@ impl<S: Services> ConnectionStore<S> {
         account: Option<String>,
         secret: ConnectionSecret,
     ) -> Result<Connection, human_errors::Error> {
+        self.create_with_metadata(provider, name, account, secret, Map::new())
+            .await
+    }
+
+    /// Stores a new connection along with what the provider told us about the
+    /// account it links to.
+    ///
+    /// Separate from [`ConnectionStore::create`] rather than an extra argument
+    /// on it, because most providers have nothing to record and would only be
+    /// passing an empty map through.
+    ///
+    /// See [`Connection::metadata`] for what may go in there — in particular,
+    /// nothing secret.
+    pub async fn create_with_metadata(
+        &self,
+        provider: impl Into<String>,
+        name: impl Into<String>,
+        account: Option<String>,
+        secret: ConnectionSecret,
+        metadata: Map<String, Value>,
+    ) -> Result<Connection, human_errors::Error> {
         let now = Utc::now();
         let provider = provider.into();
         let name = name.into();
@@ -248,6 +300,7 @@ impl<S: Services> ConnectionStore<S> {
                 account: account.clone(),
                 status: ConnectionStatus::Ok,
                 expires_at: secret.expires_at(),
+                metadata: metadata.clone(),
                 created_at: now,
                 updated_at: now,
                 secret: self
@@ -323,6 +376,38 @@ impl<S: Services> ConnectionStore<S> {
         Ok(Some(connection))
     }
 
+    /// Records what the provider has told us about a connection's account.
+    ///
+    /// Merges rather than replaces. Metadata is written by whoever happens to
+    /// learn something — the setup wizard, a webhook, a start-up migration — and
+    /// none of them holds the whole picture, so a wholesale write would let the
+    /// last one to run silently drop what the others had established. Merging is
+    /// well defined precisely because [`Connection::metadata`] is a map: the
+    /// keys given win, the keys left out are kept.
+    ///
+    /// Unlike [`ConnectionStore::update_secret`] this leaves the status alone.
+    /// Learning that an account is an organisation says nothing about whether
+    /// our credential for it still works.
+    ///
+    /// See [`Connection::metadata`] for what may go in here — in particular,
+    /// nothing secret.
+    pub async fn update_metadata(
+        &self,
+        id: ConnectionId,
+        metadata: Map<String, Value>,
+    ) -> Result<Option<Connection>, human_errors::Error> {
+        let Some(mut connection) = self.get(id).await? else {
+            return Ok(None);
+        };
+
+        connection.metadata.extend(metadata);
+        connection.updated_at = Utc::now();
+
+        self.put(&connection).await?;
+
+        Ok(Some(connection))
+    }
+
     /// Records that a connection has stopped working.
     pub async fn set_status(
         &self,
@@ -365,47 +450,25 @@ impl<S: Services> ConnectionStore<S> {
     /// connection, which is a clearer thing for the user to see than having
     /// silently disappeared along with the credential.
     ///
-    /// # Why a GitHub connection takes its installation record with it
+    /// # Why removing a GitHub connection is not an uninstall
     ///
-    /// A GitHub App connection is written together with an entry in the
-    /// installation registry, by
-    /// [`crate::integrations::github_app::record_installation`]. Removing only
-    /// one of the pair would leave the integrations page still listing the
-    /// account as connected while the connections page and every picker say it
-    /// is not, and the person would have no way to tell which was right. So both
-    /// go.
-    ///
-    /// It deliberately does **not** uninstall the App at GitHub. That revokes
-    /// our access to somebody's repositories, it is not undoable from here, and
-    /// it already has its own explicit control in the integrations area. Because
-    /// the App stays installed, the account can be brought back by running that
-    /// integration's setup again — which is what makes removing the connection a
-    /// recoverable act rather than a trap.
-    ///
-    /// Done here rather than in the HTTP handler so that it holds for every
-    /// caller, including
-    /// [`crate::integrations::github_app::forget_installation`].
+    /// A GitHub App installation *is* its connection — there is no second record
+    /// beside it — so this is the only thing that has to go. It deliberately
+    /// does **not** uninstall the App at GitHub. That revokes our access to
+    /// somebody's repositories, it is not undoable from here, and it already has
+    /// its own explicit control in the integrations area. Because the App stays
+    /// installed, the account can be brought back by running that integration's
+    /// setup again — which is what makes removing the connection a recoverable
+    /// act rather than a trap.
     pub async fn delete(&self, id: ConnectionId) -> Result<bool, human_errors::Error> {
-        let Some(connection) = self.get(id).await? else {
+        if self.get(id).await?.is_none() {
             return Ok(false);
-        };
+        }
 
         self.services
             .kv()
             .remove(CONNECTIONS_PARTITION, id.to_string())
             .await?;
-
-        if connection.provider == crate::integrations::github_app::GITHUB_PROVIDER
-            && let Some(account) = connection.account
-        {
-            self.services
-                .kv()
-                .remove(
-                    crate::integrations::github_app::INSTALLATIONS_PARTITION,
-                    account,
-                )
-                .await?;
-        }
 
         Ok(true)
     }
@@ -568,6 +631,142 @@ mod tests {
         assert!(summary.expires_at.is_some(), "an OAuth grant expires");
 
         let rendered = serde_json::to_string(&summary).unwrap();
+        assert!(!rendered.contains("refresh-Kx3Lm"), "{rendered}");
+        assert!(!rendered.contains("access-tYqR9"), "{rendered}");
+    }
+
+    #[tokio::test]
+    async fn metadata_survives_being_stored_and_read_back() {
+        // Metadata is only worth having if it is still there next time; the
+        // point of it is to be the one durable record of a fact the provider
+        // told us once.
+        let store = store().await;
+
+        let created = store
+            .create_with_metadata(
+                "github",
+                "SierraSoftworks",
+                Some("SierraSoftworks".into()),
+                api_key("tok"),
+                Map::from_iter([("account_type".into(), Value::String("Organization".into()))]),
+            )
+            .await
+            .unwrap();
+
+        let loaded = store.get(created.id).await.unwrap().unwrap();
+        assert_eq!(
+            loaded.metadata.get("account_type"),
+            Some(&Value::String("Organization".into()))
+        );
+    }
+
+    #[tokio::test]
+    async fn updating_metadata_adds_to_what_is_there_rather_than_replacing_it() {
+        // Several things write metadata and none of them knows the whole
+        // picture, so a write that dropped everything it was not told about
+        // would quietly lose whatever the others had established.
+        let store = store().await;
+
+        let created = store
+            .create_with_metadata(
+                "github",
+                "SierraSoftworks",
+                None,
+                api_key("tok"),
+                Map::from_iter([("account_type".into(), Value::String("User".into()))]),
+            )
+            .await
+            .unwrap();
+
+        let updated = store
+            .update_metadata(
+                created.id,
+                Map::from_iter([("plan".into(), Value::String("free".into()))]),
+            )
+            .await
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(
+            updated.metadata.get("account_type"),
+            Some(&Value::String("User".into())),
+            "a key nobody mentioned must survive the update"
+        );
+        assert_eq!(
+            updated.metadata.get("plan"),
+            Some(&Value::String("free".into()))
+        );
+
+        // A key that is mentioned is corrected, which is how a stale fact gets
+        // put right when the provider changes its mind.
+        let corrected = store
+            .update_metadata(
+                created.id,
+                Map::from_iter([("account_type".into(), Value::String("Organization".into()))]),
+            )
+            .await
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(
+            corrected.metadata.get("account_type"),
+            Some(&Value::String("Organization".into()))
+        );
+    }
+
+    #[tokio::test]
+    async fn a_connection_written_before_metadata_existed_still_loads() {
+        // Upgrading must not strand somebody's stored credentials behind a
+        // field their records were written without.
+        let store = store().await;
+
+        let created = store
+            .create("todoist", "Personal", None, api_key("tok"))
+            .await
+            .unwrap();
+
+        // Exactly what an older agent wrote: every field it knew about, and no
+        // `metadata` at all.
+        let Value::Object(mut stored) = serde_json::to_value(&created).unwrap() else {
+            panic!("a connection should serialise to an object");
+        };
+        assert!(
+            stored.remove("metadata").is_none(),
+            "a connection with nothing to record must not write an empty object at rest"
+        );
+
+        let loaded: Connection = serde_json::from_value(Value::Object(stored)).unwrap();
+
+        assert!(loaded.metadata.is_empty());
+
+        // The credential has to come back with it, or "it still loads" would be
+        // true and useless.
+        match store.open(&loaded).unwrap() {
+            ConnectionSecret::ApiKey { key } => assert_eq!(key, "tok"),
+            other => panic!("expected an api key, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn a_summary_carries_metadata_but_still_no_credential() {
+        // Metadata is the one part of a connection that reaches the browser
+        // verbatim, which is exactly why nothing secret may be put in it.
+        let store = store().await;
+
+        let created = store
+            .create_with_metadata(
+                "github",
+                "SierraSoftworks",
+                Some("SierraSoftworks".into()),
+                oauth2(),
+                Map::from_iter([("account_type".into(), Value::String("Organization".into()))]),
+            )
+            .await
+            .unwrap();
+
+        let rendered = serde_json::to_string(&created.to_summary()).unwrap();
+
+        assert!(rendered.contains("Organization"), "{rendered}");
         assert!(!rendered.contains("refresh-Kx3Lm"), "{rendered}");
         assert!(!rendered.contains("access-tYqR9"), "{rendered}");
     }
@@ -753,6 +952,13 @@ mod tests {
         assert!(
             store
                 .update_secret(absent, api_key("k"))
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            store
+                .update_metadata(absent, Map::new())
                 .await
                 .unwrap()
                 .is_none()
