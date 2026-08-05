@@ -18,9 +18,8 @@ use yew::prelude::*;
 use crate::api;
 use crate::components::dynamic_form::{set_at, value_at};
 use crate::components::{
-    Alert, AlertKind, Button, ButtonKind, Documentation, DynamicForm, Field, FetchedOptions, Select,
-    SelectOption,
-    Switch, TextInput, WebhookAddress,
+    Alert, AlertKind, Button, ButtonKind, Documentation, DynamicForm, Field, FetchedOptions,
+    MenuButton, MenuButtonOption, Switch, TextInput, WebhookAddress,
 };
 
 /// What a form hands back when it is submitted.
@@ -39,7 +38,7 @@ pub fn workflows() -> Html {
     let error = use_state(|| None::<String>);
     let loading = use_state(|| true);
     let reload = use_state(|| 0u32);
-    let adding = use_state(|| false);
+    let chosen = use_state(|| None::<String>);
 
     {
         let (workflows, types, connections, error, loading) = (
@@ -83,23 +82,33 @@ pub fn workflows() -> Html {
         Callback::from(move |_| reload.set(*reload + 1))
     };
 
-    let on_add = {
-        let adding = adding.clone();
-        Callback::from(move |_| adding.set(true))
+    let on_type = {
+        let chosen = chosen.clone();
+        Callback::from(move |type_id: String| chosen.set(Some(type_id)))
     };
 
     let on_cancel_add = {
-        let adding = adding.clone();
-        Callback::from(move |_| adding.set(false))
+        let chosen = chosen.clone();
+        Callback::from(move |_| chosen.set(None))
     };
 
     let on_created = {
-        let (adding, reload) = (adding.clone(), reload.clone());
+        let (chosen, reload) = (chosen.clone(), reload.clone());
         Callback::from(move |_| {
-            adding.set(false);
+            chosen.set(None);
             reload.set(*reload + 1);
         })
     };
+
+    let type_options: Vec<MenuButtonOption> = types
+        .iter()
+        .map(|descriptor| MenuButtonOption::new(descriptor.id.clone(), descriptor.name.clone()))
+        .collect();
+
+    let chosen_descriptor = chosen
+        .as_ref()
+        .and_then(|id| types.iter().find(|descriptor| &descriptor.id == id))
+        .cloned();
 
     let body = if *loading {
         html! { <p class="workflows__empty">{ "Loading…" }</p> }
@@ -129,13 +138,13 @@ pub fn workflows() -> Html {
         <section class="workflows">
             <div class="workflows__header">
                 <h2 class="workflows__title">{ "Workflows" }</h2>
-                <Button
+                <MenuButton
+                    label="Add Workflow"
+                    options={type_options}
+                    onselect={on_type}
                     kind={ButtonKind::Primary}
-                    onclick={on_add}
-                    disabled={*loading || types.is_empty() || *adding}
-                >
-                    { "Add Workflow" }
-                </Button>
+                    disabled={*loading || chosen_descriptor.is_some()}
+                />
             </div>
 
             if let Some(message) = (*error).clone() {
@@ -146,9 +155,9 @@ pub fn workflows() -> Html {
                 />
             }
 
-            if *adding {
+            if let Some(descriptor) = chosen_descriptor {
                 <AddWorkflow
-                    types={(*types).clone()}
+                    {descriptor}
                     connections={(*connections).clone()}
                     on_created={on_created}
                     oncancel={on_cancel_add}
@@ -369,7 +378,7 @@ fn workflow_row(props: &WorkflowRowProps) -> Html {
 
 #[derive(Properties, PartialEq)]
 struct AddWorkflowProps {
-    types: Vec<WorkflowTypeDescriptor>,
+    descriptor: WorkflowTypeDescriptor,
     connections: Vec<ConnectionSummary>,
     on_created: Callback<()>,
     oncancel: Callback<()>,
@@ -377,38 +386,20 @@ struct AddWorkflowProps {
 
 #[function_component(AddWorkflow)]
 fn add_workflow(props: &AddWorkflowProps) -> Html {
-    let chosen = use_state(|| None::<String>);
     let error = use_state(|| None::<String>);
     let busy = use_state(|| false);
 
-    let descriptor = chosen
-        .as_ref()
-        .and_then(|id| props.types.iter().find(|t| &t.id == id))
-        .cloned();
-
-    let on_type = {
-        let (chosen, error) = (chosen.clone(), error.clone());
-        Callback::from(move |value: Option<String>| {
-            error.set(None);
-            chosen.set(value);
-        })
-    };
-
     let on_submit = {
-        let (chosen, error, busy, on_created) = (
-            chosen.clone(),
+        let (type_id, error, busy, on_created) = (
+            props.descriptor.id.clone(),
             error.clone(),
             busy.clone(),
             props.on_created.clone(),
         );
 
         Callback::from(move |values: WorkflowValues| {
-            let Some(type_id) = (*chosen).clone() else {
-                return;
-            };
-
-            let (chosen, error, busy, on_created) = (
-                chosen.clone(),
+            let (type_id, error, busy, on_created) = (
+                type_id.clone(),
                 error.clone(),
                 busy.clone(),
                 on_created.clone(),
@@ -426,10 +417,7 @@ fn add_workflow(props: &AddWorkflowProps) -> Html {
                 )
                 .await
                 {
-                    Ok(_) => {
-                        chosen.set(None);
-                        on_created.emit(());
-                    }
+                    Ok(_) => on_created.emit(()),
                     Err(err) => error.set(Some(err.to_string())),
                 }
 
@@ -438,52 +426,19 @@ fn add_workflow(props: &AddWorkflowProps) -> Html {
         })
     };
 
-    let choices: Vec<SelectOption> = props
-        .types
-        .iter()
-        .map(|descriptor| SelectOption::new(descriptor.id.clone(), descriptor.name.clone()))
-        .collect();
-
-    let on_cancel = {
-        let oncancel = props.oncancel.clone();
-        Callback::from(move |_: MouseEvent| oncancel.emit(()))
-    };
-
     html! {
-        <>
-            if descriptor.is_none() {
-                <div class="workflows__type-picker">
-                    <Field label="What should it watch?" id="workflow-type" required={true}>
-                        <Select
-                            id="workflow-type"
-                            value={(*chosen).clone().map(AttrValue::from)}
-                            onchange={on_type}
-                            options={choices}
-                            placeholder="Choose a kind of workflow"
-                            clearable={true}
-                            disabled={*busy}
-                        />
-                    </Field>
-
-                    <Button kind={ButtonKind::Subtle} onclick={on_cancel.clone()} disabled={*busy}>
-                        { "Cancel" }
-                    </Button>
-                </div>
-            }
-
-            if let Some(descriptor) = descriptor {
-                <div class="form-modal" role="dialog" aria-modal="true" aria-labelledby="add-workflow-title">
+        <div class="form-modal" role="dialog" aria-modal="true" aria-labelledby="add-workflow-title">
                     <div class="form-modal__panel">
                         <div class="form-modal__header">
                             <h3 id="add-workflow-title" class="form-modal__title">
-                                { format!("Add {} workflow", descriptor.name) }
+                                { format!("Add {} workflow", props.descriptor.name) }
                             </h3>
                         </div>
 
                         <div class="form-modal__body form-modal__body--workflow">
-                            <p class="workflows__form-description">{ descriptor.description.clone() }</p>
+                            <p class="workflows__form-description">{ props.descriptor.description.clone() }</p>
 
-                            <Documentation markdown={descriptor.documentation.clone()} />
+                            <Documentation markdown={props.descriptor.documentation.clone()} />
 
                             if let Some(message) = (*error).clone() {
                                 <Alert
@@ -494,8 +449,7 @@ fn add_workflow(props: &AddWorkflowProps) -> Html {
                             }
 
                             <WorkflowForm
-                                key={descriptor.id.clone()}
-                                descriptor={descriptor.clone()}
+                                descriptor={props.descriptor.clone()}
                                 connections={props.connections.clone()}
                                 initial={None::<WorkflowValues>}
                                 submit_label="Add workflow"
@@ -505,9 +459,7 @@ fn add_workflow(props: &AddWorkflowProps) -> Html {
                             />
                         </div>
                     </div>
-                </div>
-            }
-        </>
+        </div>
     }
 }
 

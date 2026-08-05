@@ -435,9 +435,8 @@ pre {
   }
 }
 
-// Connect dropdown: a themed menu of configured integration providers, opened
-// from a toolbar button beside Refresh.
-.connect-menu {
+// A button which owns a short dropdown menu of choices or commands.
+.menu-button {
   position: relative;
   display: inline-flex;
 
@@ -507,16 +506,16 @@ pre {
     }
   }
 
-  // Shown in place of the trigger when the listing could not be fetched. An
-  // empty menu and a broken endpoint look identical otherwise.
-  &__error {
-    display: inline-flex;
-    align-items: center;
-    padding: 0 0.4rem;
-    color: $text-secondary;
-    font-size: 0.78rem;
-    cursor: help;
-  }
+}
+
+// Shown in place of ConnectMenu when integrations could not be fetched.
+.connect-menu__error {
+  display: inline-flex;
+  align-items: center;
+  padding: 0 0.4rem;
+  color: $text-secondary;
+  font-size: 0.78rem;
+  cursor: help;
 }
 
 // Connections panel: the accounts currently linked to each configured
@@ -1132,23 +1131,6 @@ footer {
     max-width: 62ch;
   }
 
-  &__type-picker {
-    display: flex;
-    align-items: flex-end;
-    gap: 0.5rem;
-    max-width: 32rem;
-    margin-bottom: 1.5rem;
-    padding: 1rem;
-    background: $fill-lighter;
-    border: 1px solid $border-lighter;
-    border-radius: $radius;
-
-    .field {
-      flex: 1;
-      margin-bottom: 0;
-    }
-  }
-
   &__form-actions {
     display: flex;
     align-items: center;
@@ -1285,23 +1267,6 @@ footer {
     display: flex;
     flex-direction: column;
     gap: 0.5rem;
-  }
-
-  &__type-picker {
-    display: flex;
-    align-items: flex-end;
-    gap: 0.5rem;
-    max-width: 34rem;
-    margin-bottom: 1.25rem;
-    padding: 1rem;
-    background: $fill-lighter;
-    border: 1px solid $border-lighter;
-    border-radius: $radius;
-
-    .field {
-      flex: 1;
-      margin-bottom: 0;
-    }
   }
 
   &__form-description {
@@ -2240,10 +2205,6 @@ footer {
       flex-direction: column;
     }
 
-    &__type-picker {
-      align-items: stretch;
-      flex-direction: column;
-    }
   }
 
   .connections {
@@ -2254,10 +2215,6 @@ footer {
       flex-direction: column;
     }
 
-    &__type-picker {
-      align-items: stretch;
-      flex-direction: column;
-    }
   }
 
   .form-modal {

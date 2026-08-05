@@ -44,7 +44,7 @@ test.afterEach(async ({ request }) => {
 /** Adds a webhook-triggered workflow and returns its row. */
 async function addWebhookWorkflow(page: import("@playwright/test").Page, name: string) {
   await page.getByRole("button", { name: "Add Workflow" }).click();
-  await page.getByLabel("What should it watch?").selectOption("webhook");
+  await page.getByRole("menuitem", { name: "Webhook" }).click();
 
   const form = page.getByRole("dialog", { name: "Add Webhook workflow" });
 
