@@ -1,0 +1,16 @@
+{
+  "name": "automate-e2e",
+  "version": "0.0.0",
+  "private": true,
+  "description": "End-to-end tests for the Automate admin UI, driven against a real agent.",
+  "type": "module",
+  "scripts": {
+    "test": "playwright test",
+    "test:ui": "playwright test --ui",
+    "install-browsers": "playwright install chromium"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.62.1",
+    "@types/node": "^26.1.2"
+  }
+}

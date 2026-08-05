@@ -114,6 +114,72 @@ jobs:
           name: ui-dist
           path: ui/dist
 
+  e2e:
+    name: End-to-End Tests
+    runs-on: ubuntu-latest
+
+    needs:
+      - ui
+
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+
+      - name: Setup Cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install protoc
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y protobuf-compiler
+
+      # The UI is embedded into the agent by `include_dir!` at compile time, so
+      # the bundle has to be in place *before* the agent is built. An agent built
+      # against an empty `ui/dist` compiles happily and then answers `GET /` with
+      # a 500, which the suite's smoke test asserts against.
+      - name: Fetch UI bundle
+        uses: actions/download-artifact@v8
+        with:
+          name: ui-dist
+          path: ui/dist
+
+      - name: cargo build
+        run: cargo build -p automate
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: e2e/package-lock.json
+
+      - name: Install dependencies
+        working-directory: e2e
+        run: npm ci
+
+      - name: Install Playwright browsers
+        working-directory: e2e
+        run: npx playwright install --with-deps chromium
+
+      - name: Run end-to-end tests
+        working-directory: e2e
+        run: npx playwright test
+
+      # Only on failure: the report is a few megabytes and there is nothing in it
+      # worth keeping for a run where every test passed.
+      - name: Upload Playwright report
+        uses: actions/upload-artifact@v7
+        if: failure()
+        with:
+          name: playwright-report
+          path: e2e/playwright-report
+          retention-days: 7
+
   build:
     name: ${{ matrix.os }}-${{ matrix.arch }}-release
     runs-on: ${{ matrix.run_on }}
