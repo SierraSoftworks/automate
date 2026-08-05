@@ -21,8 +21,32 @@ impl std::fmt::Display for GitHubAutoMergeTask {
     }
 }
 
+/// The pull requests an untouched auto-merge section acts on.
+///
+/// Held as its source text rather than only as a built [`Filter`], so that the
+/// form's default and the `serde(default)` are literally the same string. The
+/// two used to be unable to disagree because the form did not offer the field
+/// at all; now that it does, sharing the constant is what keeps "left the form
+/// alone" and "left the section out" meaning the same thing.
+pub const DEFAULT_AUTO_MERGE_FILTER: &str =
+    r#"action == "opened" && author in ["dependabot[bot]", "dependabot-preview[bot]"]"#;
+
+/// The review body left on a pull request when approval is switched on.
+pub const DEFAULT_APPROVAL_MESSAGE: &str =
+    "This pull request has been automatically approved because it was raised by a trusted account.";
+
 #[derive(Clone, Serialize, Deserialize)]
 pub struct GitHubAutoMergeConfig {
+    /// Whether this workflow enables auto-merge at all.
+    ///
+    /// Off unless somebody says so. This is the setting that has us approve and
+    /// merge pull requests in their repositories, which is not a capability
+    /// anybody should acquire by upgrading — and an explicit switch is also what
+    /// lets the rest of these settings be reached by a dotted path, which an
+    /// `Option` could not be.
+    #[serde(default)]
+    pub enabled: bool,
+
     /// Selects the pull requests which should have auto-merge enabled. Defaults
     /// to newly opened Dependabot pull requests.
     #[serde(default = "default_auto_merge_filter")]
@@ -46,6 +70,7 @@ pub struct GitHubAutoMergeConfig {
 impl Default for GitHubAutoMergeConfig {
     fn default() -> Self {
         Self {
+            enabled: false,
             filter: default_auto_merge_filter(),
             approve: false,
             approval_message: default_approval_message(),
@@ -55,13 +80,11 @@ impl Default for GitHubAutoMergeConfig {
 }
 
 fn default_auto_merge_filter() -> Filter {
-    Filter::new(r#"action == "opened" && author in ["dependabot[bot]", "dependabot-preview[bot]"]"#)
-        .expect("the default auto-merge filter is always valid")
+    Filter::new(DEFAULT_AUTO_MERGE_FILTER).expect("the default auto-merge filter is always valid")
 }
 
 fn default_approval_message() -> String {
-    "This pull request has been automatically approved because it was raised by a trusted account."
-        .to_string()
+    DEFAULT_APPROVAL_MESSAGE.to_string()
 }
 
 /// Enables GitHub's native auto-merge behaviour on pull requests raised by
@@ -229,6 +252,53 @@ mod tests {
         assert!(matches("opened", "dependabot-preview[bot]"));
         assert!(!matches("synchronize", "dependabot[bot]"));
         assert!(!matches("opened", "notheotherben"));
+    }
+
+    #[test]
+    fn a_section_nobody_has_filled_in_is_switched_off() {
+        // The switch replaced an `Option` whose presence turned this on, so the
+        // reading of an empty object had to change. Off is the only safe answer:
+        // this approves and merges pull requests in somebody's repositories.
+        let empty: GitHubAutoMergeConfig = serde_json::from_value(serde_json::json!({}))
+            .expect("an empty section should load at its defaults");
+
+        assert!(!empty.enabled);
+        assert!(!GitHubAutoMergeConfig::default().enabled);
+    }
+
+    #[test]
+    fn the_settings_survive_being_stored_and_read_back() {
+        // These are part of a workflow's stored configuration now rather than an
+        // internal job's private state, so they have to write as well as read —
+        // and a filter that did not round-trip would be silently replaced with
+        // its default the next time the workflow was saved.
+        let config = GitHubAutoMergeConfig {
+            enabled: true,
+            approve: true,
+            filter: Filter::new(r#"author == "notheotherben""#).unwrap(),
+            ..Default::default()
+        };
+
+        let round_tripped: GitHubAutoMergeConfig = serde_json::from_value(
+            serde_json::to_value(&config).expect("the settings should write"),
+        )
+        .expect("the settings should read back");
+
+        assert!(round_tripped.enabled);
+        assert!(round_tripped.approve);
+        assert_eq!(round_tripped.filter.raw(), r#"author == "notheotherben""#);
+        assert_eq!(round_tripped.approval_message, DEFAULT_APPROVAL_MESSAGE);
+    }
+
+    #[test]
+    fn the_advertised_defaults_are_the_ones_the_struct_uses() {
+        // The form offers these constants as its starting values, so if they
+        // stopped being what an omitted section falls back to then an untouched
+        // form and a missing section would behave differently.
+        let empty: GitHubAutoMergeConfig = serde_json::from_value(serde_json::json!({})).unwrap();
+
+        assert_eq!(empty.filter.raw(), DEFAULT_AUTO_MERGE_FILTER);
+        assert_eq!(empty.approval_message, DEFAULT_APPROVAL_MESSAGE);
     }
 
     #[tokio::test]

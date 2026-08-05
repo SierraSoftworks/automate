@@ -38,8 +38,33 @@ impl std::fmt::Display for GitHubAttentionTask {
     }
 }
 
+/// The comments an untouched attention section raises a task for.
+///
+/// These are held as their source text as well as being parsed, so that the
+/// form's defaults and the `serde(default)`s are the same strings rather than
+/// two copies that agree until one of them is edited.
+pub const DEFAULT_COMMENT_FILTER: &str =
+    r#"!(author in ["dependabot[bot]", "dependabot-preview[bot]"])"#;
+
+/// The assignments an untouched attention section raises a task for: none, since
+/// only the person configuring it knows which account is theirs.
+pub const DEFAULT_ASSIGNMENT_FILTER: &str = "false";
+
+/// The security alerts an untouched attention section raises a task for: all of
+/// them. This is what [`Filter::default`] means, spelled out so the form can
+/// offer the same text the struct falls back to.
+pub const DEFAULT_SECURITY_ALERT_FILTER: &str = "true";
+
 #[derive(Clone, Serialize, Deserialize)]
 pub struct GitHubAttentionConfig {
+    /// Whether this workflow files Todoist reminders at all.
+    ///
+    /// Off unless somebody says so, so that an upgrade cannot start filling
+    /// anybody's inbox — and so the settings below can be reached by a dotted
+    /// path, which an `Option` around the whole section could not be.
+    #[serde(default)]
+    pub enabled: bool,
+
     /// Selects the comments and reviews worth raising a task for. Defaults to
     /// everything except Dependabot's own commentary; add yourself so that your
     /// own replies do not nag you.
@@ -63,6 +88,7 @@ pub struct GitHubAttentionConfig {
 impl Default for GitHubAttentionConfig {
     fn default() -> Self {
         Self {
+            enabled: false,
             comments: default_comment_filter(),
             assignments: default_assignment_filter(),
             security_alerts: Filter::default(),
@@ -72,12 +98,11 @@ impl Default for GitHubAttentionConfig {
 }
 
 fn default_comment_filter() -> Filter {
-    Filter::new(r#"!(author in ["dependabot[bot]", "dependabot-preview[bot]"])"#)
-        .expect("the default comment filter is always valid")
+    Filter::new(DEFAULT_COMMENT_FILTER).expect("the default comment filter is always valid")
 }
 
 fn default_assignment_filter() -> Filter {
-    Filter::new("false").expect("the literal `false` filter is always valid")
+    Filter::new(DEFAULT_ASSIGNMENT_FILTER).expect("the literal `false` filter is always valid")
 }
 
 /// Raises a Todoist task when an issue, pull request or repository needs the
@@ -293,6 +318,56 @@ mod tests {
                 .matches(&event)
                 .expect("the default filter should evaluate")
         );
+    }
+
+    #[test]
+    fn a_section_nobody_has_filled_in_is_switched_off() {
+        // The switch replaced an `Option` whose presence turned this on, so an
+        // empty object reads as off now — otherwise upgrading would start
+        // filling somebody's Todoist inbox on their behalf.
+        let empty: GitHubAttentionConfig = serde_json::from_value(serde_json::json!({}))
+            .expect("an empty section should load at its defaults");
+
+        assert!(!empty.enabled);
+        assert!(!GitHubAttentionConfig::default().enabled);
+    }
+
+    #[test]
+    fn the_settings_survive_being_stored_and_read_back() {
+        // These belong to a workflow's stored configuration now, so they have to
+        // write as well as read; a filter that did not round-trip would quietly
+        // revert to its default the next time the workflow was saved.
+        let config = GitHubAttentionConfig {
+            enabled: true,
+            assignments: Filter::new(r#"assignee == "notheotherben""#).unwrap(),
+            ..Default::default()
+        };
+
+        let round_tripped: GitHubAttentionConfig = serde_json::from_value(
+            serde_json::to_value(&config).expect("the settings should write"),
+        )
+        .expect("the settings should read back");
+
+        assert!(round_tripped.enabled);
+        assert_eq!(
+            round_tripped.assignments.raw(),
+            r#"assignee == "notheotherben""#
+        );
+        assert_eq!(round_tripped.comments.raw(), DEFAULT_COMMENT_FILTER);
+    }
+
+    #[test]
+    fn the_advertised_defaults_are_the_ones_the_struct_uses() {
+        // The form offers these constants as its starting values. The security
+        // alert one is the odd case: the struct reaches it through
+        // `Filter::default()` rather than a named function, so the constant is a
+        // second copy of that meaning and this is what keeps them equal.
+        let empty: GitHubAttentionConfig = serde_json::from_value(serde_json::json!({})).unwrap();
+
+        assert_eq!(empty.comments.raw(), DEFAULT_COMMENT_FILTER);
+        assert_eq!(empty.assignments.raw(), DEFAULT_ASSIGNMENT_FILTER);
+        assert_eq!(empty.security_alerts.raw(), DEFAULT_SECURITY_ALERT_FILTER);
+        assert_eq!(Filter::default().raw(), DEFAULT_SECURITY_ALERT_FILTER);
     }
 
     #[tokio::test]
