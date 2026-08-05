@@ -40,9 +40,20 @@ pub struct Scoped {
     /// need the name to reconstruct the context their credentials are sealed
     /// against.
     tenant: TenantId,
+
+    /// Kept so that handlers can reach the records that belong to nobody, such
+    /// as the index mapping a webhook URL to the account that owns it.
+    context: AppContext,
 }
 
 impl Scoped {
+    /// This account's workflows, with the webhook address book attached so that
+    /// creating or deleting one keeps its URL in step.
+    pub fn workflows(&self) -> crate::workflow_store::WorkflowStore<AppServices> {
+        crate::workflow_store::WorkflowStore::new(self.services.clone())
+            .with_index(self.context.tenant(TenantId::system()))
+    }
+
     /// The account this request is acting for.
     ///
     /// Needed by the OAuth wizard, which has to bind an in-flight authorisation
@@ -77,6 +88,7 @@ impl FromRequest for Scoped {
             Scoped {
                 services: context.tenant(tenant.clone()),
                 tenant,
+                context,
             }
         }))
     }

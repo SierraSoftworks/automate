@@ -286,6 +286,16 @@ pub struct Workflow {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub schedule: Option<String>,
 
+    /// The path a webhook-triggered workflow is reached at.
+    ///
+    /// Carried on the workflow rather than kept back like a connection's
+    /// credential, because unlike a credential this one has to be readable: its
+    /// owner has to paste it into the service that will call it, and a URL that
+    /// can only be seen once is a URL that gets written down somewhere worse.
+    /// Rotating it is how a leaked one is dealt with.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub webhook_path: Option<String>,
+
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub updated_at: chrono::DateTime<chrono::Utc>,
 
@@ -439,6 +449,7 @@ mod tests {
             enabled: true,
             config: serde_json::json!({}),
             schedule: Some("@daily".into()),
+            webhook_path: None,
             created_at: chrono::Utc::now(),
             updated_at: chrono::Utc::now(),
             last_run: None,

@@ -10,6 +10,7 @@ mod oauth_reauthorization;
 mod rss;
 mod spotify_yearly_playlist;
 mod todoist_cleanup;
+mod webhook_todoist;
 mod xkcd;
 mod ynab_stocks;
 mod youtube;

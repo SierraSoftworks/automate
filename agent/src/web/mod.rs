@@ -59,6 +59,9 @@ pub async fn run_web_server(context: AppContext) -> Result<(), human_errors::Err
                 .service(api::configure())
                 .service(integrations::configure())
                 .service(integrations::configure_oauth_callback())
+                // Ahead of the catch-all, so that `w` is read as the marker for
+                // a workflow's own address rather than as a provider name.
+                .route("/webhooks/w/{token}", web::post().to(webhooks::deliver))
                 .route(
                     "/webhooks/{kind:.*}",
                     web::post().to(webhooks::handle::<AppServices>),

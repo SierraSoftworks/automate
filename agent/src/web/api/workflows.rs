@@ -20,7 +20,7 @@ use super::json_error;
 use super::scope::Scoped;
 use crate::db::{AuditCategory, AuditEntry, AuditOutcome, AuditStore};
 use crate::prelude::*;
-use crate::workflow_store::{WorkflowDraft, WorkflowStore};
+use crate::workflow_store::WorkflowDraft;
 
 /// The body of a request to create a workflow.
 #[derive(serde::Deserialize)]
@@ -73,7 +73,7 @@ pub async fn types() -> HttpResponse {
 
 /// `GET /api/v1/workflows` — the workflows this account has configured.
 pub async fn list(services: Scoped) -> HttpResponse {
-    match WorkflowStore::new(services.clone()).list().await {
+    match services.workflows().list().await {
         Ok(workflows) => HttpResponse::Ok().json(workflows),
         Err(err) => json_error(StatusCode::INTERNAL_SERVER_ERROR, err.description()),
     }
@@ -86,7 +86,7 @@ pub async fn get(services: Scoped, id: web::Path<String>) -> HttpResponse {
         Err(response) => return response,
     };
 
-    let store = WorkflowStore::new(services.clone());
+    let store = services.workflows();
 
     match store.find(id).await {
         Ok(Some(record)) => match store.present_record(record) {
@@ -109,7 +109,7 @@ pub async fn create(services: Scoped, body: web::Json<CreateWorkflow>) -> HttpRe
         enabled: body.enabled,
     };
 
-    match WorkflowStore::new(services.clone()).create(draft).await {
+    match services.workflows().create(draft).await {
         Ok(workflow) => {
             reconcile(&services).await;
             record(
@@ -141,7 +141,7 @@ pub async fn update(
     };
 
     let body = body.into_inner();
-    let store = WorkflowStore::new(services.clone());
+    let store = services.workflows();
 
     // The type is taken from the stored record rather than the request, because
     // it is not the caller's to change; `update` refuses a mismatch, so asking
@@ -183,7 +183,7 @@ pub async fn delete(services: Scoped, id: web::Path<String>) -> HttpResponse {
         Err(response) => return response,
     };
 
-    let store = WorkflowStore::new(services.clone());
+    let store = services.workflows();
 
     let name = match store.find(id).await {
         Ok(Some(record)) => store
@@ -211,6 +211,41 @@ pub async fn delete(services: Scoped, id: web::Path<String>) -> HttpResponse {
     }
 }
 
+/// `POST /api/v1/workflows/{workflow}/rotate-webhook` — issues a new address.
+///
+/// The way a leaked URL is dealt with. The old one stops working immediately,
+/// which will break whatever is still calling it — that being the point.
+pub async fn rotate_webhook(services: Scoped, id: web::Path<String>) -> HttpResponse {
+    let id = match parse_id(&id) {
+        Ok(id) => id,
+        Err(response) => return response,
+    };
+
+    let store = services.workflows();
+
+    match store.rotate_webhook(id).await {
+        Ok(_) => {
+            record(
+                &services,
+                "webhook-rotated",
+                id,
+                "Issued a new webhook address; the previous one no longer works.",
+            )
+            .await;
+
+            match store.find(id).await {
+                Ok(Some(record)) => match store.present_record(record) {
+                    Ok(workflow) => HttpResponse::Ok().json(workflow),
+                    Err(err) => json_error(StatusCode::INTERNAL_SERVER_ERROR, err.description()),
+                },
+                Ok(None) => not_found(id),
+                Err(err) => json_error(StatusCode::INTERNAL_SERVER_ERROR, err.description()),
+            }
+        }
+        Err(err) => json_error(StatusCode::BAD_REQUEST, err.description()),
+    }
+}
+
 /// How a file should be applied.
 #[derive(serde::Deserialize)]
 pub struct ImportQuery {
@@ -224,7 +259,7 @@ pub struct ImportQuery {
 
 /// `GET /api/v1/workflows/export` — this account's workflows as TOML.
 pub async fn export(services: Scoped) -> HttpResponse {
-    let store = WorkflowStore::new(services.clone());
+    let store = services.workflows();
 
     let records = match store.records().await {
         Ok(records) => records,
@@ -249,7 +284,7 @@ pub async fn import(
     query: web::Query<ImportQuery>,
     body: String,
 ) -> HttpResponse {
-    let store = WorkflowStore::new(services.clone());
+    let store = services.workflows();
 
     match crate::workflow_toml::import(&store, &body, query.prune).await {
         Ok(summary) => {

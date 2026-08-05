@@ -67,6 +67,14 @@ pub struct WorkflowRecord {
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_run: Option<DateTime<Utc>>,
+
+    /// The token in this workflow's webhook URL, for the triggers that have one.
+    ///
+    /// Sealed, and bound to this tenant and workflow, so a copy of the database
+    /// is not a set of working webhook URLs and a token lifted into another
+    /// record will not open there.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub webhook: Option<crate::crypto::Sealed>,
 }
 
 fn default_enabled() -> bool {
@@ -89,11 +97,53 @@ pub struct WorkflowDraft {
 /// Reads and writes the workflows belonging to one tenant.
 pub struct WorkflowStore<S> {
     services: S,
+
+    /// A handle on the system tenant, where the webhook token index lives.
+    ///
+    /// Optional because most callers never touch a webhook workflow, and
+    /// requiring one everywhere would mean threading it through the reconciler
+    /// and the job host for the sake of a case they do not have. A caller
+    /// without one that tries to create or delete a webhook workflow is refused
+    /// rather than quietly leaving a live URL pointing at nothing — see
+    /// [`WorkflowStore::index`].
+    system: Option<S>,
 }
 
 impl<S: Services> WorkflowStore<S> {
     pub fn new(services: S) -> Self {
-        Self { services }
+        Self {
+            services,
+            system: None,
+        }
+    }
+
+    /// Gives this store what it needs to keep webhook URLs working.
+    pub fn with_index(mut self, system: S) -> Self {
+        self.system = Some(system);
+        self
+    }
+
+    /// The token index, or an explanation of why this store cannot touch one.
+    ///
+    /// Refusing loudly matters more here than convenience: a delete that
+    /// silently skipped the index would leave a webhook URL that still resolves
+    /// to a workflow nobody can see, which is the worst of both outcomes.
+    fn index(&self) -> Result<crate::webhook_index::WebhookIndex<&S>, Error> {
+        match &self.system {
+            Some(system) => Ok(crate::webhook_index::WebhookIndex::new(system)),
+            None => Err(human_errors::system(
+                "This webhook workflow cannot be changed from here, because the webhook address book is not available.",
+                &["Please report this issue to the dev team on GitHub."],
+            )),
+        }
+    }
+
+    /// Whether a workflow of this type is reached by a webhook URL.
+    fn is_webhook(type_id: &str) -> Result<bool, Error> {
+        Ok(matches!(
+            workflows::lookup(type_id)?.descriptor().trigger,
+            WorkflowTrigger::Webhook { .. }
+        ))
     }
 
     /// Every partition that could hold a workflow, one per distinct trigger.
@@ -149,9 +199,29 @@ impl<S: Services> WorkflowStore<S> {
         let partition = Self::partition_for(&draft.type_id)?;
         let now = Utc::now();
 
+        let wants_webhook = Self::is_webhook(&draft.type_id)?;
+
         for _ in 0..ID_ATTEMPTS {
+            let id = WorkflowId::from_entropy(rand::random());
+
+            // Minted before the record is written so that a workflow reachable
+            // by URL always has one; a record saved first and then given a token
+            // is a record that exists without a way to reach it if the second
+            // write fails.
+            let token = wants_webhook.then(crate::webhook_index::mint);
+            let sealed = token
+                .map(|token| {
+                    crate::webhook_index::seal(
+                        self.services.secrets(),
+                        &token,
+                        self.services.tenant(),
+                        id,
+                    )
+                })
+                .transpose()?;
+
             let record = WorkflowRecord {
-                id: WorkflowId::from_entropy(rand::random()),
+                id,
                 type_id: draft.type_id.clone(),
                 config: draft.config.clone(),
                 schedule: schedule.clone(),
@@ -159,6 +229,7 @@ impl<S: Services> WorkflowStore<S> {
                 created_at: now,
                 updated_at: now,
                 last_run: None,
+                webhook: sealed,
             };
 
             if self
@@ -167,6 +238,20 @@ impl<S: Services> WorkflowStore<S> {
                 .insert(partition.clone(), record.id.to_string(), record.clone())
                 .await?
             {
+                if let Some(token) = token {
+                    // Indexed after the record exists, so the index never points
+                    // at a workflow that is not there.
+                    self.index()?
+                        .insert(
+                            &token,
+                            crate::webhook_index::WebhookRoute {
+                                tenant: self.services.tenant().clone(),
+                                workflow: id,
+                            },
+                        )
+                        .await?;
+                }
+
                 return self.present(record);
             }
         }
@@ -248,6 +333,25 @@ impl<S: Services> WorkflowStore<S> {
         }
 
         let now = Utc::now();
+
+        // A workflow restored from a file needs an address, but one that already
+        // has an address keeps it: applying a file must not invalidate URLs that
+        // services are already calling.
+        let (webhook, minted) = match existing.as_ref().and_then(|e| e.webhook.clone()) {
+            Some(sealed) => (Some(sealed), None),
+            None if Self::is_webhook(&draft.type_id)? => {
+                let token = crate::webhook_index::mint();
+                let sealed = crate::webhook_index::seal(
+                    self.services.secrets(),
+                    &token,
+                    self.services.tenant(),
+                    id,
+                )?;
+                (Some(sealed), Some(token))
+            }
+            None => (None, None),
+        };
+
         let record = WorkflowRecord {
             id,
             type_id: draft.type_id,
@@ -257,12 +361,25 @@ impl<S: Services> WorkflowStore<S> {
             created_at: existing.as_ref().map(|e| e.created_at).unwrap_or(now),
             updated_at: now,
             last_run: existing.as_ref().and_then(|e| e.last_run),
+            webhook,
         };
 
         self.services
             .kv()
             .set(partition, id.to_string(), record.clone())
             .await?;
+
+        if let Some(token) = minted {
+            self.index()?
+                .insert(
+                    &token,
+                    crate::webhook_index::WebhookRoute {
+                        tenant: self.services.tenant().clone(),
+                        workflow: id,
+                    },
+                )
+                .await?;
+        }
 
         self.present(record)
     }
@@ -321,6 +438,8 @@ impl<S: Services> WorkflowStore<S> {
             schedule,
             enabled: draft.enabled,
             updated_at: Utc::now(),
+            // Kept as it is: editing a workflow must not silently change the
+            // address somebody has already configured a service to call.
             ..existing
         };
 
@@ -365,10 +484,111 @@ impl<S: Services> WorkflowStore<S> {
     /// rather than deletion having its own half of the logic to get wrong.
     pub async fn delete(&self, id: WorkflowId) -> Result<(), Error> {
         let existing = self.get(id).await?;
+
+        // Revoked before the record goes, so there is never a moment where the
+        // URL still resolves to something that has already been deleted. The
+        // reverse order would leave a live address pointing at nothing if the
+        // second step failed.
+        if let Some(sealed) = &existing.webhook {
+            let token = crate::webhook_index::open(
+                self.services.secrets(),
+                sealed,
+                self.services.tenant(),
+                id,
+            )?;
+
+            self.index()?.remove(&token).await?;
+        }
+
         self.services
             .kv()
             .remove(Self::partition_for(&existing.type_id)?, id.to_string())
             .await
+    }
+
+    /// Replaces a workflow's webhook token, so a leaked URL stops working.
+    ///
+    /// The old token is revoked first: an address that has got out should stop
+    /// resolving even if minting its replacement fails.
+    pub async fn rotate_webhook(
+        &self,
+        id: WorkflowId,
+    ) -> Result<automate_api::WebhookToken, Error> {
+        let existing = self.get(id).await?;
+
+        if existing.webhook.is_none() {
+            return Err(human_errors::user(
+                format!("The workflow '{id}' is not one that is triggered by a webhook."),
+                &["Only webhook workflows have an address to rotate."],
+            ));
+        }
+
+        let index = self.index()?;
+
+        if let Some(sealed) = &existing.webhook
+            && let Ok(previous) = crate::webhook_index::open(
+                self.services.secrets(),
+                sealed,
+                self.services.tenant(),
+                id,
+            )
+        {
+            index.remove(&previous).await?;
+        }
+
+        let token = crate::webhook_index::mint();
+        let sealed = crate::webhook_index::seal(
+            self.services.secrets(),
+            &token,
+            self.services.tenant(),
+            id,
+        )?;
+
+        let record = WorkflowRecord {
+            webhook: Some(sealed),
+            updated_at: Utc::now(),
+            ..existing
+        };
+
+        self.services
+            .kv()
+            .set(
+                Self::partition_for(&record.type_id)?,
+                id.to_string(),
+                record,
+            )
+            .await?;
+
+        index
+            .insert(
+                &token,
+                crate::webhook_index::WebhookRoute {
+                    tenant: self.services.tenant().clone(),
+                    workflow: id,
+                },
+            )
+            .await?;
+
+        Ok(token)
+    }
+
+    /// The token in a workflow's webhook URL, for showing its owner.
+    pub fn webhook_token(
+        &self,
+        record: &WorkflowRecord,
+    ) -> Result<Option<automate_api::WebhookToken>, Error> {
+        record
+            .webhook
+            .as_ref()
+            .map(|sealed| {
+                crate::webhook_index::open(
+                    self.services.secrets(),
+                    sealed,
+                    self.services.tenant(),
+                    record.id,
+                )
+            })
+            .transpose()
     }
 
     /// Turns a stored record into what the API returns, for the callers that
@@ -388,8 +608,18 @@ impl<S: Services> WorkflowStore<S> {
             .flatten()
             .and_then(next_occurrence);
 
+        // Shown as a path rather than a whole URL, because the agent does not
+        // reliably know what address it is reached on from outside — a reverse
+        // proxy may have rewritten it — and a confidently wrong URL is worse
+        // than one the browser completes from where it is already talking to.
+        let webhook_path = self
+            .webhook_token(&record)
+            .unwrap_or(None)
+            .map(|token| format!("/webhooks/w/{token}"));
+
         Ok(Workflow {
             id: record.id,
+            webhook_path,
             name: workflow.describe(&record.config)?,
             type_id: record.type_id,
             enabled: record.enabled,
@@ -634,6 +864,7 @@ mod tests {
                     created_at: Utc::now(),
                     updated_at: Utc::now(),
                     last_run: None,
+                    webhook: None,
                 },
             )
             .await
