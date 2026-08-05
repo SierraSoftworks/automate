@@ -38,11 +38,13 @@ test.afterEach(async ({ request }) => {
   await deleteConnection(request, connection.id);
 });
 
-/** Fills in and submits the "Add a workflow" form for an RSS feed. */
+/** Opens, fills in, and submits the modal for a new RSS workflow. */
 async function addRssWorkflow(page: import("@playwright/test").Page, name: string) {
-  const form = page.locator(".workflows__form");
+  await page.getByRole("button", { name: "Add Workflow" }).click();
+  await page.getByLabel("What should it watch?").selectOption("rss");
 
-  await form.getByLabel("What should it watch?").selectOption("rss");
+  const form = page.getByRole("dialog", { name: "Add RSS Feed workflow" });
+  await expect(page.getByLabel("What should it watch?")).toHaveCount(0);
 
   await form.getByLabel("Name").fill(name);
   await form.getByLabel("Feed URL").fill("https://example.com/rss/");
@@ -70,9 +72,16 @@ test("a workflow configured through the descriptor-driven form is listed once it
   await expect(row).toContainText("rss");
   await expect(row).toContainText("every day at midnight");
 
-  // The form empties itself so the next workflow starts from a blank one rather
-  // than from the last one's answers.
-  await expect(page.locator(".workflows__form").getByLabel("What should it watch?")).toHaveValue("");
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  await expect(page.getByLabel("What should it watch?")).toHaveCount(0);
+
+  // Reopening the flow must start with a fresh picker. In particular, selecting
+  // RSS again should open its form immediately rather than requiring a detour
+  // through a different workflow type to make the native select emit a change.
+  await page.getByRole("button", { name: "Add Workflow" }).click();
+  await page.getByLabel("What should it watch?").selectOption("rss");
+  await expect(page.getByRole("dialog", { name: "Add RSS Feed workflow" })).toBeVisible();
+  await page.getByRole("button", { name: "Cancel", exact: true }).last().click();
 });
 
 test("pausing a workflow from its row keeps it listed and says that it is paused", async ({
@@ -111,8 +120,6 @@ test("renaming a workflow through its edit form updates the entry in the list", 
 
   await row.getByRole("button", { name: "Edit" }).click();
 
-  // Scoped to the row: the "Add a workflow" form is still on the page below,
-  // and it has a field called "Name" too.
   const editor = row.locator(".workflow-form");
   await expect(editor.getByLabel("Name")).toHaveValue(name);
   await editor.getByLabel("Name").fill(renamed);
