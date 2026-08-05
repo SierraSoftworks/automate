@@ -154,8 +154,15 @@ fn dynamic_field(props: &DynamicFieldProps) -> Html {
     let text_update = {
         let update = update.clone();
         Callback::from(move |text: String| {
-            let trimmed = text.trim().to_string();
-            update.emit((!trimmed.is_empty()).then(|| serde_json::json!(trimmed)));
+            update.emit((!text.is_empty()).then(|| serde_json::json!(text)));
+        })
+    };
+
+    let text_blur = {
+        let update = update.clone();
+        Callback::from(move |text: String| {
+            let normalized = text.trim().to_string();
+            update.emit((!normalized.is_empty()).then(|| serde_json::json!(normalized)));
         })
     };
 
@@ -175,6 +182,7 @@ fn dynamic_field(props: &DynamicFieldProps) -> Html {
                 id={id.clone()}
                 value={value.clone()}
                 onchange={text_update}
+                onblur={text_blur}
                 placeholder={placeholder.clone().map(AttrValue::from)}
                 disabled={props.disabled}
                 invalid={invalid}
@@ -186,6 +194,7 @@ fn dynamic_field(props: &DynamicFieldProps) -> Html {
                 id={id.clone()}
                 value={value.clone()}
                 onchange={text_update}
+                onblur={text_blur}
                 placeholder={placeholder.clone().map(AttrValue::from)}
                 disabled={props.disabled}
                 invalid={invalid}
@@ -319,6 +328,7 @@ fn dynamic_field(props: &DynamicFieldProps) -> Html {
                 id={id.clone()}
                 value={value.clone()}
                 onchange={text_update}
+                onblur={text_blur.clone()}
                 placeholder={Some(AttrValue::from("@daily"))}
                 disabled={props.disabled}
                 invalid={invalid}
@@ -331,6 +341,7 @@ fn dynamic_field(props: &DynamicFieldProps) -> Html {
                     id={id.clone()}
                     value={value.clone()}
                     onchange={text_update}
+                    onblur={text_blur}
                     placeholder={Some(AttrValue::from("title contains \"release\""))}
                     disabled={props.disabled}
                     invalid={invalid}

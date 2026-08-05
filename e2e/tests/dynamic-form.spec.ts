@@ -64,6 +64,52 @@ test("choosing a workflow type draws the fields that type asked for", async ({ p
   await expect(form.getByRole("button", { name: "Add workflow" })).toBeVisible();
 });
 
+test("text inputs preserve spaces while typing and normalize them on blur", async ({ page }) => {
+  await gotoApp(page, "/admin/workflows");
+
+  const form = page.locator(".workflows__form");
+  await form.getByLabel("What should it watch?").selectOption("rss");
+
+  const name = form.getByLabel("Name");
+  const raw = "  Release notes daily  ";
+
+  // Type one key at a time so a controlled input rerenders between spaces. A
+  // change handler that trims eagerly removes those spaces before the next key.
+  await name.pressSequentially(raw);
+  await expect(name).toHaveValue(raw);
+
+  await form.getByLabel("Feed URL").click();
+  await expect(name).toHaveValue(raw.trim());
+
+  await name.fill("   ");
+  await expect(name).toHaveValue("   ");
+  await form.getByLabel("Feed URL").click();
+  await expect(name).toHaveValue("");
+});
+
+test("text areas preserve multiline whitespace while editing and normalize it on blur", async ({
+  page,
+}) => {
+  await gotoApp(page, "/admin/workflows");
+
+  const form = page.locator(".workflows__form");
+  await form.getByLabel("What should it watch?").selectOption({ label: "Webhook" });
+
+  const description = form.getByLabel("Task description");
+  const raw = "  Started by Ada\n\nDeployment complete  ";
+
+  await description.fill(raw);
+  await expect(description).toHaveValue(raw);
+
+  await form.getByLabel("Task title").click();
+  await expect(description).toHaveValue(raw.trim());
+
+  await description.fill(" \n ");
+  await expect(description).toHaveValue(" \n ");
+  await form.getByLabel("Task title").click();
+  await expect(description).toHaveValue("");
+});
+
 test("choosing a different type replaces the previous type's fields rather than adding to them", async ({
   page,
 }) => {
