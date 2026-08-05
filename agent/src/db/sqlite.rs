@@ -1,10 +1,144 @@
-use std::{borrow::Cow, collections::HashMap, sync::Arc};
+use std::{borrow::Cow, collections::HashMap, sync::Arc, time::Duration};
 
 use human_errors::{self as errors};
 use tokio_rusqlite::{Connection, OptionalExtension};
 
 use super::{ADVICE_DB_ERROR, ADVICE_REPORT_DEV, AuditEntry, AuditQuery, AuditRecord, AuditStore};
 use crate::prelude::*;
+
+/// How long a connection waits for a lock another connection is holding before
+/// giving up and reporting `SQLITE_BUSY`.
+///
+/// Bare SQLite does not wait at all — the first attempt to take a lock somebody
+/// else holds fails immediately — but we are not on bare SQLite: rusqlite calls
+/// `sqlite3_busy_timeout(db, 5000)` on every connection it opens, so this
+/// application has in fact had a five second timeout all along. Setting it here
+/// changes no behaviour today. It is set anyway because that default is an
+/// undocumented implementation detail of a dependency, applying to a setting
+/// whose absence turns routine contention into user-visible errors; a version
+/// bump that dropped it would be silent, and this is the only line that would
+/// have to change if the value ever needs revisiting.
+///
+/// Five seconds is far longer than any lock this application takes — the writes
+/// here are single statements and small batched migrations, all completing in
+/// single-digit milliseconds — while staying short enough that a genuinely
+/// stuck holder (a `sqlite3` prompt left open inside a transaction, a hung
+/// backup) surfaces as an error the operator can act on rather than as an HTTP
+/// request that never returns.
+const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Where a connection's database lives, which decides which pragmas are
+/// meaningful for it.
+///
+/// This is passed in by the caller that opened the connection rather than
+/// sniffed afterwards, because the two cases want genuinely different treatment
+/// and guessing wrong is silent.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Storage {
+    /// A database backed by a file on disk, as a real installation runs.
+    File,
+    /// A `:memory:` database, as the tests use. It is private to the single
+    /// connection that created it, so nothing can contend with it and the
+    /// journalling pragmas have nothing to do.
+    Memory,
+}
+
+/// Applies the connection settings this application needs for safe concurrent
+/// access.
+///
+/// This runs for **every** connection opened against the database, not just the
+/// first, because `busy_timeout` and `synchronous` are per-connection settings
+/// that revert to their defaults on a fresh handle. `journal_mode` is the
+/// exception: see below.
+async fn configure(connection: &Connection, storage: Storage) -> Result<(), errors::Error> {
+    let journal_mode = connection
+        .call(move |c| {
+            // Set first, deliberately. Switching a database into WAL mode needs
+            // a brief exclusive lock on the file, so if another process happens
+            // to be holding it at that moment we want to wait for it rather
+            // than fail the whole startup over a few milliseconds.
+            c.busy_timeout(BUSY_TIMEOUT)?;
+
+            if storage == Storage::Memory {
+                // WAL needs a file to put the write-ahead log and the shared
+                // memory index in, so it is meaningless for `:memory:`; SQLite
+                // quietly declines the request and stays on its "memory"
+                // journal. There is nothing to be gained either way, because an
+                // in-memory database is reachable only from the connection that
+                // created it and so can never be contended. `synchronous` is
+                // likewise moot with no disk to sync to.
+                return Ok::<_, tokio_rusqlite::Error>(None);
+            }
+
+            // WAL lets readers carry on regardless of what a writer is doing.
+            //
+            // The default rollback journal is less catastrophic than it is
+            // usually described — a writer holding a reserved lock does not
+            // block readers — but it takes an exclusive lock whenever it
+            // commits, spills its page cache, or is asked for one explicitly,
+            // and readers are locked out for as long as that lasts. That window
+            // covers the `fsync` of the journal, which is the slowest thing the
+            // database does. Under WAL there is no such window at all.
+            //
+            // Unlike the others this is a property of the *database file*, not
+            // of the connection: it is recorded in the file header, so it is
+            // set once and every subsequent connection — from this process or
+            // any other, including `sqlite3` at a prompt — inherits it. Running
+            // the pragma again on an already-WAL database is a no-op.
+            //
+            // It is also the one pragma here that can legitimately fail to
+            // apply. WAL coordinates through shared memory between the
+            // processes holding the file open, which needs real `mmap`, so it
+            // does not work on network filesystems — NFS, SMB, and the
+            // container volume drivers backed by them. Self-hosted
+            // installations end up on network storage far more often than
+            // anyone plans, so this falls back rather than refusing to start,
+            // and reports what SQLite actually settled on.
+            let journal_mode: String =
+                c.query_row("PRAGMA journal_mode = WAL", [], |row| row.get(0))?;
+
+            if journal_mode.eq_ignore_ascii_case("wal") {
+                // `NORMAL` stops syncing the write-ahead log on every commit,
+                // syncing at checkpoints instead. Under WAL this is the
+                // standard pairing and it is durable against this process
+                // crashing — the committed data is already in the WAL and the
+                // operating system will flush it — costing only the most recent
+                // commits if the machine loses power, and never corrupting the
+                // database.
+                //
+                // Gating this on WAL having actually applied is the point.
+                // Paired with the rollback journal we would otherwise have
+                // fallen back to, `NORMAL` gives up the fsync that protects
+                // against a *torn* journal, and power loss can then corrupt the
+                // database rather than merely lose the last transaction. On
+                // that path the default `FULL` is the right trade, so leave it.
+                c.pragma_update(None, "synchronous", "NORMAL")?;
+            }
+
+            // Foreign keys are deliberately not enabled. Nothing in `MIGRATIONS`
+            // declares a `REFERENCES` clause, so the pragma would have no
+            // constraints to enforce; it belongs with the schema that first
+            // needs it, not here in advance of one.
+
+            Ok(Some(journal_mode))
+        })
+        .await
+        .wrap_system_err(
+            "Failed to configure the SQLite connection.",
+            ADVICE_DB_ERROR,
+        )?;
+
+    if let Some(mode) = journal_mode
+        && !mode.eq_ignore_ascii_case("wal")
+    {
+        warn!(
+            journal_mode = %mode,
+            "The database could not be switched into write-ahead logging, so readers will be locked out while each write commits. This usually means it is on a network filesystem (NFS or SMB), which SQLite cannot use WAL on; moving it onto local storage will fix it."
+        );
+    }
+
+    Ok(())
+}
 
 #[derive(Clone)]
 pub struct SqliteDatabase {
@@ -137,6 +271,8 @@ impl SqliteDatabase {
             &["Make sure the file path is correct and accessible."],
         )?;
 
+        configure(&connection, Storage::File).await?;
+
         let mut db = Self {
             connection: Arc::new(connection),
         };
@@ -150,6 +286,8 @@ impl SqliteDatabase {
         let connection = Connection::open_in_memory().await.or_system_err(&[
             "Make sure that there is enough memory available to create an in-memory database.",
         ])?;
+
+        configure(&connection, Storage::Memory).await?;
 
         let mut db = Self {
             connection: Arc::new(connection),
@@ -170,6 +308,8 @@ impl SqliteDatabase {
         let connection = Connection::open_in_memory().await.or_system_err(&[
             "Make sure that there is enough memory available to create an in-memory database.",
         ])?;
+
+        configure(&connection, Storage::Memory).await?;
 
         connection
             .call(move |c| {
@@ -1931,5 +2071,312 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(migrated["published"], "2024-02-02T02:02:02Z");
+    }
+
+    /// A scratch directory that deletes itself, so the tests below can use a
+    /// real file on disk. The pragmas that matter here — WAL above all — are
+    /// no-ops for `:memory:`, so they cannot be tested any other way.
+    ///
+    /// This removes the whole *directory*, not the database file, because a WAL
+    /// database is three files: `db`, `db-wal` and `db-shm`. Deleting only the
+    /// path that was opened would leave the other two behind.
+    struct ScratchDir(std::path::PathBuf);
+
+    impl ScratchDir {
+        fn new() -> Self {
+            let path = std::env::temp_dir().join(format!("automate-db-{}", uuid::Uuid::new_v4()));
+            std::fs::create_dir_all(&path).unwrap();
+            Self(path)
+        }
+
+        fn database(&self) -> String {
+            self.0.join("database.sqlite").to_str().unwrap().to_string()
+        }
+    }
+
+    impl Drop for ScratchDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    /// Reads a pragma back off whichever connection this database holds.
+    async fn pragma<T>(db: &SqliteDatabase, pragma: &'static str) -> T
+    where
+        T: rusqlite::types::FromSql + Send + 'static,
+    {
+        db.connection
+            .call(move |c| c.query_row(&format!("PRAGMA {pragma}"), [], |row| row.get::<_, T>(0)))
+            .await
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn a_database_backed_by_a_file_is_in_wal_mode() {
+        let scratch = ScratchDir::new();
+        let db = SqliteDatabase::open(&scratch.database()).await.unwrap();
+
+        assert_eq!(
+            pragma::<String>(&db, "journal_mode").await,
+            "wal",
+            "a file-backed database should be switched out of the default rollback journal, under which a writer locks readers out"
+        );
+    }
+
+    #[tokio::test]
+    async fn wal_mode_is_recorded_in_the_database_file_itself() {
+        let scratch = ScratchDir::new();
+
+        // WAL is a property of the file rather than of the connection, so it
+        // survives every connection being closed. Proving that is what lets the
+        // comment on `configure` claim that anything else opening the file —
+        // a backup, `sqlite3` at a prompt — inherits WAL without being asked to.
+        {
+            let db = SqliteDatabase::open(&scratch.database()).await.unwrap();
+            db.tenant(alice()).set("notes", "a", "value").await.unwrap();
+
+            // The sidecar files WAL brings with it, asserted while the database
+            // is still open. Anything cleaning up after a database — the e2e
+            // launcher's scratch directory, an operator copying the file — has
+            // three files to think about now rather than one.
+            //
+            // Deliberately not asserted after the close below: SQLite deletes
+            // both sidecars when the last connection to a database closes
+            // cleanly, and the close here happens on the connection's own
+            // background thread once the channel sender is dropped. Asserting
+            // either way afterwards would be a race against that thread.
+            for suffix in ["-wal", "-shm"] {
+                let sidecar = format!("{}{suffix}", scratch.database());
+                assert!(
+                    std::path::Path::new(&sidecar).exists(),
+                    "a WAL database should have created {sidecar} beside itself"
+                );
+            }
+        }
+
+        let reopened = SqliteDatabase::open(&scratch.database()).await.unwrap();
+        assert_eq!(pragma::<String>(&reopened, "journal_mode").await, "wal");
+    }
+
+    #[tokio::test]
+    async fn an_in_memory_database_opens_and_works_despite_wal_being_meaningless_for_it() {
+        // `:memory:` has no file to put a write-ahead log in, so `configure`
+        // deliberately does not ask for WAL. This test exists to catch the
+        // failure mode where a pragma that cannot apply to an in-memory
+        // database takes the entire test suite down with it, since every other
+        // test in this file opens one.
+        let db = SqliteDatabase::open_in_memory().await.unwrap();
+        let tenant = db.tenant(alice());
+
+        tenant.set("notes", "key", "value").await.unwrap();
+        assert_eq!(
+            tenant.get::<String>("notes", "key").await.unwrap(),
+            Some("value".into())
+        );
+
+        // Whatever journal mode it settled on, it must not be one that implies
+        // a file was created for it.
+        let mode = pragma::<String>(&db, "journal_mode").await;
+        assert_eq!(
+            mode, "memory",
+            "an in-memory database should stay on its memory journal"
+        );
+    }
+
+    #[tokio::test]
+    async fn the_busy_timeout_is_set_on_the_connection() {
+        // Read honestly, this pins a contract rather than catching a
+        // regression: rusqlite already applies a five second busy timeout to
+        // every connection it opens, so this assertion would hold even if
+        // `configure` never touched the setting. That is exactly why it is
+        // worth having — if a rusqlite upgrade ever drops or changes that
+        // undocumented default, this fails and says so, instead of the change
+        // showing up as intermittent "database is locked" errors in
+        // production.
+        //
+        // For proof that `configure` actually runs on a connection, see the
+        // `synchronous` assertion in
+        // `every_connection_opened_against_a_database_is_configured_not_just_the_first`,
+        // which checks a value that is genuinely not the default.
+        let scratch = ScratchDir::new();
+        let db = SqliteDatabase::open(&scratch.database()).await.unwrap();
+
+        assert_eq!(
+            pragma::<i64>(&db, "busy_timeout").await,
+            BUSY_TIMEOUT.as_millis() as i64
+        );
+    }
+
+    #[tokio::test]
+    async fn an_in_memory_database_also_gets_the_busy_timeout() {
+        // The journalling pragmas are skipped for `:memory:`, but the busy
+        // timeout is not — `configure` sets it before it branches, and this
+        // catches a future edit that moves it inside the file-only arm. The
+        // same caveat as above applies: rusqlite's own default would satisfy
+        // this too.
+        let db = SqliteDatabase::open_in_memory().await.unwrap();
+
+        assert_eq!(
+            pragma::<i64>(&db, "busy_timeout").await,
+            BUSY_TIMEOUT.as_millis() as i64
+        );
+    }
+
+    #[tokio::test]
+    async fn every_connection_opened_against_a_database_is_configured_not_just_the_first() {
+        // There is no connection pool: a `SqliteDatabase` owns exactly one
+        // `rusqlite::Connection`, pinned to one background thread, and cloning
+        // the handle clones a channel sender rather than opening anything. So
+        // "a second connection" means a second `SqliteDatabase::open` against
+        // the same file — a genuinely separate connection on a separate thread,
+        // which is also the case that actually matters, because it stands in
+        // for the second process an operator brings along with a backup script
+        // or a `sqlite3` prompt.
+        //
+        // The first `open` is the one that switches the file into WAL; the
+        // second inherits it and must still set its own per-connection pragmas,
+        // which is the half that is easy to get wrong.
+        let scratch = ScratchDir::new();
+        let first = SqliteDatabase::open(&scratch.database()).await.unwrap();
+        let second = SqliteDatabase::open(&scratch.database()).await.unwrap();
+
+        // Guard against the test fooling itself by asserting twice about the
+        // same connection: these are distinct handles onto distinct connections.
+        assert!(
+            !Arc::ptr_eq(&first.connection, &second.connection),
+            "the two handles share a connection, so this test proves nothing"
+        );
+
+        // This is the load-bearing assertion of the whole file. `synchronous`
+        // is per-connection, and unlike the busy timeout its default (2, FULL)
+        // differs from what we set, so it can only read 1 if `configure` ran
+        // against this second connection specifically.
+        assert_eq!(
+            pragma::<i64>(&second, "synchronous").await,
+            1,
+            "the second connection did not have `configure` applied to it; 1 is NORMAL, 2 is the FULL default"
+        );
+
+        assert_eq!(
+            pragma::<i64>(&second, "busy_timeout").await,
+            BUSY_TIMEOUT.as_millis() as i64
+        );
+        assert_eq!(
+            pragma::<String>(&second, "journal_mode").await,
+            "wal",
+            "journal mode lives in the file, so a later connection should inherit it without asking"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_reader_is_not_blocked_by_a_writer_holding_an_open_transaction() {
+        // This is the behaviour WAL is being turned on for, and it is only
+        // observable across two connections. Within one `SqliteDatabase` it
+        // cannot be tested at all — every call is funnelled through a single
+        // background thread, so a closure holding a transaction open blocks the
+        // event loop and no read could be attempted concurrently even in
+        // principle. Two `open` calls give two threads and two connections.
+        let scratch = ScratchDir::new();
+        let writer = SqliteDatabase::open(&scratch.database()).await.unwrap();
+        let reader = SqliteDatabase::open(&scratch.database()).await.unwrap();
+
+        // Seed a row so the reader has something to find that is not the row
+        // the writer is in the middle of adding.
+        writer
+            .tenant(alice())
+            .set("notes", "existing", "seeded")
+            .await
+            .unwrap();
+
+        let (holding_tx, holding_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+
+        let writer_connection = writer.connection.clone();
+        let write = tokio::spawn(async move {
+            writer_connection
+                .call(move |c| {
+                    // `EXCLUSIVE`, and the choice matters more than it looks.
+                    //
+                    // Under the rollback journal this takes the exclusive lock
+                    // immediately and shuts readers out for the life of the
+                    // transaction, which is precisely what WAL is meant to
+                    // stop; under WAL the same statement degrades to
+                    // `IMMEDIATE`, because WAL has no way to lock a reader out
+                    // and does not try. So the two journal modes genuinely
+                    // diverge here and this test can tell them apart.
+                    //
+                    // `IMMEDIATE` would *not* work, and the reason is worth
+                    // recording because it is an easy test to write and it
+                    // proves nothing. The rollback journal lets a writer
+                    // holding a reserved lock coexist with readers quite
+                    // happily — it only escalates to exclusive when it commits
+                    // or spills its page cache. A test that opens an immediate
+                    // transaction, writes one small row and then reads from
+                    // another connection therefore passes whether or not WAL is
+                    // on, and was verified to do exactly that.
+                    let transaction = c.transaction_with_behavior(
+                        rusqlite::TransactionBehavior::Exclusive,
+                    )?;
+                    transaction.execute(
+                        "INSERT INTO kv (tenant, partition, key, value) VALUES ('alice', 'notes', 'uncommitted', '\"pending\"')",
+                        [],
+                    )?;
+
+                    holding_tx.send(()).unwrap();
+                    // Safe to block: this runs on the connection's own OS
+                    // thread, not on a tokio worker.
+                    release_rx.blocking_recv().unwrap();
+
+                    transaction.commit()?;
+                    Ok::<_, tokio_rusqlite::Error>(())
+                })
+                .await
+                .unwrap();
+        });
+
+        // The writer now holds the write lock and will keep holding it until we
+        // release it, so everything between here and `release_tx.send` happens
+        // while a write transaction is open.
+        holding_rx.await.unwrap();
+
+        let reader_db = reader.tenant(alice());
+        let seen = reader_db.get::<String>("notes", "existing");
+        // Comfortably below `BUSY_TIMEOUT`, on purpose. A reader that WAL has
+        // not freed does not fail fast — it waits out the busy timeout and only
+        // then reports `SQLITE_BUSY` — so a limit of five seconds or more would
+        // race the very thing it is checking. The read itself is one indexed
+        // lookup against a one-row table, so two seconds is several orders of
+        // magnitude of headroom on any machine that can run the suite at all.
+        let seen = tokio::time::timeout(Duration::from_secs(2), seen)
+            .await
+            .expect("the reader blocked behind the open write transaction")
+            .unwrap();
+        assert_eq!(seen, Some("seeded".into()));
+
+        // The reader really did run concurrently with an *uncommitted* write
+        // rather than after it quietly completed, which is what makes the
+        // assertion above meaningful.
+        assert_eq!(
+            reader
+                .tenant(alice())
+                .get::<String>("notes", "uncommitted")
+                .await
+                .unwrap(),
+            None,
+            "the reader saw an uncommitted row, so the writer was not still holding its transaction"
+        );
+
+        release_tx.send(()).unwrap();
+        write.await.unwrap();
+
+        // And the write did land once it was allowed to finish.
+        assert_eq!(
+            reader
+                .tenant(alice())
+                .get::<String>("notes", "uncommitted")
+                .await
+                .unwrap(),
+            Some("pending".into())
+        );
     }
 }

@@ -1,6 +1,10 @@
 target/
 config.toml
+# The database, and the two sidecars WAL mode keeps beside it.
 *.sqlite
+*.sqlite-wal
+*.sqlite-shm
+*.sqlite.key
 
 # The UI's build output, embedded into the agent at compile time. Nothing here is
 # tracked: `trunk build` wipes the directory on every run, and `agent/build.rs`
