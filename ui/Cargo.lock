@@ -34,6 +34,7 @@ dependencies = [
  "base64",
  "chrono",
  "console_error_panic_hook",
+ "filt-rs",
  "futures",
  "gloo-net",
  "gloo-timers",
@@ -135,6 +136,15 @@ name = "equivalent"
 version = "1.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "877a4ace8713b0bcf2a4e7eec82529c029f1d0619886d18145fea96c3ffe5c0f"
+
+[[package]]
+name = "filt-rs"
+version = "1.1.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dc1f92a904c1eadc902213cf932d9db85eb154eebcb3667b3027d5829b3ae55d"
+dependencies = [
+ "human-errors",
+]
 
 [[package]]
 name = "find-msvc-tools"
@@ -464,6 +474,12 @@ dependencies = [
  "fnv",
  "itoa",
 ]
+
+[[package]]
+name = "human-errors"
+version = "0.2.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ef44dcc0e508d433319e72dcd65819757dde3f756b17f91e875a43d0b65bb7cb"
 
 [[package]]
 name = "iana-time-zone"
