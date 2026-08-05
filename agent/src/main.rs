@@ -138,7 +138,13 @@ async fn run(args: Args, session: Arc<Session>) -> Result<(), human_errors::Erro
     // upgrade does not silently stop workflows publishing until the operator
     // recreates them by hand.
     let local = automate_api::TenantId::local();
-    connections::import_configured_credentials(context.tenant(local.clone()), local).await?;
+    connections::import_configured_credentials(context.tenant(local.clone()), local.clone())
+        .await?;
+
+    // GitHub App installations recorded before they were connections are brought
+    // across for the same reason, and because there is no wizard left for the
+    // operator to run: GitHub already considers the App installed.
+    integrations::github_app::import_installations_as_connections(&context.tenant(local)).await?;
 
     (
         crate::web::run_web_server(context.clone()),

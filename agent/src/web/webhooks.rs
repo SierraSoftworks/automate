@@ -28,7 +28,7 @@ pub async fn deliver(
     // Parsed before anything is read, so a body is never taken from a caller who
     // has not presented a well-formed token.
     let Ok(token) = token.parse::<automate_api::WebhookToken>() else {
-        return refuse();
+        return refuse("the address is not one we could have issued", &context);
     };
 
     let system = context.tenant(automate_api::TenantId::system());
@@ -36,7 +36,7 @@ pub async fn deliver(
 
     let route = match index.lookup(&token).await {
         Ok(Some(route)) => route,
-        Ok(None) => return refuse(),
+        Ok(None) => return refuse("the address is not one we have issued", &context),
         Err(err) => {
             error!(error = %err, "Failed to look up a webhook token: {err}");
             return actix_web::HttpResponse::InternalServerError().finish();
@@ -51,7 +51,9 @@ pub async fn deliver(
     // own token does not match.
     let record = match store.find(route.workflow).await {
         Ok(Some(record)) => record,
-        Ok(None) => return refuse(),
+        Ok(None) => {
+            return refuse("the workflow this address belonged to is gone", &context);
+        }
         Err(err) => {
             error!(error = %err, "Failed to load a webhook workflow: {err}");
             return actix_web::HttpResponse::InternalServerError().finish();
@@ -72,7 +74,7 @@ pub async fn deliver(
             )
             .await;
 
-            return refuse();
+            return refuse("the address does not match the workflow it names", &context);
         }
         Err(err) => {
             error!(error = %err, "Failed to read a workflow's webhook token: {err}");
@@ -189,7 +191,28 @@ async fn audit(
 /// deleted, and a token that does not match the workflow it points at all look
 /// identical from outside. Telling them apart would let somebody sort guesses
 /// into "wrong" and "used to be right", and the second pile is a map.
-fn refuse() -> actix_web::HttpResponse {
+///
+/// The refusal is recorded in the telemetry stream rather than the audit log.
+/// The audit log belongs to an account and we do not know whose this would be;
+/// writing it to a shared one would let an anonymous endpoint fill a table the
+/// whole installation reads. Telemetry has neither problem, and it is where
+/// somebody debugging "the provider says it is sending and nothing arrives"
+/// will actually look — which is the case this exists to make visible.
+fn refuse(reason: &'static str, services: &crate::services::AppContext) -> actix_web::HttpResponse {
+    warn!(
+        webhook.refused = reason,
+        "Refused a webhook delivery: {reason}.",
+    );
+
+    services.session().record_event(
+        "webhook/refused",
+        [("reason".to_string(), reason.to_string())].into(),
+    );
+
+    refused_response()
+}
+
+fn refused_response() -> actix_web::HttpResponse {
     actix_web::HttpResponse::NotFound().finish()
 }
 
