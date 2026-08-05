@@ -307,12 +307,30 @@ impl JobHost {
         // Run one-time startup wiring for every registered job before we begin
         // processing work.
         //
-        // This still seeds the schedules described by the configuration file,
-        // which describes a single installation, so it runs against the local
-        // tenant.
+        // What is left here is the installation's own housekeeping, which nobody
+        // configured and nobody can delete, so it still seeds itself from the
+        // configuration file and runs against the local tenant.
         let setup_services = context.tenant(TenantId::local());
         for handler in registry.values() {
             handler.setup(setup_services.clone()).await?;
+        }
+
+        // Move the workflows the configuration file still describes into the
+        // database, once, before anything compares the two. Done for the local
+        // tenant alone because the file describes a single installation rather
+        // than any particular person's workflows.
+        //
+        // Logged and carried on with rather than taken as fatal, for the same
+        // reason the reconciliation below is: an installation whose migration
+        // fails should still run the workflows it already has stored.
+        if let Err(err) =
+            crate::workflow_migration::import_configured_workflows(&setup_services).await
+        {
+            error!(
+                error = %err,
+                "Failed to move the workflows in your configuration file into the database; they may not run until this is fixed: {err}",
+            );
+            setup_services.session().record_human_error(&err);
         }
 
         // Bring every tenant's schedules into line with the workflows they have

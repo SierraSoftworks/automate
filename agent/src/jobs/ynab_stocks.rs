@@ -112,15 +112,6 @@ impl Job for YnabStocksWorkflow {
         chrono::TimeDelta::hours(1)
     }
 
-    #[instrument("workflow.ynab_stocks.setup", skip(self, services), err(Display))]
-    async fn setup(
-        &self,
-        services: impl Services + Send + Sync + 'static,
-    ) -> Result<(), human_errors::Error> {
-        let config = services.config();
-        CronJob::schedule(&config.workflows.ynab_stocks, services).await
-    }
-
     #[instrument("workflow.ynab_stocks.handle", skip(self, ctx, job), fields(job = %job))]
     async fn handle(
         &self,

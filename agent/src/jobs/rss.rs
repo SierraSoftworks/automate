@@ -128,15 +128,6 @@ impl Job for RssWorkflow {
         chrono::TimeDelta::hours(1)
     }
 
-    #[instrument("workflow.rss.setup", skip(self, services), err(Display))]
-    async fn setup(
-        &self,
-        services: impl Services + Send + Sync + 'static,
-    ) -> Result<(), human_errors::Error> {
-        let config = services.config();
-        CronJob::schedule(&config.workflows.rss, services).await
-    }
-
     #[instrument("workflow.rss.handle", skip(self, ctx, job), fields(job = %job))]
     async fn handle(
         &self,

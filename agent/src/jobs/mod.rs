@@ -16,7 +16,7 @@ mod ynab_stocks;
 mod youtube;
 
 pub use calendar::CalendarWorkflow;
-pub use cron::{CronJob, CronJobConfig};
+pub use cron::{CRON_PARTITION, CronJob, CronJobConfig, CronJobTask};
 pub use github_attention::{GitHubAttentionConfig, GitHubAttentionWorkflow, subject_key};
 pub use github_auto_merge::{GitHubAutoMergeConfig, GitHubAutoMergeWorkflow};
 pub use github_notifications::GitHubNotificationsWorkflow;

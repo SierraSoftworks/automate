@@ -122,15 +122,6 @@ impl Job for CalendarWorkflow {
         chrono::TimeDelta::minutes(5)
     }
 
-    #[instrument("workflow.calendar.setup", skip(self, services), err(Display))]
-    async fn setup(
-        &self,
-        services: impl Services + Send + Sync + 'static,
-    ) -> Result<(), human_errors::Error> {
-        let config = services.config();
-        CronJob::schedule(&config.workflows.calendars, services).await
-    }
-
     #[instrument("workflow.calendar.handle", skip(self, ctx, job), fields(job = %job))]
     async fn handle(
         &self,

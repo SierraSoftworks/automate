@@ -16,6 +16,7 @@ mod web;
 mod webhook_index;
 mod webhook_payload;
 mod webhooks;
+mod workflow_migration;
 mod workflow_store;
 mod workflow_toml;
 mod workflows;

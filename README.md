@@ -144,6 +144,23 @@ If you later adopt an identity provider, set `local_user` under
 `[web.auth]` to the username you will sign in as **before** enabling it,
 so your existing workflows are already filed under the right account.
 
+#### Workflows move into the database
+
+Workflows used to live in the `[workflows]` section of your
+configuration file. On the first start after upgrading they are copied
+into the database, keeping the schedule and settings each one had, and
+the schedules the file had pushed are cleared out so nothing runs twice.
+
+After that the `[workflows]` section is no longer read, so you can delete
+it. Edit your workflows in the browser instead, or through the
+import/export endpoints if you would rather keep them in a file under
+version control. The move happens exactly once: a workflow you change
+afterwards is not overwritten by the section it came from.
+
+The GitHub notifications workflows are not moved. They are the
+installation's own housekeeping rather than anybody's workflow, so they
+stay in the configuration file where they are.
+
 ### OAuth setup wizard
 
 Some workflows act on third-party accounts (for example Spotify) that you link

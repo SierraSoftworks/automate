@@ -100,15 +100,6 @@ impl Job for GitHubReleasesWorkflow {
         chrono::TimeDelta::hours(1)
     }
 
-    #[instrument("workflow.github_releases.setup", skip(self, services), err(Display))]
-    async fn setup(
-        &self,
-        services: impl Services + Send + Sync + 'static,
-    ) -> Result<(), human_errors::Error> {
-        let config = services.config();
-        CronJob::schedule(&config.workflows.github_releases, services).await
-    }
-
     #[instrument("workflow.github_releases.handle", skip(self, ctx, job), fields(job = %job))]
     async fn handle(
         &self,

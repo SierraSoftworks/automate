@@ -254,6 +254,12 @@ todoist = { project = "Software", section = "Security" }
 # secret = "xxxxxx"
 todoist = { project = "Software", section = "Maintenance" }
 
+# The [workflows] section is legacy. On the first start after upgrading, every
+# entry below other than github_notifications and github_notifications_cleanup
+# is copied into the database and this section stops being read, so you can
+# delete it once that has happened. Workflows are managed in the browser, or
+# through the import and export endpoints, from then on; editing them here has
+# no effect, and an edit made in the browser is never overwritten from here.
 [[workflows.calendars]]
 name = "Personal"
 url = "https://example.com/calendar.ics"

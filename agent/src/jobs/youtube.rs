@@ -106,15 +106,6 @@ impl Job for YouTubeWorkflow {
         chrono::TimeDelta::hours(1)
     }
 
-    #[instrument("workflow.youtube.setup", skip(self, services), err(Display))]
-    async fn setup(
-        &self,
-        services: impl Services + Send + Sync + 'static,
-    ) -> Result<(), human_errors::Error> {
-        let config = services.config();
-        CronJob::schedule(&config.workflows.youtube, services).await
-    }
-
     #[instrument("workflow.youtube.handle", skip(self, ctx, job), fields(job = %job))]
     async fn handle(
         &self,
