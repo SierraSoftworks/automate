@@ -18,7 +18,7 @@ use yew::prelude::*;
 use crate::api;
 use crate::components::dynamic_form::{set_at, value_at};
 use crate::components::{
-    Alert, AlertKind, Button, ButtonKind, Documentation, DynamicForm, Field, FetchedOptions,
+    Alert, AlertKind, Button, ButtonKind, Documentation, DynamicForm, FetchedOptions, Field,
     MenuButton, MenuButtonOption, Switch, TextInput, WebhookAddress,
 };
 
@@ -603,9 +603,10 @@ fn workflow_form(props: &WorkflowFormProps) -> Html {
         })
     };
 
-    let on_cancel = props.oncancel.clone().map(|cancel| {
-        Callback::from(move |_: MouseEvent| cancel.emit(()))
-    });
+    let on_cancel = props
+        .oncancel
+        .clone()
+        .map(|cancel| Callback::from(move |_: MouseEvent| cancel.emit(())));
 
     html! {
         <div class="workflow-form">

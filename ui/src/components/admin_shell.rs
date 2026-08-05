@@ -7,8 +7,10 @@ use yew_router::prelude::*;
 
 use crate::app::Route;
 use crate::components::{AppBar, PageTitle};
+use crate::fixtures;
 use crate::pages::Protected;
 use crate::search::{SearchContext, SearchFilter, SearchVocabulary, VocabularyContext};
+use crate::util;
 
 #[derive(Properties, PartialEq)]
 pub struct AdminShellProps {
@@ -149,12 +151,22 @@ fn admin_nav() -> Html {
                 | (Route::Workflows, Route::Workflows)
                 | (Route::Admin, Route::Admin | Route::AdminRoot)
         );
+        let classes = classes!(
+            "admin-nav__link",
+            active.then_some("admin-nav__link--active")
+        );
+
+        // Demo mode lives in the query string, and a client-side navigation
+        // replaces the whole URL — so following a link out of a demo page would
+        // otherwise land on one talking to an agent that is not there.
+        if fixtures::is_demo() {
+            return html! {
+                <a class={classes} href={util::nav_href(&route.to_path())}>{ label }</a>
+            };
+        }
 
         html! {
-            <Link<Route>
-                to={route}
-                classes={classes!("admin-nav__link", active.then_some("admin-nav__link--active"))}
-            >
+            <Link<Route> to={route} classes={classes}>
                 { label }
             </Link<Route>>
         }
@@ -165,6 +177,12 @@ fn admin_nav() -> Html {
             { link(Route::Workflows, "Workflows") }
             { link(Route::Connections, "Connections") }
             { link(Route::Admin, "Data") }
+            // Only reachable in demo mode, which is the only mode it works in.
+            if fixtures::is_demo() {
+                <a class="admin-nav__link" href={util::nav_href("/demo/controls")}>
+                    { "Controls" }
+                </a>
+            }
         </nav>
     }
 }

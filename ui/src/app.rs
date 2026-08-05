@@ -9,7 +9,6 @@ use yew_router::prelude::*;
 use crate::api::{self, ApiError};
 use crate::auth;
 use crate::components::AdminShell;
-use crate::fixtures;
 use crate::pages;
 
 /// The client-side routes handled by the SPA.
@@ -34,6 +33,14 @@ pub enum Route {
     /// The workflows this account has configured.
     #[at("/admin/workflows")]
     Workflows,
+    /// The control gallery, for reviewing every control without a backend. It
+    /// exists in debug builds only, alongside the fixtures it renders with.
+    #[cfg(debug_assertions)]
+    #[at("/demo/controls")]
+    DemoControls,
+    #[cfg(debug_assertions)]
+    #[at("/demo/controls/:control")]
+    DemoControl { control: String },
     #[not_found]
     #[at("/404")]
     NotFound,
@@ -93,11 +100,6 @@ fn use_auth() -> AuthHandle {
         let status = status.clone();
         use_effect_with((), move |_| {
             spawn_local(async move {
-                if fixtures::is_demo() {
-                    status.set(AuthStatus::SignedIn(fixtures::admin_user()));
-                    return;
-                }
-
                 // Finish any in-flight OIDC callback (a popup hands its tokens back
                 // to the opener and closes here; a direct-navigation fallback stores
                 // them) before resolving the session.
@@ -176,6 +178,12 @@ fn switch(route: Route) -> Html {
         },
         Route::Workflows => html! {
             <AdminShell><pages::Workflows /></AdminShell>
+        },
+        #[cfg(debug_assertions)]
+        Route::DemoControls => html! { <pages::DemoControls /> },
+        #[cfg(debug_assertions)]
+        Route::DemoControl { control } => html! {
+            <pages::DemoControls control={control} />
         },
         Route::NotFound => html! { <pages::NotFound /> },
     }
