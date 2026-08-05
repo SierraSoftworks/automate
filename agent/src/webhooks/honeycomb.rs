@@ -4,20 +4,41 @@ use crate::{
     prelude::*,
     publishers::{TodoistCreateTask, TodoistCreateTaskPayload, TodoistDueDate},
     webhooks::WebhookDelivery,
+    webhooks::grafana::tokens_match,
 };
 
 /// What one person asked us to do with their Honeycomb triggers.
 ///
-/// There is deliberately no list of trusted secrets here. Honeycomb offered a
-/// shared token because the endpoint it posted to was the same for everybody, so
-/// the token was the only thing saying which installation a delivery belonged
-/// to; a workflow now has its own unguessable URL that its owner can rotate, and
-/// that answers the same question without anything to copy between two systems.
+/// This carries the shared secret Honeycomb's webhook recipient sends, because
+/// the address on its own does not do the job people assumed it did. The address
+/// travels in the URL: it is written to reverse-proxy access logs, to
+/// Honeycomb's own delivery records, and to anything sitting between the two. It
+/// is the part of the request most likely to end up somewhere it should not be.
+/// The secret is carried in the `X-Honeycomb-Webhook-Token` header instead,
+/// which those places do not record. The two therefore defend against different
+/// exposures rather than being two locks on one door, and the secret is what
+/// survives a leaked URL.
+///
+/// One value rather than the list of `trusted_secrets` this used to hold. The
+/// list existed so several could be valid at once while somebody rotated them,
+/// but there is nothing in the form that collects a list, so it would have had
+/// to be a comma-separated text box — a parsing convention hiding behind a
+/// control that says "text". A recipient in Honeycomb has one secret anyway, so
+/// rotating it is one edit on each side; the cost is the seconds between the two
+/// saves, during which deliveries are refused and logged. That is a small,
+/// visible, deliberate outage, and it buys a field that behaves the same way as
+/// the one on every other webhook type here.
 #[derive(Clone, Serialize, Deserialize, Default)]
 pub struct HoneycombWebhookConfig {
     /// What to call this workflow, so that somebody with triggers from two
     /// Honeycomb environments can tell which of them filed a task.
     pub name: String,
+
+    /// The shared secret set on the Honeycomb webhook recipient, checked against
+    /// the `X-Honeycomb-Webhook-Token` header on each delivery. Deliveries are
+    /// refused while this is unset — see [`HoneycombWebhook::handle`] for why.
+    #[serde(default)]
+    pub secret: String,
 
     #[serde(default)]
     pub filter: crate::filter::Filter,
@@ -42,6 +63,18 @@ fn default_todoist_config() -> crate::publishers::TodoistTarget {
 
 pub struct HoneycombWebhook;
 
+impl HoneycombWebhook {
+    /// HTTP header names are case-insensitive, and what reaches us depends on
+    /// whatever proxy handled the request, so the lookup cannot assume a casing.
+    fn header<'a>(event: &'a WebhookEvent, name: &str) -> Option<&'a str> {
+        event
+            .headers
+            .iter()
+            .find(|(key, _)| key.eq_ignore_ascii_case(name))
+            .map(|(_, value)| value.as_str())
+    }
+}
+
 /// The setup notes shown while somebody is configuring one of these.
 const DOCUMENTATION: &str = r#"## What this does
 
@@ -65,14 +98,36 @@ Then, in Honeycomb:
 1. Under your team's **Integrations** settings, add a **Webhook** recipient.
    Give it a name you will recognise and set its URL to this workflow's
    address.
-2. Honeycomb's webhook recipients also offer a shared secret. Leave it empty —
-   it is not checked here. The address is unguessable and can be rotated, which
-   is what a shared secret would have been proving, and having two things to
-   keep in step means one of them eventually drifts.
+2. Fill in that recipient's **Shared Secret** — see below.
 3. Open each trigger you want here and add that recipient to it.
 
 A recipient with no triggers attached delivers nothing, which is the usual
 reason a freshly configured workflow stays quiet.
+
+## The shared secret
+
+Generate a long random string, put it in the recipient's **Shared Secret**
+field, and paste the same value into **Shared secret** here. They have to match
+exactly: Honeycomb sends it on every delivery in the
+`X-Honeycomb-Webhook-Token` header and we check it against our copy.
+
+This is not a second lock on the same door as the address. The address travels
+in the URL, so it is written into reverse-proxy access logs, into Honeycomb's
+own delivery records, and into anything sitting between the two — it is the
+part of the request most likely to end up somewhere it should not be. The
+secret rides in a header, which those places do not keep. A leaked address
+therefore does not leak the secret, and the secret still refuses the delivery.
+
+**A workflow with no secret refuses every trigger.** An empty field is not
+treated as "skip the check" — that would leave a workflow silently
+unauthenticated at exactly the moment somebody forgot to finish setting it up,
+so a missing secret fails closed instead. It also means the check cannot be
+turned off by clearing the box.
+
+Only one secret is held here, so rotating it means changing both sides. Change
+it in Honeycomb, then here; deliveries that land between the two are refused
+and logged, which is a few seconds of quiet rather than anything lost — a
+Honeycomb trigger that is still firing will fire again.
 
 ## Choosing which triggers to file
 
@@ -129,6 +184,17 @@ impl crate::workflows::ConfigurableWorkflow for HoneycombWebhook {
                 )
                 .required(),
                 FieldDescriptor::new(
+                    crate::config_path!(HoneycombWebhookConfig: secret),
+                    "Shared secret",
+                    FieldKind::Text {
+                        placeholder: Some("a long random string".into()),
+                    },
+                )
+                .with_help(
+                    "The Shared Secret set on the webhook recipient in Honeycomb's Integrations settings. It has to be the same string on both sides. Honeycomb sends it in a header, which logs and delivery histories do not keep, whereas the address travels in the URL where they do — so this is what still refuses a delivery somebody sent because they found the address. Triggers are refused while this is empty.",
+                )
+                .required(),
+                FieldDescriptor::new(
                     crate::config_path!(HoneycombWebhookConfig: filter),
                     "Filter",
                     FieldKind::Filter {
@@ -170,6 +236,44 @@ impl Job for HoneycombWebhook {
         let Some(config) = job.config::<HoneycombWebhookConfig>(services).await? else {
             return Ok(());
         };
+
+        // Everything below this point happens *before* the payload is parsed, so
+        // that a delivery we cannot attribute to Honeycomb is never interpreted,
+        // let alone acted on. The payload carries a `shared_secret` of its own,
+        // which is deliberately not what is checked: believing the body about
+        // whether the body can be believed proves nothing.
+        //
+        // A rejection returns `Ok(())` rather than an error: nothing about a
+        // wrong secret improves by trying again, so raising here would only leave
+        // the delivery retrying forever and hiding real failures behind it. The
+        // log line is the record that it happened.
+
+        // No secret configured means we refuse, rather than accept anything. The
+        // alternative — treating an empty secret as "skip the check" — would make
+        // a workflow silently unauthenticated exactly when somebody forgot to
+        // finish setting it up, and a forgotten field should fail closed. It also
+        // means the check cannot be neutralised by clearing the box, and it is
+        // what the GitHub and Terraform Cloud webhooks do with their own.
+        if config.secret.is_empty() {
+            warn!(
+                "Received a Honeycomb webhook for a workflow with no shared secret configured; rejecting request."
+            );
+            return Ok(());
+        }
+
+        let Some(presented) = Self::header(&job.event, "x-honeycomb-webhook-token") else {
+            warn!(
+                "Received a Honeycomb webhook without an X-Honeycomb-Webhook-Token header; rejecting request."
+            );
+            return Ok(());
+        };
+
+        if !tokens_match(&config.secret, presented) {
+            warn!(
+                "Received a Honeycomb webhook whose X-Honeycomb-Webhook-Token did not match the configured secret; rejecting request."
+            );
+            return Ok(());
+        }
 
         let event: HoneycombAlertEventPayload = job.event.json()?;
 
@@ -265,6 +369,15 @@ mod tests {
         .to_string()
     }
 
+    /// The secret these tests pretend was set on both this workflow and the
+    /// Honeycomb webhook recipient.
+    const SECRET: &str = "a-long-random-string";
+
+    /// A workflow authorised with [`SECRET`].
+    fn config() -> serde_json::Value {
+        serde_json::json!({ "name": "Production", "secret": SECRET })
+    }
+
     async fn store(
         services: &(impl Services + Send + Sync + 'static),
         config: serde_json::Value,
@@ -282,13 +395,27 @@ mod tests {
             .id
     }
 
+    /// A delivery carrying the token Honeycomb would have sent.
     fn delivery(workflow: automate_api::WorkflowId, body: impl Into<String>) -> WebhookDelivery {
+        delivery_with(workflow, body, &[("X-Honeycomb-Webhook-Token", SECRET)])
+    }
+
+    /// A delivery carrying whatever headers the test wants, for the ones about
+    /// what happens when the token is wrong, absent or unmatched.
+    fn delivery_with(
+        workflow: automate_api::WorkflowId,
+        body: impl Into<String>,
+        headers: &[(&str, &str)],
+    ) -> WebhookDelivery {
         WebhookDelivery {
             workflow,
             event: WebhookEvent {
                 body: body.into(),
                 query: String::new(),
-                headers: HashMap::new(),
+                headers: headers
+                    .iter()
+                    .map(|(k, v)| (k.to_string(), v.to_string()))
+                    .collect::<HashMap<_, _>>(),
             },
         }
     }
@@ -320,7 +447,7 @@ mod tests {
         let services = crate::services::ServicesContainer::new_mock()
             .await
             .unwrap();
-        let workflow = store(&services, serde_json::json!({ "name": "Production" })).await;
+        let workflow = store(&services, config()).await;
 
         run(&services, &delivery(workflow, triggered_payload()))
             .await
@@ -341,7 +468,7 @@ mod tests {
         let services = crate::services::ServicesContainer::new_mock()
             .await
             .unwrap();
-        let workflow = store(&services, serde_json::json!({ "name": "Production" })).await;
+        let workflow = store(&services, config()).await;
 
         let recovered = triggered_payload().replace(r#""TRIGGERED""#, r#""OK""#);
         run(&services, &delivery(workflow, recovered))
@@ -362,6 +489,7 @@ mod tests {
             &services,
             serde_json::json!({
                 "name": "Production",
+                "secret": SECRET,
                 "filter": "name == \"Something else\"",
             }),
         )
@@ -384,7 +512,7 @@ mod tests {
         let services = crate::services::ServicesContainer::new_mock()
             .await
             .unwrap();
-        let workflow = store(&services, serde_json::json!({ "name": "Production" })).await;
+        let workflow = store(&services, config()).await;
 
         WorkflowStore::new(&services)
             .with_index(&services)
@@ -410,5 +538,166 @@ mod tests {
             HoneycombWebhook::descriptor().trigger.partition(),
             <HoneycombWebhook as Job>::partition(),
         );
+    }
+
+    #[tokio::test]
+    async fn a_trigger_carrying_the_wrong_secret_files_nothing() {
+        // Each workflow carries its own secret, so a delivery authorised for
+        // somebody else's must not be acted on by this one.
+        let services = crate::services::ServicesContainer::new_mock()
+            .await
+            .unwrap();
+        let workflow = store(&services, config()).await;
+
+        let job = delivery_with(
+            workflow,
+            triggered_payload(),
+            &[("X-Honeycomb-Webhook-Token", "somebody-elses-secret")],
+        );
+
+        run(&services, &job)
+            .await
+            .expect("a misauthorised trigger should be refused without erroring");
+
+        assert!(filed(&services).await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_trigger_with_no_token_header_at_all_files_nothing() {
+        // Anybody can post to a URL, and the URL is the part of the request most
+        // likely to have leaked. Without the header there is nothing to check,
+        // and "nothing to check" is not the same as "checks out".
+        let services = crate::services::ServicesContainer::new_mock()
+            .await
+            .unwrap();
+        let workflow = store(&services, config()).await;
+
+        run(
+            &services,
+            &delivery_with(workflow, triggered_payload(), &[]),
+        )
+        .await
+        .expect("an unauthorised trigger should be refused without erroring");
+
+        assert!(filed(&services).await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn the_secret_in_the_body_is_not_what_is_checked() {
+        // Honeycomb also puts a `shared_secret` in the payload. Believing the
+        // body about whether the body can be believed proves nothing, so a
+        // delivery that names the right secret in the payload and carries no
+        // header is still refused.
+        let services = crate::services::ServicesContainer::new_mock()
+            .await
+            .unwrap();
+        let workflow = store(&services, config()).await;
+
+        let body = serde_json::json!({
+            "version": "v0.1.0",
+            "shared_secret": SECRET,
+            "name": "Slow requests",
+            "id": "abc123",
+            "status": "TRIGGERED",
+            "summary": "p99 latency is above 500ms",
+            "operator": ">",
+            "threshold": 500.0,
+        })
+        .to_string();
+
+        run(&services, &delivery_with(workflow, body, &[]))
+            .await
+            .expect("a trigger vouching for itself should be refused without erroring");
+
+        assert!(filed(&services).await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_trigger_carrying_a_near_miss_of_the_secret_files_nothing() {
+        // A near miss is the interesting case: somebody probing for the secret
+        // works by getting closer to it, so a value that shares a long prefix
+        // with the real one, or differs only in case or length, has to be as
+        // rejected as a value that shares nothing.
+        let services = crate::services::ServicesContainer::new_mock()
+            .await
+            .unwrap();
+        let workflow = store(&services, config()).await;
+
+        for near_miss in [
+            &SECRET[..SECRET.len() - 1],
+            &format!("{SECRET}x"),
+            &SECRET.to_uppercase(),
+            "",
+        ] {
+            let job = delivery_with(
+                workflow,
+                triggered_payload(),
+                &[("X-Honeycomb-Webhook-Token", near_miss)],
+            );
+
+            run(&services, &job)
+                .await
+                .expect("a near miss should be refused without erroring");
+
+            assert!(
+                filed(&services).await.is_empty(),
+                "'{near_miss}' is not the configured secret and must not be treated as it",
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn triggers_are_refused_while_the_workflow_has_no_secret_configured() {
+        // A half-finished workflow should file nothing rather than file whatever
+        // anybody who found the URL cares to post. An empty field means "cannot
+        // be verified", not "need not be verified" — and in particular an empty
+        // secret must not match an empty header.
+        let services = crate::services::ServicesContainer::new_mock()
+            .await
+            .unwrap();
+        let workflow = store(
+            &services,
+            serde_json::json!({ "name": "Production", "secret": "" }),
+        )
+        .await;
+
+        run(&services, &delivery(workflow, triggered_payload()))
+            .await
+            .expect("an unverifiable trigger should be refused without erroring");
+        run(
+            &services,
+            &delivery_with(
+                workflow,
+                triggered_payload(),
+                &[("X-Honeycomb-Webhook-Token", "")],
+            ),
+        )
+        .await
+        .expect("an empty header should not satisfy an empty secret");
+
+        assert!(filed(&services).await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn the_token_header_is_recognised_whatever_case_it_arrives_in() {
+        // HTTP header names are case-insensitive and whatever proxy sits in
+        // front of us is free to renormalise them, so a lowercase header must
+        // not read as a missing one.
+        let services = crate::services::ServicesContainer::new_mock()
+            .await
+            .unwrap();
+        let workflow = store(&services, config()).await;
+
+        let job = delivery_with(
+            workflow,
+            triggered_payload(),
+            &[("x-honeycomb-webhook-token", SECRET)],
+        );
+
+        run(&services, &job)
+            .await
+            .expect("a correctly authorised trigger should be processed");
+
+        assert_eq!(filed(&services).await.len(), 1);
     }
 }

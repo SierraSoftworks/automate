@@ -27,7 +27,9 @@
 use std::fmt::Display;
 
 use chrono::{DateTime, Utc};
+use hmac::{Hmac, KeyInit, Mac};
 use serde::{Deserialize, Serialize};
+use sha2::Sha256;
 
 use crate::{
     prelude::*,
@@ -37,6 +39,8 @@ use crate::{
     },
     services::debounce::{DebounceConfig, Debouncer, Detection},
 };
+
+type HmacSha256 = Hmac<Sha256>;
 
 /// The key/value partition holding each Grey monitor's debounce state
 /// ([`crate::services::debounce::DebounceState`]), keyed by [`GreyWebhookEvent::unique_key`].
@@ -70,18 +74,28 @@ fn format_duration(duration: chrono::Duration) -> String {
 
 /// What one person asked us to do with the state changes their Grey reports.
 ///
-/// There is deliberately no shared secret here, and no signature check. Grey's
-/// HMAC used to be the only thing standing between this endpoint and anybody
-/// who knew the installation's hostname, because the address itself was public
-/// knowledge — one `/webhooks/grey` for the whole installation. A workflow now
-/// has its own unguessable address which nothing else can be reached at and
-/// which its owner can rotate, so the secret would be a second thing to
-/// configure that proves nothing the address has not already proven.
+/// This carries a shared secret, because the address on its own does not do the
+/// job people assumed it did. The address travels in the URL: it is written to
+/// reverse-proxy access logs, to Grey's own delivery history, and to whatever
+/// sits between the two. It is the part of the request most likely to be
+/// somewhere it should not be. Grey's `Grey-Webhook-Signature` is an HMAC over
+/// the body carried in a *header*, which those places do not record — this
+/// installation's own tracing redacts credential-bearing headers (see
+/// [`crate::web::telemetry`]) — and it additionally proves the body was not
+/// rewritten on the way. The two therefore defend against different exposures
+/// rather than being two locks on one door, and the signature is what survives a
+/// leaked URL.
 #[derive(Clone, Serialize, Deserialize)]
 pub struct GreyWebhookConfig {
     /// What to call this workflow, so it can be told apart from the others in a
     /// list of them.
     pub name: String,
+
+    /// The shared secret set on the webhook in Grey's own configuration, used to
+    /// verify the `Grey-Webhook-Signature` HMAC. Deliveries are refused while
+    /// this is unset — see [`GreyWebhook::handle`] for why.
+    #[serde(default)]
+    pub secret: String,
 
     /// Optional base URL of the Grey status page, used to link the Todoist task back to Grey.
     #[serde(default)]
@@ -131,6 +145,7 @@ impl Default for GreyWebhookConfig {
     fn default() -> Self {
         Self {
             name: String::new(),
+            secret: String::new(),
             dashboard_url: None,
             alert_delay: default_alert_delay(),
             recovery_delay: default_recovery_delay(),
@@ -164,6 +179,117 @@ fn default_todoist_config() -> crate::publishers::TodoistTarget {
 #[derive(Clone)]
 pub struct GreyWebhook;
 
+impl GreyWebhook {
+    /// Parses Grey's `t=<unix-seconds>,v1=<hex>` signature header into its timestamp and raw bytes.
+    fn parse_signature(header: &str) -> Result<(DateTime<Utc>, Vec<u8>), human_errors::Error> {
+        let mut timestamp = None;
+        let mut signature = None;
+
+        for (key, value) in header.split(',').filter_map(|s| s.split_once('=')) {
+            match key {
+                "t" => timestamp = Some(value),
+                "v1" => signature = Some(value),
+                _ => {} // Ignore unknown fields
+            }
+        }
+
+        match (timestamp, signature) {
+            (Some(timestamp), Some(signature)) => {
+                let timestamp = timestamp
+                    .parse()
+                    .ok()
+                    .and_then(|ts| DateTime::from_timestamp(ts, 0))
+                    .ok_or_else(|| {
+                        human_errors::user(
+                            "The timestamp in the Grey-Webhook-Signature header is invalid.",
+                            &[
+                                "Ensure that you are only sending Grey webhooks to this endpoint.",
+                                "Check that the webhook is configured correctly in your Grey configuration.",
+                            ],
+                        )
+                    })?;
+
+                let signature = hex::decode(signature).or_user_err(&[
+                    "The signature in the Grey-Webhook-Signature header is not valid hex.",
+                    "Ensure that you are only sending Grey webhooks to this endpoint.",
+                    "Check that the webhook is configured correctly in your Grey configuration.",
+                ])?;
+
+                Ok((timestamp, signature))
+            }
+            _ => Err(human_errors::user(
+                "The Grey-Webhook-Signature header did not contain a valid signature.",
+                &[
+                    "Ensure that you are only sending Grey webhooks to this endpoint.",
+                    "Check that the webhook is configured correctly in your Grey configuration.",
+                ],
+            )),
+        }
+    }
+
+    /// Verifies the Grey webhook signature.
+    ///
+    /// Grey signs webhooks using the scheme [documented for Tailscale](https://tailscale.com/kb/1213/webhooks):
+    /// HMAC-SHA256 over `"<timestamp>.<body>"`, with the signature carried in the
+    /// `Grey-Webhook-Signature` header as `t=<timestamp>,v1=<hex_signature>`.
+    ///
+    /// The `now` parameter is the point in time against which the signature timestamp is validated.
+    /// This should be the time at which the request was originally received (rather than the current
+    /// time) so that retries of a previously received request continue to validate successfully.
+    fn verify_signature(
+        secret: &str,
+        body: &str,
+        signature_header: &str,
+        now: DateTime<Utc>,
+    ) -> Result<(), human_errors::Error> {
+        let (timestamp, expected_signature) = Self::parse_signature(signature_header)?;
+
+        if (timestamp - now).abs() > chrono::Duration::minutes(5) {
+            return Err(human_errors::user(
+                format!(
+                    "The Grey webhook signature timestamp is too old or too far in the future (got {timestamp})"
+                ),
+                &[
+                    "Ensure that the system clock on this server is accurate.",
+                    "Check that the webhook is configured correctly in your Grey configuration.",
+                ],
+            ));
+        }
+
+        // The timestamp is inside the signed material, so a replayed delivery
+        // cannot be re-dated to slip past the window above.
+        let string_to_sign = format!("{}.{}", timestamp.timestamp(), body);
+
+        let mut mac = HmacSha256::new_from_slice(secret.as_bytes()).wrap_user_err(
+            "Failed to create HMAC instance with the provided secret.",
+            &["Ensure that you have set a valid webhook secret on this workflow."],
+        )?;
+
+        mac.update(string_to_sign.as_bytes());
+
+        // `verify_slice` compares in constant time, so a wrong signature cannot
+        // be walked one byte at a time by timing the rejections.
+        mac.verify_slice(&expected_signature).wrap_user_err(
+            "Webhook signature verification failed (signatures did not match).".to_string(),
+            &[
+                "Ensure that the webhook secret on this workflow matches the one set on the webhook in your Grey configuration.",
+            ],
+        )?;
+
+        Ok(())
+    }
+
+    /// HTTP header names are case-insensitive, and what reaches us depends on
+    /// whatever proxy handled the request, so the lookup cannot assume a casing.
+    fn header<'a>(event: &'a WebhookEvent, name: &str) -> Option<&'a str> {
+        event
+            .headers
+            .iter()
+            .find(|(key, _)| key.eq_ignore_ascii_case(name))
+            .map(|(_, value)| value.as_str())
+    }
+}
+
 /// The setup notes shown while somebody is configuring one of these.
 const DOCUMENTATION: &str = r#"## What this does
 
@@ -188,11 +314,30 @@ restart or reload Grey so it picks the change up. Grey's `docs/guide/webhooks.md
 in [its repository](https://github.com/SierraSoftworks/grey) describes the
 configuration block and the payload it sends.
 
-There is no shared secret to configure. The address is unguessable and can be
-rotated, which is what Grey's HMAC would have been proving.
-
 **Status page** is optional and purely cosmetic: when set, each task links back
 to it so you can see the wider picture without hunting for the address.
+
+## The webhook secret
+
+The `secret` on that same webhook block in Grey's configuration is what Grey
+signs each delivery with, sending an HMAC of the body in the
+`Grey-Webhook-Signature` header. Generate a long random string, put it there,
+and paste the same value into **Webhook secret** here. They have to match
+exactly: Grey computes the signature with its copy and we check it with ours.
+
+This is not a second lock on the same door as the address. The address travels
+in the URL, so it is written into reverse-proxy access logs, into Grey's own
+delivery records, and into anything sitting between the two — it is the part of
+the request most likely to end up somewhere it should not be. The secret never
+appears in the URL, only in a header, so a leaked address does not leak it. The
+signature also covers the body, which the address cannot: it proves nothing
+rewrote the state change on the way.
+
+**A workflow with no secret refuses every delivery.** An empty field is not
+treated as "skip the check" — that would leave a workflow silently
+unauthenticated at exactly the moment somebody forgot to finish setting it up,
+so a missing secret fails closed instead. It also means the check cannot be
+turned off by clearing the box.
 
 ## The three waiting periods
 
@@ -269,6 +414,17 @@ impl crate::workflows::ConfigurableWorkflow for GreyWebhook {
                 )
                 .with_help(
                     "Used to label this workflow, so you can tell it apart from your others.",
+                )
+                .required(),
+                FieldDescriptor::new(
+                    crate::config_path!(GreyWebhookConfig: secret),
+                    "Webhook secret",
+                    FieldKind::Text {
+                        placeholder: Some("a long random string".into()),
+                    },
+                )
+                .with_help(
+                    "The `secret` set on this webhook in Grey's own configuration. Grey signs the body of every state change with it, which is what proves the delivery came from your Grey and was not rewritten on the way — the address alone cannot say either, and it travels in the URL where logs can see it. It must be the same value on both sides, and state changes are refused while this is empty.",
                 )
                 .required(),
                 FieldDescriptor::new(
@@ -372,7 +528,51 @@ impl Job for GreyWebhook {
             return Ok(());
         };
 
-        let event: GreyWebhookEvent = job.event.json()?;
+        let event = &job.event;
+
+        // Everything below this point happens *before* the payload is parsed, so
+        // that a delivery we cannot attribute to Grey is never interpreted, let
+        // alone acted on.
+        //
+        // A rejection returns `Ok(())` rather than an error: nothing about a bad
+        // signature improves by trying again, so raising here would only leave
+        // the delivery retrying forever and hiding real failures behind it. The
+        // log line is the record that it happened.
+
+        // No secret configured means we refuse, rather than accept anything. The
+        // alternative — treating an empty secret as "skip the check" — would make
+        // a workflow silently unauthenticated exactly when somebody forgot to
+        // finish setting it up, and a forgotten field should fail closed. It also
+        // means the check cannot be neutralised by clearing the box, and it is
+        // what the GitHub and Terraform Cloud webhooks do with their own.
+        if config.secret.is_empty() {
+            warn!(
+                "Received a Grey webhook for a workflow with no secret configured; rejecting request."
+            );
+            return Ok(());
+        }
+
+        let Some(signature) = Self::header(event, "grey-webhook-signature") else {
+            warn!(
+                "Received a Grey webhook without a Grey-Webhook-Signature header; rejecting request."
+            );
+            return Ok(());
+        };
+
+        // Validate against the time the request was originally received (the
+        // message's scheduled time) rather than now, so that a retry of a
+        // delivery we already accepted still validates.
+        if let Err(err) =
+            Self::verify_signature(&config.secret, &event.body, signature, ctx.scheduled_at())
+        {
+            warn!(
+                "Failed to verify Grey webhook signature, rejecting request: {}",
+                err
+            );
+            return Ok(());
+        }
+
+        let event: GreyWebhookEvent = event.json()?;
 
         if !config.filter.matches(&event)? {
             info!(
@@ -816,15 +1016,35 @@ mod tests {
         )
     }
 
-    /// The timings a real deployment uses, stated explicitly so the debounce behaviour is
-    /// exercised rather than collapsing onto whatever the defaults happen to be.
+    /// The timings a real deployment uses, stated explicitly so the debounce
+    /// behaviour is exercised rather than collapsing onto whatever the defaults
+    /// happen to be, together with the secret every delivery below is signed
+    /// with.
     fn config() -> serde_json::Value {
         serde_json::json!({
             "name": "Production monitors",
+            "secret": SECRET,
             "alert_delay": 5,
             "recovery_delay": 60,
             "noise_duration": 5,
         })
+    }
+
+    /// The secret these tests pretend was set on both this workflow and the
+    /// webhook block in Grey's own configuration.
+    const SECRET: &str = "a-long-random-string";
+
+    /// Signs a body the way Grey does: `t=<unix-seconds>,v1=<hex>` over
+    /// `"<timestamp>.<body>"`.
+    fn sign(secret: &str, timestamp: i64, body: &str) -> String {
+        let string_to_sign = format!("{timestamp}.{body}");
+        let mut mac = HmacSha256::new_from_slice(secret.as_bytes()).unwrap();
+        mac.update(string_to_sign.as_bytes());
+        format!(
+            "t={},v1={}",
+            timestamp,
+            hex::encode(mac.finalize().into_bytes())
+        )
     }
 
     async fn mock_services() -> crate::services::ServicesContainer<crate::db::TenantDb> {
@@ -850,13 +1070,29 @@ mod tests {
             .id
     }
 
+    /// A delivery carrying the signature Grey itself would have sent for it,
+    /// dated now so it falls inside the freshness window [`run`] checks against.
     fn delivery(workflow: automate_api::WorkflowId, body: String) -> WebhookDelivery {
+        let signature = sign(SECRET, Utc::now().timestamp(), &body);
+        delivery_with(workflow, body, &[("Grey-Webhook-Signature", &signature)])
+    }
+
+    /// A delivery carrying whatever headers the test wants, for the ones about
+    /// what happens when the signature is wrong, absent or unmatched.
+    fn delivery_with(
+        workflow: automate_api::WorkflowId,
+        body: String,
+        headers: &[(&str, &str)],
+    ) -> WebhookDelivery {
         WebhookDelivery {
             workflow,
             event: WebhookEvent {
                 body,
                 query: String::new(),
-                headers: HashMap::new(),
+                headers: headers
+                    .iter()
+                    .map(|(k, v)| (k.to_string(), v.to_string()))
+                    .collect::<HashMap<_, _>>(),
             },
         }
     }
@@ -1572,6 +1808,7 @@ mod tests {
             &services,
             serde_json::json!({
                 "name": "Crons only",
+                "secret": SECRET,
                 "filter": r#"entity.type == "cron""#,
             }),
         )
@@ -1604,5 +1841,178 @@ mod tests {
         .await;
 
         assert!(result.is_err(), "Webhook should reject invalid JSON");
+    }
+
+    #[test]
+    fn a_state_change_signed_with_the_configured_secret_is_accepted() {
+        let body = probe_event("web.prod", false);
+        let now = Utc::now();
+
+        GreyWebhook::verify_signature(SECRET, &body, &sign(SECRET, now.timestamp(), &body), now)
+            .expect("a signature Grey itself would have produced should verify");
+    }
+
+    #[test]
+    fn a_state_change_signed_with_a_different_secret_is_refused() {
+        // Knowing the URL is not knowing the secret, which is the whole point of
+        // checking one.
+        let body = probe_event("web.prod", false);
+        let now = Utc::now();
+        let signature = sign("somebody-elses-secret", now.timestamp(), &body);
+
+        assert!(GreyWebhook::verify_signature(SECRET, &body, &signature, now).is_err());
+    }
+
+    #[test]
+    fn a_body_altered_after_signing_no_longer_matches_its_signature() {
+        // The signature covers the body, so replaying a genuine signature over a
+        // payload somebody rewrote in transit has to fail — otherwise a leaked
+        // URL would let anybody claim any monitor had fallen over.
+        let now = Utc::now();
+        let signature = sign(SECRET, now.timestamp(), &probe_event("web.prod", false));
+        let tampered = probe_event("web.staging", false);
+
+        assert!(GreyWebhook::verify_signature(SECRET, &tampered, &signature, now).is_err());
+    }
+
+    #[test]
+    fn a_signature_header_in_some_other_shape_is_refused() {
+        // Grey sends `t=…,v1=…`; anything else is not a signature we failed to
+        // match, it is a header we cannot even read.
+        let body = probe_event("web.prod", false);
+
+        assert!(
+            GreyWebhook::verify_signature(SECRET, &body, "not-a-signature", Utc::now()).is_err()
+        );
+        assert!(
+            GreyWebhook::verify_signature(SECRET, &body, "t=1663781880", Utc::now()).is_err(),
+            "a header with a timestamp but no digest proves nothing",
+        );
+    }
+
+    #[test]
+    fn a_signature_is_checked_against_when_the_delivery_arrived_not_when_it_is_retried() {
+        // A delivery that failed and was requeued is verified again hours later.
+        // Checking its timestamp against the current time would reject it for
+        // being stale, so a retry that would have succeeded first time round
+        // would fail forever.
+        let received_at = Utc::now() - chrono::Duration::hours(6);
+        let body = probe_event("web.prod", false);
+        let signature = sign(SECRET, received_at.timestamp(), &body);
+
+        assert!(
+            GreyWebhook::verify_signature(SECRET, &body, &signature, Utc::now()).is_err(),
+            "the freshness window should reject a six-hour-old signature against the current time",
+        );
+        GreyWebhook::verify_signature(SECRET, &body, &signature, received_at)
+            .expect("the same signature should verify against the time it was received");
+    }
+
+    #[tokio::test]
+    async fn a_state_change_signed_with_the_wrong_secret_raises_nothing() {
+        // Each workflow carries its own secret, so a state change signed for
+        // somebody else's must not be acted on by this one.
+        let services = mock_services().await;
+        let workflow = store(&services, config()).await;
+
+        let body = probe_event("web.prod", false);
+        let signature = sign("somebody-elses-secret", Utc::now().timestamp(), &body);
+        let job = delivery_with(workflow, body, &[("Grey-Webhook-Signature", &signature)]);
+
+        run(&services, &job)
+            .await
+            .expect("a mis-signed state change should be refused without erroring");
+
+        assert!(peek_upserts(&services).await.is_empty());
+        assert!(
+            failure_record(&services, "grey/probe/web.prod")
+                .await
+                .is_none(),
+            "an unverified delivery should not even have been interpreted",
+        );
+    }
+
+    #[tokio::test]
+    async fn a_state_change_whose_body_was_altered_after_signing_raises_nothing() {
+        // The signature is what makes the payload trustworthy, so a body that
+        // was rewritten between Grey signing it and us receiving it must never
+        // reach the parser.
+        let services = mock_services().await;
+        let workflow = store(&services, config()).await;
+
+        let signature = sign(
+            SECRET,
+            Utc::now().timestamp(),
+            &probe_event("web.prod", false),
+        );
+        let job = delivery_with(
+            workflow,
+            probe_event("web.staging", false),
+            &[("Grey-Webhook-Signature", &signature)],
+        );
+
+        run(&services, &job)
+            .await
+            .expect("a tampered state change should be refused without erroring");
+
+        assert!(peek_upserts(&services).await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_state_change_with_no_signature_header_at_all_raises_nothing() {
+        // Anybody can post to a URL, and the URL is the part of the request most
+        // likely to have leaked. Without the header there is nothing to check,
+        // and "nothing to check" is not the same as "checks out".
+        let services = mock_services().await;
+        let workflow = store(&services, config()).await;
+
+        let job = delivery_with(workflow, probe_event("web.prod", false), &[]);
+
+        run(&services, &job)
+            .await
+            .expect("an unsigned state change should be refused without erroring");
+
+        assert!(peek_upserts(&services).await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn state_changes_are_refused_while_the_workflow_has_no_secret_configured() {
+        // A half-finished workflow should raise nothing rather than raise
+        // whatever anybody who found the URL cares to post. An empty field means
+        // "cannot be verified", not "need not be verified".
+        let services = mock_services().await;
+        let workflow = store(
+            &services,
+            serde_json::json!({ "name": "Production monitors", "secret": "" }),
+        )
+        .await;
+
+        run(
+            &services,
+            &delivery(workflow, probe_event("web.prod", false)),
+        )
+        .await
+        .expect("an unverifiable state change should be refused without erroring");
+
+        assert!(peek_upserts(&services).await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn the_signature_header_is_recognised_whatever_case_it_arrives_in() {
+        // HTTP header names are case-insensitive and whatever proxy sits in
+        // front of us is free to renormalise them, so a lowercase header must
+        // not read as a missing one.
+        let services = mock_services().await;
+        let workflow = store(&services, config()).await;
+
+        let body = probe_event("web.prod", false);
+        let signature = sign(SECRET, Utc::now().timestamp(), &body);
+        let job = delivery_with(workflow, body, &[("grey-webhook-signature", &signature)]);
+
+        run(&services, &job)
+            .await
+            .expect("a correctly signed state change should be processed");
+
+        assert_eq!(peek_upserts(&services).await.len(), 1);
     }
 }
