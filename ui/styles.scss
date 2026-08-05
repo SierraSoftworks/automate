@@ -355,6 +355,65 @@ pre {
   }
 }
 
+// A masked value with the controls that reveal and replace it, laid over the
+// right-hand end of the input so the row stays the height of a single field.
+.secret-input {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+
+  &__input {
+    // Room for the buttons, reserved whether or not the reveal one is currently
+    // drawn, so that typing the first character does not reflow the text.
+    &--actions-1 {
+      padding-right: 2.4rem;
+    }
+
+    &--actions-2 {
+      padding-right: 4.1rem;
+    }
+  }
+
+  &__actions {
+    position: absolute;
+    top: 0;
+    right: 0.3rem;
+    height: 100%;
+    display: flex;
+    align-items: center;
+    gap: 0.1rem;
+  }
+
+  &__action {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 1.7rem;
+    height: 1.7rem;
+    padding: 0;
+    color: $text-secondary;
+    background: none;
+    border: none;
+    border-radius: $radius-sm;
+    cursor: pointer;
+    transition: color $transition, background $transition;
+
+    &:hover:not(:disabled) {
+      color: $text-primary;
+      background: $fill-light;
+    }
+
+    &:focus-visible {
+      @include focus-ring;
+    }
+
+    &:disabled {
+      color: $text-placeholder;
+      cursor: not-allowed;
+    }
+  }
+}
+
 // A toggle for the settings that are simply on or off.
 .switch {
   display: inline-flex;

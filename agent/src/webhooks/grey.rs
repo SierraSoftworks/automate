@@ -419,8 +419,10 @@ impl crate::workflows::ConfigurableWorkflow for GreyWebhook {
                 FieldDescriptor::new(
                     crate::config_path!(GreyWebhookConfig: secret),
                     "Webhook secret",
-                    FieldKind::Text {
+                    FieldKind::Secret {
                         placeholder: Some("a long random string".into()),
+                        generator: true,
+                        generator_bytes: 32,
                     },
                 )
                 .with_help(

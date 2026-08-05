@@ -250,8 +250,10 @@ impl crate::workflows::ConfigurableWorkflow for GrafanaWebhook {
                 FieldDescriptor::new(
                     crate::config_path!(GrafanaWebhookConfig: secret),
                     "Authorization token",
-                    FieldKind::Text {
+                    FieldKind::Secret {
                         placeholder: Some("a long random string".into()),
+                        generator: true,
+                        generator_bytes: 32,
                     },
                 )
                 .with_help(

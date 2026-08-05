@@ -284,8 +284,12 @@ impl crate::workflows::ConfigurableWorkflow for TailscaleWebhook {
                 FieldDescriptor::new(
                     crate::config_path!(TailscaleWebhookConfig: secret),
                     "Webhook secret",
-                    FieldKind::Text {
+                    // No generator: Tailscale issues this one, so anything we
+                    // made up here could only ever be the wrong value.
+                    FieldKind::Secret {
                         placeholder: Some("tskey-webhook-…".into()),
+                        generator: false,
+                        generator_bytes: 32,
                     },
                 )
                 .with_help(

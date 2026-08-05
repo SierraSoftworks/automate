@@ -21,6 +21,7 @@ mod menu_button;
 mod page_title;
 mod partition_browser;
 mod refresh_button;
+mod secret_input;
 mod webhook_address;
 
 pub use admin_shell::{AdminShell, PageActions};
@@ -43,4 +44,5 @@ pub use menu_button::{MenuButton, MenuButtonOption};
 pub use page_title::PageTitle;
 pub use partition_browser::{BrowserEntry, BrowserPartition, PartitionBrowser};
 pub use refresh_button::RefreshButton;
+pub use secret_input::SecretInput;
 pub use webhook_address::WebhookAddress;

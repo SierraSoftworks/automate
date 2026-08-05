@@ -199,8 +199,10 @@ impl crate::workflows::ConfigurableWorkflow for TerraformWebhook {
                 FieldDescriptor::new(
                     crate::config_path!(TerraformWebhookConfig: secret),
                     "HMAC token",
-                    FieldKind::Text {
+                    FieldKind::Secret {
                         placeholder: Some("a long random string".into()),
+                        generator: true,
+                        generator_bytes: 32,
                     },
                 )
                 .with_help(

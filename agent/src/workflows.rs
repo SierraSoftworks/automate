@@ -471,6 +471,7 @@ mod tests {
         match kind {
             FieldKind::Text { placeholder }
             | FieldKind::TextArea { placeholder }
+            | FieldKind::Secret { placeholder, .. }
             | FieldKind::Url { placeholder } => placeholder.as_deref(),
             _ => None,
         }
@@ -481,7 +482,9 @@ mod tests {
         use automate_api::FieldKind;
 
         match kind {
-            FieldKind::Text { .. } | FieldKind::TextArea { .. } => serde_json::json!("example"),
+            FieldKind::Text { .. } | FieldKind::TextArea { .. } | FieldKind::Secret { .. } => {
+                serde_json::json!("example")
+            }
             FieldKind::Url { .. } => serde_json::json!("https://example.com/"),
             // Emitted as an integer when it is a whole number, since that is
             // what a field stored as one will accept and a field stored as a
