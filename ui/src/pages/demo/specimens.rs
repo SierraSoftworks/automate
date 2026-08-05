@@ -15,8 +15,8 @@ use yew::prelude::*;
 use crate::components::{
     Alert, AlertKind, BrowserEntry, BrowserPartition, Button, ButtonGroup, ButtonKind, ConnectMenu,
     ConnectionsPanel, DbEntity, Documentation, DynamicForm, EntityMetadata, Field, FilterInput,
-    JsonHighlight, NumberInput, PageTitle, PartitionBrowser, RefreshButton, Select, SelectOption,
-    Switch, TextArea, TextInput, WebhookAddress,
+    JsonHighlight, NumberInput, PageTitle, PartitionBrowser, RefreshButton, SecretInput, Select,
+    SelectOption, Switch, TextArea, TextInput, WebhookAddress,
 };
 use crate::fixtures;
 
@@ -66,6 +66,12 @@ pub const CONTROLS: &[Control] = &[
         name: "Text area",
         blurb: "Several lines of text, in prose and monospaced forms.",
         view: || html! { <TextAreas /> },
+    },
+    Control {
+        slug: "secret-input",
+        name: "Secret input",
+        blurb: "A masked token, revealable, and optionally generated in the browser.",
+        view: || html! { <SecretInputs /> },
     },
     Control {
         slug: "number-input",
@@ -448,6 +454,75 @@ fn text_areas() -> Html {
                         id="demo-area-disabled"
                         value={(*prose).clone()}
                         onchange={inert()}
+                        disabled=true
+                    />
+                </div>
+            </Specimen>
+        </>
+    }
+}
+
+#[function_component(SecretInputs)]
+fn secret_inputs() -> Html {
+    let empty = use_state(String::new);
+    let agreed = use_state(|| "s3cr3t-t0k3n-from-the-provider".to_string());
+    let generated = use_state(String::new);
+
+    html! {
+        <>
+            <Specimen
+                label="Empty"
+                note="Nothing to unmask yet, so the button that would do it is not drawn — but \
+                      the room it takes is still reserved."
+            >
+                <SecretInput
+                    id="demo-secret-empty"
+                    value={(*empty).clone()}
+                    onchange={bind(&empty)}
+                    placeholder="a long random string"
+                />
+            </Specimen>
+
+            <Specimen
+                label="Filled"
+                note="Revealable, because the whole job is to make this string match one on the \
+                      provider's own settings page, and nobody can check that against dots."
+            >
+                <SecretInput
+                    id="demo-secret-filled"
+                    value={(*agreed).clone()}
+                    onchange={bind(&agreed)}
+                />
+            </Specimen>
+
+            <Specimen
+                label="With a generator"
+                note="For the secrets both sides merely agree on. Generated here rather than by \
+                      the agent, so a fresh one never travels over the wire to be shown."
+            >
+                <SecretInput
+                    id="demo-secret-generated"
+                    value={(*generated).clone()}
+                    onchange={bind(&generated)}
+                    placeholder="a long random string"
+                    generator=true
+                />
+            </Specimen>
+
+            <Specimen label="Invalid and disabled">
+                <div class="specimen__stack">
+                    <SecretInput
+                        id="demo-secret-invalid"
+                        value={(*agreed).clone()}
+                        onchange={inert()}
+                        generator=true
+                        invalid=true
+                    />
+                    <SecretInput
+                        id="demo-secret-disabled"
+                        value={(*agreed).clone()}
+                        onchange={inert()}
+                        generator=true
                         disabled=true
                     />
                 </div>
@@ -918,6 +993,16 @@ fn dynamic_forms() -> Html {
                 placeholder: Some("What is this for?".to_string()),
             },
         ),
+        FieldDescriptor::new(
+            "secret",
+            "Secret",
+            FieldKind::Secret {
+                placeholder: Some("a long random string".to_string()),
+                generator: true,
+                generator_bytes: 32,
+            },
+        )
+        .with_help("Generated in the browser, and revealable so it can be checked."),
         FieldDescriptor::new(
             "count",
             "Number",

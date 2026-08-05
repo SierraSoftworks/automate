@@ -25,7 +25,7 @@ use automate_api::{ConnectionSummary, FieldDescriptor, FieldKind, OptionItem};
 use yew::prelude::*;
 
 use crate::components::{
-    Field, FilterInput, NumberInput, Select, SelectOption, Switch, TextArea, TextInput,
+    Field, FilterInput, NumberInput, SecretInput, Select, SelectOption, Switch, TextArea, TextInput,
 };
 
 /// Reads the value at a dotted path, if there is one.
@@ -200,6 +200,24 @@ fn dynamic_field(props: &DynamicFieldProps) -> Html {
                 onchange={text_update}
                 onblur={text_blur}
                 placeholder={placeholder.clone().map(AttrValue::from)}
+                disabled={props.disabled}
+                invalid={invalid}
+            />
+        },
+
+        FieldKind::Secret {
+            placeholder,
+            generator,
+            generator_bytes,
+        } => html! {
+            <SecretInput
+                id={id.clone()}
+                value={value.clone()}
+                onchange={text_update}
+                onblur={text_blur}
+                placeholder={placeholder.clone().map(AttrValue::from)}
+                generator={*generator}
+                generator_bytes={*generator_bytes}
                 disabled={props.disabled}
                 invalid={invalid}
             />

@@ -356,6 +356,19 @@ pub fn workflow_types() -> Vec<WorkflowTypeDescriptor> {
                     },
                 ),
                 FieldDescriptor::new(
+                    "secret",
+                    "Webhook secret",
+                    FieldKind::Secret {
+                        placeholder: Some("a long random string".to_string()),
+                        generator: true,
+                        generator_bytes: 32,
+                    },
+                )
+                .with_help(
+                    "The secret you set on the webhook in GitHub. Deliveries are signed with it, \
+                     and refused while it is empty.",
+                ),
+                FieldDescriptor::new(
                     "notes",
                     "Notes",
                     FieldKind::TextArea {

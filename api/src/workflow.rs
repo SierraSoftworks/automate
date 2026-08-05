@@ -105,6 +105,30 @@ pub enum FieldKind {
         placeholder: Option<String>,
     },
 
+    /// A shared secret or verification token, such as the one a webhook is
+    /// signed with.
+    ///
+    /// Masked on screen rather than shown, and revealable — a token that cannot
+    /// be read back is a token nobody can check against the value they pasted
+    /// into the provider, which is the one thing people actually need to do with
+    /// it.
+    Secret {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        placeholder: Option<String>,
+
+        /// Whether the browser may make up a value for this.
+        ///
+        /// Only for the secrets both sides merely have to agree on. A generator
+        /// offered against one the provider issued would invite somebody to
+        /// replace the only value that could ever work.
+        #[serde(default)]
+        generator: bool,
+
+        /// How many random bytes a generated value carries, before encoding.
+        #[serde(default = "default_generator_bytes")]
+        generator_bytes: usize,
+    },
+
     /// A number, optionally bounded.
     Number {
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -178,6 +202,7 @@ impl FieldKind {
             Self::Text { .. } => "text",
             Self::TextArea { .. } => "text_area",
             Self::Url { .. } => "url",
+            Self::Secret { .. } => "secret",
             Self::Number { .. } => "number",
             Self::Boolean => "boolean",
             Self::Select { .. } => "select",
@@ -187,6 +212,13 @@ impl FieldKind {
             Self::Filter { .. } => "filter",
         }
     }
+}
+
+/// Enough entropy that a generated secret is not the weakest part of what it
+/// protects, while still being short enough to paste into a provider's own
+/// settings by hand.
+fn default_generator_bytes() -> usize {
+    32
 }
 
 /// One value a workflow type asks for.
@@ -406,6 +438,11 @@ mod tests {
             FieldKind::Text { placeholder: None },
             FieldKind::TextArea { placeholder: None },
             FieldKind::Url { placeholder: None },
+            FieldKind::Secret {
+                placeholder: None,
+                generator: false,
+                generator_bytes: 32,
+            },
             FieldKind::Number {
                 min: None,
                 max: None,
@@ -434,6 +471,24 @@ mod tests {
                 "as_str disagreed with the serialized form of {kind:?}",
             );
         }
+    }
+
+    #[test]
+    fn a_secret_without_a_generator_still_says_how_long_a_generated_one_would_be() {
+        // The two travel together so the browser never has to invent a length:
+        // a descriptor that asked for a generator but not a size would leave the
+        // strength of every secret to whichever renderer drew it.
+        let stored = serde_json::json!({ "kind": "secret" });
+
+        let kind: FieldKind = serde_json::from_value(stored).unwrap();
+        assert_eq!(
+            kind,
+            FieldKind::Secret {
+                placeholder: None,
+                generator: false,
+                generator_bytes: 32,
+            }
+        );
     }
 
     #[test]

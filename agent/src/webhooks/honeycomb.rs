@@ -186,8 +186,10 @@ impl crate::workflows::ConfigurableWorkflow for HoneycombWebhook {
                 FieldDescriptor::new(
                     crate::config_path!(HoneycombWebhookConfig: secret),
                     "Shared secret",
-                    FieldKind::Text {
+                    FieldKind::Secret {
                         placeholder: Some("a long random string".into()),
+                        generator: true,
+                        generator_bytes: 32,
                     },
                 )
                 .with_help(
