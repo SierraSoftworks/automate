@@ -347,12 +347,10 @@ pub fn select(props: &SelectProps) -> Html {
     // The current value may name something no longer offered — a project that
     // has been renamed in Todoist, say. Showing it keeps the field honest about
     // what is stored instead of silently appearing to be set to the first entry.
-    let missing = props.value.as_ref().filter(|current| {
-        !props
-            .options
-            .iter()
-            .any(|option| &&option.value == current)
-    });
+    let missing = props
+        .value
+        .as_ref()
+        .filter(|current| !props.options.iter().any(|option| &&option.value == current));
 
     html! {
         <select

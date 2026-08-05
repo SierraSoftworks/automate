@@ -49,7 +49,9 @@ pub fn set_at(config: &mut serde_json::Value, path: &str, value: Option<serde_js
         if !cursor.get(segment).map(|v| v.is_object()).unwrap_or(false) {
             cursor[segment] = serde_json::json!({});
         }
-        cursor = cursor.get_mut(segment).expect("just ensured it is an object");
+        cursor = cursor
+            .get_mut(segment)
+            .expect("just ensured it is an object");
     }
 
     match value {

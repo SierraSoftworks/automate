@@ -70,7 +70,10 @@ fn render(markdown: &str) -> Html {
     // Links go to somebody else's site, so they open in a new tab and carry the
     // usual disclaimers — leaving the form half-filled to read a provider's
     // documentation is exactly the thing this is meant to save.
-    let rendered = rendered.replace("<a href=", "<a target=\"_blank\" rel=\"noopener noreferrer\" href=");
+    let rendered = rendered.replace(
+        "<a href=",
+        "<a target=\"_blank\" rel=\"noopener noreferrer\" href=",
+    );
 
     Html::from_html_unchecked(AttrValue::from(rendered))
 }
