@@ -39,6 +39,7 @@ pub fn workflows() -> Html {
     let error = use_state(|| None::<String>);
     let loading = use_state(|| true);
     let reload = use_state(|| 0u32);
+    let adding = use_state(|| false);
 
     {
         let (workflows, types, connections, error, loading) = (
@@ -82,12 +83,30 @@ pub fn workflows() -> Html {
         Callback::from(move |_| reload.set(*reload + 1))
     };
 
+    let on_add = {
+        let adding = adding.clone();
+        Callback::from(move |_| adding.set(true))
+    };
+
+    let on_cancel_add = {
+        let adding = adding.clone();
+        Callback::from(move |_| adding.set(false))
+    };
+
+    let on_created = {
+        let (adding, reload) = (adding.clone(), reload.clone());
+        Callback::from(move |_| {
+            adding.set(false);
+            reload.set(*reload + 1);
+        })
+    };
+
     let body = if *loading {
         html! { <p class="workflows__empty">{ "Loading…" }</p> }
     } else if workflows.is_empty() {
         html! {
             <p class="workflows__empty">
-                { "You have no workflows yet. Add one below to have Automate watch something for you." }
+                { "You have no workflows yet. Add one to have Automate watch something for you." }
             </p>
         }
     } else {
@@ -108,7 +127,16 @@ pub fn workflows() -> Html {
 
     html! {
         <section class="workflows">
-            <h2 class="workflows__title">{ "Workflows" }</h2>
+            <div class="workflows__header">
+                <h2 class="workflows__title">{ "Workflows" }</h2>
+                <Button
+                    kind={ButtonKind::Primary}
+                    onclick={on_add}
+                    disabled={*loading || types.is_empty() || *adding}
+                >
+                    { "Add Workflow" }
+                </Button>
+            </div>
 
             if let Some(message) = (*error).clone() {
                 <Alert
@@ -118,13 +146,16 @@ pub fn workflows() -> Html {
                 />
             }
 
-            { body }
+            if *adding {
+                <AddWorkflow
+                    types={(*types).clone()}
+                    connections={(*connections).clone()}
+                    on_created={on_created}
+                    oncancel={on_cancel_add}
+                />
+            }
 
-            <AddWorkflow
-                types={(*types).clone()}
-                connections={(*connections).clone()}
-                on_created={on_changed}
-            />
+            { body }
         </section>
     }
 }
@@ -341,6 +372,7 @@ struct AddWorkflowProps {
     types: Vec<WorkflowTypeDescriptor>,
     connections: Vec<ConnectionSummary>,
     on_created: Callback<()>,
+    oncancel: Callback<()>,
 }
 
 #[function_component(AddWorkflow)]
@@ -412,63 +444,69 @@ fn add_workflow(props: &AddWorkflowProps) -> Html {
         .map(|descriptor| SelectOption::new(descriptor.id.clone(), descriptor.name.clone()))
         .collect();
 
-    html! {
-        <div class="workflows__form">
-            <h3 class="workflows__form-title">{ "Add a workflow" }</h3>
+    let on_cancel = {
+        let oncancel = props.oncancel.clone();
+        Callback::from(move |_: MouseEvent| oncancel.emit(()))
+    };
 
-            <Field label="What should it watch?" id="workflow-type" required={true}>
-                <Select
-                    id="workflow-type"
-                    value={(*chosen).clone().map(AttrValue::from)}
-                    onchange={on_type}
-                    options={choices}
-                    placeholder="Choose a kind of workflow"
-                    clearable={true}
-                    disabled={*busy}
-                />
-            </Field>
-
-            if let Some(descriptor) = descriptor {
-                { render_new_form(&descriptor, props, &error, *busy, on_submit) }
-            }
-        </div>
-    }
-}
-
-/// The form for a workflow that does not exist yet.
-fn render_new_form(
-    descriptor: &WorkflowTypeDescriptor,
-    props: &AddWorkflowProps,
-    error: &UseStateHandle<Option<String>>,
-    busy: bool,
-    on_submit: Callback<WorkflowValues>,
-) -> Html {
     html! {
         <>
-                <p class="workflows__form-description">{ descriptor.description.clone() }</p>
+            if descriptor.is_none() {
+                <div class="workflows__type-picker">
+                    <Field label="What should it watch?" id="workflow-type" required={true}>
+                        <Select
+                            id="workflow-type"
+                            value={(*chosen).clone().map(AttrValue::from)}
+                            onchange={on_type}
+                            options={choices}
+                            placeholder="Choose a kind of workflow"
+                            clearable={true}
+                            disabled={*busy}
+                        />
+                    </Field>
 
-                <Documentation markdown={descriptor.documentation.clone()} />
+                    <Button kind={ButtonKind::Subtle} onclick={on_cancel.clone()} disabled={*busy}>
+                        { "Cancel" }
+                    </Button>
+                </div>
+            }
 
-                if let Some(message) = (**error).clone() {
-                    <Alert
-                        kind={AlertKind::Error}
-                        title="We could not save this workflow."
-                        message={message}
-                    />
-                }
+            if let Some(descriptor) = descriptor {
+                <div class="form-modal" role="dialog" aria-modal="true" aria-labelledby="add-workflow-title">
+                    <div class="form-modal__panel">
+                        <div class="form-modal__header">
+                            <h3 id="add-workflow-title" class="form-modal__title">
+                                { format!("Add {} workflow", descriptor.name) }
+                            </h3>
+                        </div>
 
-                <WorkflowForm
-                    // Keyed by type, so choosing a different kind of workflow
-                    // starts a fresh form rather than carrying values into
-                    // fields that happen to share a name.
-                    key={descriptor.id.clone()}
-                    descriptor={descriptor.clone()}
-                    connections={props.connections.clone()}
-                    initial={None::<WorkflowValues>}
-                    submit_label="Add workflow"
-                    busy={busy}
-                    onsubmit={on_submit}
-                />
+                        <div class="form-modal__body form-modal__body--workflow">
+                            <p class="workflows__form-description">{ descriptor.description.clone() }</p>
+
+                            <Documentation markdown={descriptor.documentation.clone()} />
+
+                            if let Some(message) = (*error).clone() {
+                                <Alert
+                                    kind={AlertKind::Error}
+                                    title="We could not save this workflow."
+                                    message={message}
+                                />
+                            }
+
+                            <WorkflowForm
+                                key={descriptor.id.clone()}
+                                descriptor={descriptor.clone()}
+                                connections={props.connections.clone()}
+                                initial={None::<WorkflowValues>}
+                                submit_label="Add workflow"
+                                busy={*busy}
+                                onsubmit={on_submit}
+                                oncancel={props.oncancel.clone()}
+                            />
+                        </div>
+                    </div>
+                </div>
+            }
         </>
     }
 }

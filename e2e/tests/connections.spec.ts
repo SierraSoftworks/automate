@@ -21,14 +21,23 @@ test.afterEach(async ({ request }) => {
   await purgeConnectionsNamed(request, NAME_PREFIX);
 });
 
+/** Opens the provider-specific modal for a new Todoist connection. */
+async function openTodoistConnection(page: import("@playwright/test").Page) {
+  await page.getByRole("button", { name: "Add Connection" }).click();
+  await page.getByLabel("Service").selectOption("todoist");
+
+  const form = page.getByRole("dialog", { name: "Add Todoist connection" });
+  await expect(page.getByLabel("Service")).toHaveCount(0);
+  return form;
+}
+
 test("a service linked with a pasted token appears in the list and can be unlinked again", async ({
   page,
 }) => {
   const name = uniqueName(NAME_PREFIX);
   await gotoApp(page, "/admin/connections");
 
-  const form = page.locator(".connections__form");
-  await form.getByLabel("Service").selectOption("todoist");
+  const form = await openTodoistConnection(page);
   await form.getByLabel("Name").fill(name);
   await form.getByLabel("Token").fill("e2e-token-listed-and-removed");
   await form.getByRole("button", { name: "Link service" }).click();
@@ -37,6 +46,13 @@ test("a service linked with a pasted token appears in the list and can be unlink
   await expect(row).toHaveCount(1);
   await expect(row).toContainText("todoist");
   await expect(row).toContainText("token");
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+
+  // The creation flow starts fresh after a successful save, including when the
+  // next connection uses the same provider as the one just linked.
+  const reopened = await openTodoistConnection(page);
+  await expect(reopened).toBeVisible();
+  await reopened.getByRole("button", { name: "Cancel", exact: true }).click();
 
   // Unlinking stops every workflow publishing through the account, so the page
   // asks first. Playwright dismisses dialogs unless told otherwise, which would
@@ -60,17 +76,16 @@ test("a token is never shown again once it has been saved", async ({ page }) => 
 
   await gotoApp(page, "/admin/connections");
 
-  const form = page.locator(".connections__form");
-  await form.getByLabel("Service").selectOption("todoist");
+  const form = await openTodoistConnection(page);
   await form.getByLabel("Name").fill(name);
   await form.getByLabel("Token").fill(token);
   await form.getByRole("button", { name: "Link service" }).click();
 
   await expect(page.locator(".connection").filter({ hasText: name })).toHaveCount(1);
 
-  // The form should have emptied itself, and nothing rendered from the saved
-  // connection should carry the token.
-  await expect(form.getByLabel("Token")).toHaveValue("");
+  // The form is removed after saving, and nothing rendered from the saved
+  // connection carries the token.
+  await expect(form).toHaveCount(0);
   expect(await page.locator("body").innerText()).not.toContain(token);
 
   // Again from a fresh load, which is the case that matters: the first check
