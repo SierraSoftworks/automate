@@ -141,6 +141,11 @@ pub enum FieldKind {
     Connection {
         /// The service the account must be with, e.g. `todoist`.
         provider: String,
+
+        /// The credential shape the workflow needs when one provider offers
+        /// more than one, such as GitHub PATs and App installations.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        connection_kind: Option<crate::ConnectionKind>,
     },
 
     /// A schedule. Rendered by a control that can explain what it means in
@@ -391,6 +396,7 @@ mod tests {
             },
             FieldKind::Connection {
                 provider: "todoist".into(),
+                connection_kind: None,
             },
             FieldKind::Cron,
             FieldKind::Filter { fields: vec![] },

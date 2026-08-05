@@ -248,11 +248,17 @@ fn dynamic_field(props: &DynamicFieldProps) -> Html {
             />
         },
 
-        FieldKind::Connection { provider } => {
+        FieldKind::Connection {
+            provider,
+            connection_kind,
+        } => {
             let choices: Vec<SelectOption> = props
                 .connections
                 .iter()
-                .filter(|connection| &connection.provider == provider)
+                .filter(|connection| {
+                    &connection.provider == provider
+                        && connection_kind.is_none_or(|kind| connection.kind == kind)
+                })
                 .map(|connection| {
                     SelectOption::new(connection.id.to_string(), connection.name.clone())
                 })

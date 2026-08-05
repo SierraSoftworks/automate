@@ -35,13 +35,9 @@
 //!
 //! # What is not moved
 //!
-//! `[[workflows.github_notifications]]` and
-//! `[workflows.github_notifications_cleanup]` stay where they are. They are the
-//! installation's own maintenance rather than somebody's workflow — nobody chose
-//! them, and nobody should be able to delete them from a browser — so they have
-//! no [`ConfigurableWorkflow`] implementation and no record to be moved into.
-//! They keep scheduling themselves from `setup()`, carrying their configuration
-//! inline on the queue, which is why [`CronJobTask::task`] still exists.
+//! `[[workflows.github_notifications]]` stays where it is. Notification cleanup
+//! has its own migration below because older workflow migrations deliberately
+//! skipped it, and their marker may already exist on an upgrading installation.
 
 use chrono::{DateTime, Utc};
 
@@ -49,8 +45,9 @@ use human_errors::Error;
 
 use crate::db::KeyValueStore;
 use crate::jobs::{
-    CRON_PARTITION, CalendarWorkflow, CronJobConfig, CronJobTask, GitHubReleasesWorkflow,
-    RssWorkflow, XkcdWorkflow, YnabStocksWorkflow, YouTubeWorkflow,
+    CRON_PARTITION, CalendarWorkflow, CronJobConfig, CronJobTask,
+    GitHubNotificationsCleanupWorkflow, GitHubReleasesWorkflow, RssWorkflow, XkcdWorkflow,
+    YnabStocksWorkflow, YouTubeWorkflow,
 };
 use crate::prelude::*;
 use crate::workflow_store::{WorkflowDraft, WorkflowStore};
@@ -67,6 +64,12 @@ pub const MIGRATIONS_PARTITION: &str = "migrations";
 
 /// The marker saying this tenant's configured workflows have been moved.
 pub const WORKFLOWS_FROM_CONFIG: &str = "workflows-from-config";
+
+/// The marker saying the formerly core-scheduled GitHub cleanup job was moved.
+pub const GITHUB_CLEANUP_FROM_CONFIG: &str = "github-cleanup-from-config";
+
+/// The marker saying existing GitHub workflows were linked to the imported PAT.
+pub const GITHUB_PAT_WORKFLOW_CONNECTIONS: &str = "github-pat-workflow-connections";
 
 /// The most armed schedules we will look at when clearing out the ones the file
 /// pushed.
@@ -102,24 +105,39 @@ struct Marker {
 /// webhook workflows entirely — so there is no address for this to mint.
 #[instrument("workflow_migration.import", skip(services), err(Display))]
 pub async fn import_configured_workflows<S: Services>(services: &S) -> Result<usize, Error> {
+    let cleanup_imported = import_github_cleanup(services).await?;
+
     if services
         .kv()
         .get::<Marker>(MIGRATIONS_PARTITION, WORKFLOWS_FROM_CONFIG)
         .await?
         .is_some()
     {
-        return Ok(0);
+        attach_github_pat_to_existing_workflows(services).await?;
+        return Ok(cleanup_imported);
     }
 
     let config = services.config();
     let workflows = &config.workflows;
     let store = WorkflowStore::new(services);
+    let github_pat = github_pat_connection(services)
+        .await?
+        .map(|connection| connection.id);
+    let github_releases: Vec<CronJobConfig<GitHubReleasesWorkflow>> = workflows
+        .github_releases
+        .iter()
+        .cloned()
+        .map(|mut workflow| {
+            workflow.job.connection = github_pat;
+            workflow
+        })
+        .collect();
 
     let mut imported = 0;
     imported += import_entries(&store, &workflows.rss).await?;
     imported += import_entries(&store, &workflows.calendars).await?;
     imported += import_entries(&store, &workflows.youtube).await?;
-    imported += import_entries(&store, &workflows.github_releases).await?;
+    imported += import_entries(&store, &github_releases).await?;
     imported += import_entries(&store, &workflows.xkcd).await?;
     imported += import_entries(&store, &workflows.ynab_stocks).await?;
 
@@ -151,7 +169,175 @@ pub async fn import_configured_workflows<S: Services>(services: &S) -> Result<us
         );
     }
 
+    attach_github_pat_to_existing_workflows(services).await?;
+
+    Ok(imported + cleanup_imported)
+}
+
+/// Adds the imported PAT to release records written before workflows selected
+/// connections. Existing explicit choices are never replaced.
+async fn attach_github_pat_to_existing_workflows<S: Services>(services: &S) -> Result<(), Error> {
+    if services
+        .kv()
+        .get::<Marker>(MIGRATIONS_PARTITION, GITHUB_PAT_WORKFLOW_CONNECTIONS)
+        .await?
+        .is_some()
+    {
+        return Ok(());
+    }
+
+    let Some(connection) = github_pat_connection(services).await? else {
+        services
+            .kv()
+            .set(
+                MIGRATIONS_PARTITION,
+                GITHUB_PAT_WORKFLOW_CONNECTIONS,
+                Marker {
+                    at: Utc::now(),
+                    imported: 0,
+                },
+            )
+            .await?;
+        return Ok(());
+    };
+
+    let store = WorkflowStore::new(services);
+    let mut updated = 0;
+    for record in store.records().await? {
+        if record.type_id != GitHubReleasesWorkflow::type_id() {
+            continue;
+        }
+
+        let mut config: crate::jobs::GitHubReleasesConfig = serde_json::from_value(record.config)
+            .wrap_system_err(
+            "An existing GitHub Releases workflow could not be migrated.",
+            &["Edit the workflow and select its GitHub connection."],
+        )?;
+        if config.connection.is_some() {
+            continue;
+        }
+
+        config.connection = Some(connection.id);
+        store
+            .update(
+                record.id,
+                WorkflowDraft {
+                    type_id: record.type_id,
+                    config: serde_json::to_value(config).wrap_system_err(
+                        "An existing GitHub Releases workflow could not be migrated.",
+                        &["Edit the workflow and select its GitHub connection."],
+                    )?,
+                    schedule: record.schedule,
+                    enabled: record.enabled,
+                },
+            )
+            .await?;
+        updated += 1;
+    }
+
+    services
+        .kv()
+        .set(
+            MIGRATIONS_PARTITION,
+            GITHUB_PAT_WORKFLOW_CONNECTIONS,
+            Marker {
+                at: Utc::now(),
+                imported: updated,
+            },
+        )
+        .await?;
+
+    Ok(())
+}
+
+/// Moves the old installation-level cleanup schedule into the local user's
+/// workflows and points it at that user's imported GitHub PAT.
+async fn import_github_cleanup<S: Services>(services: &S) -> Result<usize, Error> {
+    if services
+        .kv()
+        .get::<Marker>(MIGRATIONS_PARTITION, GITHUB_CLEANUP_FROM_CONFIG)
+        .await?
+        .is_some()
+    {
+        return Ok(0);
+    }
+
+    let github_pat = github_pat_connection(services).await?;
+
+    let mut imported = 0;
+    if let Some(connection) = github_pat {
+        let legacy = &services
+            .config()
+            .workflows
+            .legacy_github_notifications_cleanup;
+        let mut config = legacy.job.clone();
+        config.connection = Some(connection.id);
+
+        WorkflowStore::new(services)
+            .create(WorkflowDraft {
+                type_id: GitHubNotificationsCleanupWorkflow::type_id().to_string(),
+                config: serde_json::to_value(config).wrap_system_err(
+                    "The configured GitHub cleanup workflow could not be migrated.",
+                    &["Create the workflow in the browser instead."],
+                )?,
+                schedule: Some(legacy.cron.to_string()),
+                enabled: true,
+            })
+            .await?;
+        imported = 1;
+    } else {
+        warn!(
+            "The configured GitHub notification cleanup schedule was not migrated because no GitHub PAT connection exists; create the workflow after linking a GitHub token."
+        );
+    }
+
+    purge_inline_partition(
+        services,
+        <GitHubNotificationsCleanupWorkflow as Job>::partition(),
+    )
+    .await?;
+
+    services
+        .kv()
+        .set(
+            MIGRATIONS_PARTITION,
+            GITHUB_CLEANUP_FROM_CONFIG,
+            Marker {
+                at: Utc::now(),
+                imported,
+            },
+        )
+        .await?;
+
     Ok(imported)
+}
+
+async fn github_pat_connection<S: Services>(
+    services: &S,
+) -> Result<Option<crate::connections::Connection>, Error> {
+    Ok(crate::connections::ConnectionStore::for_services(services)
+        .list_for_provider(crate::integrations::github_app::GITHUB_PROVIDER)
+        .await?
+        .into_iter()
+        .find(|connection| connection.kind == automate_api::ConnectionKind::ApiKey))
+}
+
+async fn purge_inline_partition<S: Services>(
+    services: &S,
+    partition: &str,
+) -> Result<usize, Error> {
+    let armed: Vec<crate::db::PeekedMessage<CronJobTask>> =
+        services.queue().peek(CRON_PARTITION, MAX_SCHEDULES).await?;
+    let mut purged = 0;
+
+    for message in armed {
+        if message.payload.workflow.is_none() && message.payload.kind == partition {
+            services.queue().purge(CRON_PARTITION, message.key).await?;
+            purged += 1;
+        }
+    }
+
+    Ok(purged)
 }
 
 /// Writes one type's configured entries out as workflow records.
@@ -304,11 +490,20 @@ mod tests {
     async fn services_configured_with(file: &str) -> TestServices {
         let file = file.to_string();
 
-        ServicesContainer::new_custom_mock(move |config, _| {
+        let services = ServicesContainer::new_custom_mock(move |config, _| {
             *config = toml::from_str(&file).expect("the test configuration should parse");
         })
         .await
-        .unwrap()
+        .unwrap();
+
+        crate::connections::import_configured_credentials(
+            services.clone(),
+            services.tenant().clone(),
+        )
+        .await
+        .unwrap();
+
+        services
     }
 
     /// Whether the marker saying the move has happened is present.
@@ -350,6 +545,9 @@ mod tests {
     /// left out of the migration is a failing test rather than a workflow that
     /// quietly stops running after an upgrade.
     const EVERY_TYPE: &str = r#"
+        [connections.github]
+        api_key = "github-pat"
+
         [[workflows.rss]]
         name = "Citation Needed"
         homepage = "https://citationneeded.news/"
@@ -383,7 +581,7 @@ mod tests {
         let services = services_configured_with(EVERY_TYPE).await;
 
         let imported = import_configured_workflows(&services).await.unwrap();
-        assert_eq!(imported, 6);
+        assert_eq!(imported, 7);
 
         let store = WorkflowStore::new(&services);
         let mut types: Vec<String> = store
@@ -399,6 +597,7 @@ mod tests {
             types,
             vec![
                 "calendar",
+                "github-notifications-cleanup",
                 "github-releases",
                 "rss",
                 "xkcd",
@@ -435,6 +634,115 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn cleanup_is_migrated_even_after_the_older_workflow_migration_ran() {
+        let services = services_configured_with(
+            r#"
+            [connections.github]
+            api_key = "github-pat"
+
+            [workflows.github_notifications_cleanup]
+            cron = "0 */2 * * *"
+            filter = 'repository.owner == "SierraSoftworks"'
+            "#,
+        )
+        .await;
+        services
+            .kv()
+            .set(
+                MIGRATIONS_PARTITION,
+                WORKFLOWS_FROM_CONFIG,
+                Marker {
+                    at: Utc::now(),
+                    imported: 0,
+                },
+            )
+            .await
+            .unwrap();
+        arm_inline(
+            &services,
+            GitHubNotificationsCleanupWorkflow::partition(),
+            "github-notifications-cleanup",
+        )
+        .await;
+
+        assert_eq!(import_configured_workflows(&services).await.unwrap(), 1);
+
+        let records = WorkflowStore::new(&services).records().await.unwrap();
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].type_id, "github-notifications-cleanup");
+        assert_eq!(records[0].schedule.as_deref(), Some("0 */2 * * *"));
+        assert!(records[0].config["connection"].is_string());
+        assert_eq!(
+            records[0].config["filter"],
+            serde_json::json!(r#"repository.owner == "SierraSoftworks""#)
+        );
+        assert!(armed(&services).await.is_empty());
+        assert_eq!(import_configured_workflows(&services).await.unwrap(), 0);
+    }
+
+    #[tokio::test]
+    async fn an_existing_release_workflow_is_linked_to_the_imported_pat() {
+        let services = services_configured_with(
+            r#"
+            [connections.github]
+            api_key = "github-pat"
+            "#,
+        )
+        .await;
+        services
+            .kv()
+            .set(
+                MIGRATIONS_PARTITION,
+                WORKFLOWS_FROM_CONFIG,
+                Marker {
+                    at: Utc::now(),
+                    imported: 1,
+                },
+            )
+            .await
+            .unwrap();
+
+        let id = automate_api::WorkflowId::from_entropy(7);
+        let now = Utc::now();
+        services
+            .kv()
+            .insert(
+                CRON_PARTITION,
+                id.to_string(),
+                crate::workflow_store::WorkflowRecord {
+                    id,
+                    type_id: GitHubReleasesWorkflow::type_id().to_string(),
+                    config: serde_json::json!({
+                        "repository": "SierraSoftworks/automate",
+                    }),
+                    schedule: Some("0 */8 * * *".into()),
+                    enabled: false,
+                    created_at: now,
+                    updated_at: now,
+                    last_run: None,
+                    webhook: None,
+                },
+            )
+            .await
+            .unwrap();
+
+        import_configured_workflows(&services).await.unwrap();
+
+        let pat = github_pat_connection(&services).await.unwrap().unwrap();
+        let release = WorkflowStore::new(&services)
+            .records()
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|record| record.id == id)
+            .unwrap();
+        assert_eq!(release.config["connection"], pat.id.to_string());
+        assert_eq!(release.config["repository"], "SierraSoftworks/automate");
+        assert_eq!(release.schedule.as_deref(), Some("0 */8 * * *"));
+        assert!(!release.enabled);
+    }
+
+    #[tokio::test]
     async fn a_schedule_written_as_a_shorthand_survives_as_the_pattern_it_means() {
         // A parsed schedule does not keep the text it was written as, so
         // `@daily` comes back as its expansion. That is the same schedule, which
@@ -461,7 +769,7 @@ mod tests {
     async fn running_the_migration_twice_imports_nothing_the_second_time() {
         let services = services_configured_with(EVERY_TYPE).await;
 
-        assert_eq!(import_configured_workflows(&services).await.unwrap(), 6);
+        assert_eq!(import_configured_workflows(&services).await.unwrap(), 7);
         assert_eq!(
             import_configured_workflows(&services).await.unwrap(),
             0,
@@ -470,7 +778,7 @@ mod tests {
 
         assert_eq!(
             WorkflowStore::new(&services).records().await.unwrap().len(),
-            6,
+            7,
             "a second run must not leave the installation with two of everything",
         );
     }
@@ -571,7 +879,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn the_installations_own_maintenance_keeps_its_inline_schedule() {
+    async fn only_remaining_installation_maintenance_keeps_its_inline_schedule() {
         // These have no record to be a duplicate of, because nobody configured
         // them and nobody can. Purging them would stop the housekeeping until
         // something restarted the agent.
@@ -590,9 +898,10 @@ mod tests {
         let armed = armed(&services).await;
         assert_eq!(
             armed.len(),
-            2,
+            1,
             "the installation's own schedules are not anybody's workflow and are not ours to remove",
         );
+        assert_eq!(armed[0].payload.kind, "workflow/todoist-cleanup");
     }
 
     #[tokio::test]
