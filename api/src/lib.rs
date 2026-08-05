@@ -12,6 +12,7 @@ mod kv;
 mod queue;
 mod tenant;
 mod user;
+mod webhook;
 mod wordlist;
 mod workflow;
 
@@ -22,4 +23,5 @@ pub use kv::KeyValueEntry;
 pub use queue::{QueueMessage, QueueStatus};
 pub use tenant::{TenantId, TenantIdError};
 pub use user::AdminUser;
+pub use webhook::{WebhookToken, WebhookTokenError};
 pub use workflow::{FieldDescriptor, FieldKind, Workflow, WorkflowTrigger, WorkflowTypeDescriptor};
