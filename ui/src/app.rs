@@ -28,6 +28,12 @@ pub enum Route {
     AdminRoot,
     #[at("/admin/")]
     Admin,
+    /// The services this account has linked.
+    #[at("/admin/connections")]
+    Connections,
+    /// The workflows this account has configured.
+    #[at("/admin/workflows")]
+    Workflows,
     #[not_found]
     #[at("/404")]
     NotFound,
@@ -164,6 +170,12 @@ fn switch(route: Route) -> Html {
         Route::AuthCallback => html! { <pages::AuthCallback /> },
         Route::AdminRoot | Route::Admin => html! {
             <AdminShell><pages::Admin /></AdminShell>
+        },
+        Route::Connections => html! {
+            <AdminShell><pages::Connections /></AdminShell>
+        },
+        Route::Workflows => html! {
+            <AdminShell><pages::Workflows /></AdminShell>
         },
         Route::NotFound => html! { <pages::NotFound /> },
     }

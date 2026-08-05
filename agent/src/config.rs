@@ -1,12 +1,11 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 
 use crate::jobs::*;
 use crate::prelude::*;
 use crate::web::*;
-use crate::webhooks::*;
 
 #[derive(Clone, Deserialize, Default)]
 pub struct Config {
@@ -17,13 +16,7 @@ pub struct Config {
     #[serde(default)]
     pub web: WebConfig,
     #[serde(default)]
-    pub webhooks: WebhookConfigs,
-    #[serde(default)]
     pub workflows: WorkflowConfigs,
-}
-
-pub trait Mergeable {
-    fn merge(&self, other: &Self) -> Self;
 }
 
 impl Config {
@@ -102,8 +95,13 @@ impl Config {
 
 #[derive(Default, Clone, Deserialize)]
 pub struct ConnectionConfigs {
+    /// The Todoist credential an installation used to share.
+    ///
+    /// Superseded by per-account connections. Kept only so that an existing
+    /// configuration file still loads and can be imported once on start-up; see
+    /// [`crate::connections::import_configured_credentials`].
     #[serde(default)]
-    pub todoist: TodoistConfig,
+    pub todoist: LegacyApiKey,
 
     #[serde(default)]
     pub github: GitHubConfig,
@@ -115,11 +113,26 @@ pub struct ConnectionConfigs {
     pub alphavantage: AlphaVantageConfig,
 }
 
-#[derive(Clone, Deserialize, Default)]
+#[derive(Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct WebConfig {
     #[serde(default = "default_listen_address")]
     pub address: String,
 
+    /// Where the SQLite database lives.
+    ///
+    /// The encryption key for stored credentials is kept in a file alongside it
+    /// unless one is configured explicitly, so moving this moves both.
+    #[serde(default = "default_database_path")]
+    pub database: String,
+
+    /// Identity and access configuration.
+    #[serde(default)]
+    pub auth: AuthConfig,
+
+    /// The pre-multi-tenant admin section, retained so existing configuration
+    /// files keep working. Prefer `[web.auth]`; see [`WebConfig::user_acl`] for
+    /// how the two are reconciled.
     #[serde(default)]
     pub admin: AdminConfig,
 
@@ -134,7 +147,103 @@ pub struct WebConfig {
     pub trust_proxy: bool,
 }
 
+impl Default for WebConfig {
+    /// Written out rather than derived, because a derived `Default` would give
+    /// empty strings for the fields that carry a `#[serde(default = "...")]` —
+    /// serde's defaults apply only when deserialising, so the two paths would
+    /// otherwise disagree about what an unconfigured agent listens on and where
+    /// it keeps its database.
+    fn default() -> Self {
+        Self {
+            address: default_listen_address(),
+            database: default_database_path(),
+            auth: AuthConfig::default(),
+            admin: AdminConfig::default(),
+            base_url: None,
+            trust_proxy: false,
+        }
+    }
+}
+
+#[allow(dead_code)]
+impl WebConfig {
+    /// The filter deciding who may sign in at all.
+    ///
+    /// Falls back to the legacy `[web.admin] acl`. Under that configuration
+    /// there was only one gate — passing it granted full access — so it governs
+    /// both signing in and administrator status, which preserves the behaviour
+    /// an existing installation already has.
+    pub fn user_acl(&self) -> &Filter {
+        self.auth.user_acl.as_ref().unwrap_or(&self.admin.acl)
+    }
+
+    /// The filter deciding who is an administrator.
+    pub fn admin_acl(&self) -> &Filter {
+        self.auth.admin_acl.as_ref().unwrap_or(&self.admin.acl)
+    }
+
+    /// The identity provider to authenticate against, if any.
+    pub fn oidc(&self) -> Option<&OidcConfig> {
+        self.auth.oidc.as_ref().or(self.admin.oidc.as_ref())
+    }
+}
+
+/// Identity, access control and credential protection.
+///
+/// Like the other configuration types, this describes the shape of the file
+/// rather than a set of call sites, so not every field has a reader in every
+/// build.
+#[allow(dead_code)]
+#[derive(Clone, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+pub struct AuthConfig {
+    /// Whether several people may sign in and each hold their own workflows and
+    /// connections.
+    ///
+    /// Off by default, so that upgrading an existing installation changes
+    /// nothing until the operator opts in.
+    #[serde(default)]
+    pub multi_tenant: bool,
+
+    /// The account that owns everything when no identity provider is configured.
+    ///
+    /// Naming this after the username you will eventually sign in as means that
+    /// adopting an identity provider later leaves your existing workflows where
+    /// they are, rather than needing them moved.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub local_user: Option<String>,
+
+    /// Who may sign in. Defaults to the legacy `[web.admin] acl`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub user_acl: Option<Filter>,
+
+    /// Who may administer the installation, including impersonating another
+    /// user. Defaults to the legacy `[web.admin] acl`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub admin_acl: Option<Filter>,
+
+    /// The key used to encrypt stored credentials, as base64 or hexadecimal.
+    ///
+    /// When absent, a key is generated into a file beside the database on first
+    /// run. Set this to keep the key in your own secret management instead.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub secret_key: Option<String>,
+
+    /// Keys previously used to encrypt credentials.
+    ///
+    /// Values are only ever encrypted with the current key, but are decrypted
+    /// with whichever key sealed them, so a rotated key stays listed here until
+    /// every record that used it has been rewritten.
+    #[serde(default)]
+    pub previous_secret_keys: Vec<String>,
+
+    /// The identity provider to authenticate against.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub oidc: Option<OidcConfig>,
+}
+
 #[derive(Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct AdminConfig {
     /// Filter expression that must evaluate to true for a request to be granted
     /// access to the admin endpoints. When OIDC is configured, validated token
@@ -185,41 +294,30 @@ pub struct OidcConfig {
     /// session transparently and must prompt for an interactive sign-in instead.
     #[serde(default)]
     pub scopes: Vec<String>,
+
+    /// The claim identifying the account, which becomes the key everything the
+    /// user owns is stored under.
+    ///
+    /// Defaults to `preferred_username`, falling back to `sub` where the
+    /// provider does not supply one. Point this at a different claim if yours
+    /// puts a stable, unique name elsewhere — but choose one that does not
+    /// change, because renaming an account is a deliberate migration rather
+    /// than something that happens on its own.
+    #[allow(dead_code)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub username_claim: Option<String>,
 }
 
 fn default_listen_address() -> String {
     "localhost:8080".to_string()
 }
 
-fn default_admin_acl() -> Filter {
-    Filter::new("false").expect("the literal `false` filter is always valid")
+fn default_database_path() -> String {
+    "database.sqlite".to_string()
 }
 
-#[derive(Clone, Deserialize, Default)]
-pub struct WebhookConfigs {
-    #[serde(default)]
-    pub azure_monitor: AzureMonitorWebhookConfig,
-
-    #[serde(default)]
-    pub github: GitHubWebhookConfig,
-
-    #[serde(default)]
-    pub grafana: GrafanaWebhookConfig,
-
-    #[serde(default)]
-    pub grey: GreyWebhookConfig,
-
-    #[serde(default)]
-    pub honeycomb: HoneycombWebhookConfig,
-
-    #[serde(default)]
-    pub sentry: SentryWebhookConfig,
-
-    #[serde(default)]
-    pub tailscale: TailscaleWebhookConfig,
-
-    #[serde(default)]
-    pub terraform: TerraformWebhookConfig,
+fn default_admin_acl() -> Filter {
+    Filter::new("false").expect("the literal `false` filter is always valid")
 }
 
 #[derive(Clone, Deserialize, Default)]
@@ -268,6 +366,15 @@ pub struct GitHubAppConfig {
     /// people to.
     pub slug: String,
 
+    /// The base URL of the GitHub API the App's management calls are addressed
+    /// to, defaulting to `https://api.github.com`.
+    ///
+    /// A GitHub Enterprise Server instance serves its API from its own host, at
+    /// `https://<hostname>/api/v3`, so an App registered there is unreachable
+    /// without this. The paths below it are the same ones github.com serves.
+    #[serde(default)]
+    pub api_url: Option<String>,
+
     /// Who may use the install wizard. Evaluated exactly like the OAuth2
     /// providers' `acl`, and admin-gated when omitted.
     #[serde(default)]
@@ -277,6 +384,13 @@ pub struct GitHubAppConfig {
 #[derive(Default, Clone, Deserialize)]
 pub struct YnabConfig {
     /// The YNAB Personal Access Token used to authenticate with the YNAB API.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_key: Option<String>,
+}
+
+/// A credential that used to live in the configuration file.
+#[derive(Default, Clone, Deserialize)]
+pub struct LegacyApiKey {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub api_key: Option<String>,
 }
@@ -292,6 +406,135 @@ pub struct AlphaVantageConfig {
 mod tests {
     use super::*;
     use std::io::Write;
+
+    fn parse(toml: &str) -> Config {
+        toml::from_str(toml).expect("the configuration should parse")
+    }
+
+    #[test]
+    fn a_legacy_admin_section_still_governs_access() {
+        // Before multi-tenancy there was one gate, and passing it granted full
+        // access. An existing configuration must keep behaving that way rather
+        // than silently locking its operator out.
+        let config = parse(
+            r#"
+            [web.admin]
+            acl = 'client_ip in ["127.0.0.1"]'
+
+            [web.admin.oidc]
+            endpoint = "https://id.example.com"
+            client_id = "automate"
+            client_secret = "shh"
+        "#,
+        );
+
+        assert_eq!(
+            config.web.user_acl().to_string(),
+            config.web.admin.acl.to_string()
+        );
+        assert_eq!(
+            config.web.admin_acl().to_string(),
+            config.web.admin.acl.to_string()
+        );
+        assert_eq!(
+            config.web.oidc().map(|o| o.endpoint.as_str()),
+            Some("https://id.example.com")
+        );
+    }
+
+    #[test]
+    fn the_auth_section_takes_precedence_over_the_legacy_one() {
+        let config = parse(
+            r#"
+            [web.admin]
+            acl = 'false'
+
+            [web.auth]
+            user_acl = 'true'
+            admin_acl = 'claims.email == "admin@example.com"'
+
+            [web.auth.oidc]
+            endpoint = "https://new.example.com"
+            client_id = "automate"
+            client_secret = "shh"
+        "#,
+        );
+
+        assert_eq!(config.web.user_acl().to_string(), "true");
+        assert_eq!(
+            config.web.admin_acl().to_string(),
+            r#"claims.email == "admin@example.com""#
+        );
+        assert_eq!(
+            config.web.oidc().map(|o| o.endpoint.as_str()),
+            Some("https://new.example.com")
+        );
+    }
+
+    #[test]
+    fn access_is_denied_by_default_when_nothing_is_configured() {
+        let config = Config::default();
+
+        assert_eq!(config.web.user_acl().to_string(), "false");
+        assert_eq!(config.web.admin_acl().to_string(), "false");
+        assert!(config.web.oidc().is_none());
+        assert!(!config.web.auth.multi_tenant);
+    }
+
+    #[test]
+    fn the_database_path_defaults_to_the_working_directory() {
+        assert_eq!(Config::default().web.database, "database.sqlite");
+        assert_eq!(
+            parse("[web]\ndatabase = \"/var/lib/automate/db.sqlite\"")
+                .web
+                .database,
+            "/var/lib/automate/db.sqlite"
+        );
+    }
+
+    #[test]
+    fn a_misplaced_web_key_is_reported_rather_than_ignored() {
+        // `admin_acl` belongs under [web.auth]; at the [web] level it used to be
+        // dropped silently, leaving the operator with the deny-by-default ACL
+        // and no indication why.
+        let err = match toml::from_str::<Config>(
+            r#"
+            [web]
+            admin_acl = 'client_ip in ["127.0.0.1"]'
+        "#,
+        ) {
+            Err(err) => err,
+            Ok(_) => panic!("an unrecognised key under [web] should be refused"),
+        };
+
+        assert!(err.to_string().contains("admin_acl"), "{err}");
+    }
+
+    #[test]
+    fn the_documented_example_configuration_is_valid() {
+        // `deny_unknown_fields` makes the example file a real test of the
+        // schema: any key documented there that the agent does not understand
+        // now fails here rather than being silently ignored at runtime.
+        let example = include_str!("../../config.example.toml");
+
+        if let Err(err) = toml::from_str::<Config>(example) {
+            panic!("config.example.toml does not match the configuration schema: {err}");
+        }
+    }
+
+    #[test]
+    fn the_username_claim_is_optional_and_unset_by_default() {
+        let config = parse(
+            r#"
+            [web.auth.oidc]
+            endpoint = "https://id.example.com"
+            client_id = "automate"
+            client_secret = "shh"
+        "#,
+        );
+
+        assert_eq!(config.web.oidc().unwrap().username_claim, None);
+    }
 
     #[test]
     fn test_load_env_file_with_valid_file() {
@@ -358,25 +601,5 @@ mod tests {
         // Cleanup
         std::fs::remove_file(&config_file).ok();
         std::fs::remove_file(&env_file).ok();
-    }
-}
-
-#[derive(Clone, Serialize, Deserialize, Default)]
-pub struct TodoistConfig {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub api_key: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub project: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub section: Option<String>,
-}
-
-impl Mergeable for TodoistConfig {
-    fn merge(&self, other: &Self) -> Self {
-        TodoistConfig {
-            api_key: other.api_key.clone().or_else(|| self.api_key.clone()),
-            project: other.project.clone().or_else(|| self.project.clone()),
-            section: other.section.clone().or_else(|| self.section.clone()),
-        }
     }
 }

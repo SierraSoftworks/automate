@@ -1,17 +1,23 @@
-//! The signed-in administrator's identity.
+//! The signed-in user's identity.
 
 use actix_web::{HttpMessage, HttpRequest, HttpResponse};
 
-use super::Authenticated;
+use crate::web::Principal;
 
-/// `GET /api/v1/me` — returns the signed-in administrator's display identity.
-/// When OIDC is not configured there is no authenticated user, so this responds
-/// with `204 No Content`.
+/// `GET /api/v1/me` — returns the signed-in user's display identity.
+///
+/// Responds with `204 No Content` when no identity provider is configured: there
+/// is nobody to identify, and inventing a name would suggest an account exists
+/// where none does.
+///
+/// While an administrator is acting as somebody else this describes the account
+/// being acted upon, with `impersonated_by` naming the administrator, so the UI
+/// can show whose records are on screen and on whose authority.
 pub async fn me(req: HttpRequest) -> HttpResponse {
     let user = req
         .extensions()
-        .get::<Authenticated>()
-        .and_then(|a| a.user.clone());
+        .get::<Principal>()
+        .and_then(Principal::to_admin_user);
 
     match user {
         Some(user) => HttpResponse::Ok().json(user),

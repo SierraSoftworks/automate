@@ -202,7 +202,8 @@ impl<K: KeyValueStore> Debouncer<K> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::SqliteDatabase;
+    use crate::db::{SqliteDatabase, TenantDb};
+    use automate_api::TenantId;
 
     fn config() -> DebounceConfig {
         DebounceConfig {
@@ -216,12 +217,15 @@ mod tests {
         value.parse().unwrap()
     }
 
-    async fn debouncer() -> Debouncer<SqliteDatabase> {
-        let db = SqliteDatabase::open_in_memory().await.unwrap();
+    async fn debouncer() -> Debouncer<TenantDb> {
+        let db = SqliteDatabase::open_in_memory()
+            .await
+            .unwrap()
+            .tenant(TenantId::local());
         Debouncer::new(db, "test/debounce", config())
     }
 
-    async fn state(d: &Debouncer<SqliteDatabase>, key: &str) -> Option<DebounceState> {
+    async fn state(d: &Debouncer<TenantDb>, key: &str) -> Option<DebounceState> {
         d.load(key).await.unwrap()
     }
 

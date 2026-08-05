@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::prelude::*;
 use crate::publishers::{TodoistCreateTask, TodoistCreateTaskPayload, TodoistDueDate};
-use crate::{collectors::GitHubReleasesCollector, config::TodoistConfig, filter::Filter};
+use crate::{collectors::GitHubReleasesCollector, filter::Filter, publishers::TodoistTarget};
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct GitHubReleasesConfig {
@@ -14,7 +14,7 @@ pub struct GitHubReleasesConfig {
     pub filter: Filter,
 
     #[serde(default)]
-    pub todoist: TodoistConfig,
+    pub todoist: TodoistTarget,
 }
 
 impl Display for GitHubReleasesConfig {
@@ -26,7 +26,118 @@ impl Display for GitHubReleasesConfig {
 #[derive(Clone)]
 pub struct GitHubReleasesWorkflow;
 
+/// The setup notes shown while somebody is configuring one of these.
+const DOCUMENTATION: &str = r#"## What this does
+
+Watches one repository's releases and files a Todoist task for each new one,
+carrying the release notes into the task's body so you can decide whether an
+upgrade is worth your afternoon without opening GitHub.
+
+The first run files every release on the repository's first page of results —
+up to thirty of them — rather than only what appears afterwards. Every run
+after that only sees releases published since the newest one it has seen, so
+the burst happens once.
+
+## Naming the repository
+
+**Repository** is `owner/name` as it appears in the repository's own address —
+`SierraSoftworks/automate` for `https://github.com/SierraSoftworks/automate`.
+Not the full URL, and not a display name.
+
+Only repositories the agent can read are usable. A public repository needs
+nothing further; a private one needs a GitHub API token configured on the
+installation as `connections.github.api_key`, and will otherwise fail every run
+with a not-found error, which is what GitHub returns rather than admitting the
+repository exists.
+
+This is a poll, not a subscription: no webhook is set up on the repository and
+nothing is written to it, so you do not need any access beyond reading.
+
+## Choosing which releases to file
+
+The filter runs against each release and can match on `tag`, `name`,
+`published`, `link`, `draft` and `prerelease`. The two worth knowing about are
+the booleans — plenty of projects cut release candidates far more often than
+releases, and a task per candidate is how a useful workflow becomes noise.
+
+```
+prerelease == false && draft == false
+```
+
+Matching on the tag is the other common case, for repositories that release
+several components from one place:
+
+```
+tag startswith "cli/"
+```
+
+## Scheduling
+
+This polls the GitHub API, which is rate limited, so a failed run backs off for
+an hour before it tries again. `@daily` suits most repositories.
+"#;
+
 crate::register_job!(GitHubReleasesWorkflow);
+crate::register_workflow_type!(GitHubReleasesWorkflow);
+
+impl crate::workflows::ConfigurableWorkflow for GitHubReleasesWorkflow {
+    type ConfigType = GitHubReleasesConfig;
+
+    fn type_id() -> &'static str {
+        "github-releases"
+    }
+
+    fn describe(config: &Self::JobType) -> String {
+        config.repository.clone()
+    }
+
+    fn descriptor() -> automate_api::WorkflowTypeDescriptor {
+        use automate_api::{FieldDescriptor, FieldKind, WorkflowTrigger, WorkflowTypeDescriptor};
+
+        WorkflowTypeDescriptor {
+            id: <Self as crate::workflows::ConfigurableWorkflow>::type_id().to_string(),
+            name: "GitHub Releases".to_string(),
+            description: "Files a task for each new release of a repository.".to_string(),
+            documentation: DOCUMENTATION.to_string(),
+            trigger: WorkflowTrigger::Cron {
+                default_schedule: "@daily".to_string(),
+            },
+            fields: [
+                FieldDescriptor::new(
+                    crate::config_path!(GitHubReleasesConfig: repository),
+                    "Repository",
+                    FieldKind::Text {
+                        placeholder: Some("SierraSoftworks/automate".into()),
+                    },
+                )
+                .with_help("The repository to watch, as owner/name.")
+                .required(),
+                FieldDescriptor::new(
+                    crate::config_path!(GitHubReleasesConfig: filter),
+                    "Filter",
+                    FieldKind::Filter {
+                        fields: vec![
+                            "tag".into(),
+                            "name".into(),
+                            "published".into(),
+                            "link".into(),
+                            "draft".into(),
+                            "prerelease".into(),
+                        ],
+                    },
+                )
+                .with_help("Only file releases matching this, such as `prerelease == false`."),
+            ]
+            .into_iter()
+            .chain(crate::todoist_target_fields!(
+                GitHubReleasesConfig,
+                project = Some("Software"),
+                section = Some("Updates")
+            ))
+            .collect(),
+        }
+    }
+}
 
 impl Job for GitHubReleasesWorkflow {
     type JobType = GitHubReleasesConfig;
@@ -39,15 +150,6 @@ impl Job for GitHubReleasesWorkflow {
     /// a failed run waits an hour before retrying.
     fn timeout(&self) -> chrono::TimeDelta {
         chrono::TimeDelta::hours(1)
-    }
-
-    #[instrument("workflow.github_releases.setup", skip(self, services), err(Display))]
-    async fn setup(
-        &self,
-        services: impl Services + Send + Sync + 'static,
-    ) -> Result<(), human_errors::Error> {
-        let config = services.config();
-        CronJob::schedule(&config.workflows.github_releases, services).await
     }
 
     #[instrument("workflow.github_releases.handle", skip(self, ctx, job), fields(job = %job))]

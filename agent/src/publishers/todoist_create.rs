@@ -9,8 +9,9 @@ pub struct TodoistCreateTaskPayload {
     pub description: Option<String>,
     pub priority: Option<i32>,
     pub due: TodoistDueDate,
+    #[serde(default, with = "crate::serde_duration::minutes_option")]
     pub duration: Option<chrono::Duration>,
-    pub config: crate::config::TodoistConfig,
+    pub config: crate::publishers::TodoistTarget,
 }
 
 pub struct TodoistCreateTask;
@@ -31,18 +32,17 @@ impl Job for TodoistCreateTask {
         job: &Self::JobType,
     ) -> Result<(), human_errors::Error> {
         let services = ctx.services();
-        let config = services.config().connections.todoist.merge(&job.config);
 
-        let client = TodoistClient::new(&config)?;
+        let client = TodoistClient::connect(services, &job.config).await?;
 
         let project_id = client
-            .get_project_id(config.project.as_deref().unwrap_or("Inbox"), services)
+            .get_project_id(job.config.project.as_deref().unwrap_or("Inbox"), services)
             .await?;
         let section_id = client
             .get_section_id(
-                config.project.as_deref().unwrap_or("Inbox"),
+                job.config.project.as_deref().unwrap_or("Inbox"),
                 &project_id,
-                config.section.as_deref(),
+                job.config.section.as_deref(),
                 services,
             )
             .await?;

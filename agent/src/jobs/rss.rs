@@ -4,8 +4,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     collectors::RssCollector,
-    config::TodoistConfig,
     prelude::*,
+    publishers::TodoistTarget,
     publishers::{TodoistCreateTask, TodoistCreateTaskPayload, TodoistDueDate},
 };
 
@@ -19,11 +19,11 @@ pub struct RssConfig {
     pub filter: Filter,
 
     #[serde(default = "default_todoist_config")]
-    pub todoist: TodoistConfig,
+    pub todoist: TodoistTarget,
 }
 
-fn default_todoist_config() -> TodoistConfig {
-    TodoistConfig {
+fn default_todoist_config() -> TodoistTarget {
+    TodoistTarget {
         project: Some("Hobbies".into()),
         section: Some("Reading".into()),
         ..Default::default()
@@ -39,7 +39,134 @@ impl Display for RssConfig {
 #[derive(Clone)]
 pub struct RssWorkflow;
 
+/// The setup notes shown while somebody is configuring one of these.
+const DOCUMENTATION: &str = r#"## What this does
+
+Every time this runs it fetches the feed, looks at the entries published since
+the last run, and files a Todoist task for each one it has not seen before. The
+task's title links to the entry and its body is the entry's summary converted
+from HTML to Markdown, so most of the time you can decide whether to read
+something without leaving your task list.
+
+Nothing is filed twice: the publication date of the newest entry seen is
+remembered between runs, and only entries newer than that are considered. The
+first run is the exception — it files everything currently in the feed, which
+for a feed that keeps fifty entries means fifty tasks. Save it, let it run
+once, and clear out the backlog if you did not want it.
+
+That watermark is kept against the feed's address rather than against the
+workflow, so two workflows watching the same feed will not each get a copy of
+every entry; whichever runs first takes them. If you want the same feed sorted
+into two places, use one workflow and a filter rather than two workflows.
+
+## Getting the feed address
+
+The **Feed URL** is the address of the RSS or Atom document, not the address of
+the site it describes. Those are usually different: `https://example.com/blog/`
+is a page, `https://example.com/blog/feed.xml` is the feed. Most sites either
+link theirs from the footer or advertise it in the page's `<head>` as a
+`<link rel="alternate" type="application/rss+xml">` element, which is what
+feed readers look for.
+
+The **Homepage** is the site's own address. It is used to turn the relative
+links many feeds put inside their entries (`/posts/2024/thing`) into ones you
+can actually click, so getting it wrong shows up as broken links in your tasks
+rather than as an error.
+
+## Choosing which entries to file
+
+The filter runs against each entry, and an entry is only filed if it matches.
+It can match on `title`, `description` and `link`, all lower-cased before
+comparison. Leaving it empty files every entry.
+
+```
+title contains "release" || link contains "/security/"
+```
+
+## Polling, not pushing
+
+This is a scheduled workflow: it asks the feed for new entries rather than
+being told about them. The schedule decides how quickly something shows up, so
+a feed you want to see promptly is worth putting on `@hourly`, and a feed that
+publishes weekly is not.
+"#;
+
 crate::register_job!(RssWorkflow);
+crate::register_workflow_type!(RssWorkflow);
+
+impl crate::workflows::ConfigurableWorkflow for RssWorkflow {
+    type ConfigType = RssConfig;
+
+    fn type_id() -> &'static str {
+        "rss"
+    }
+
+    fn describe(config: &Self::JobType) -> String {
+        config.name.clone()
+    }
+
+    fn descriptor() -> automate_api::WorkflowTypeDescriptor {
+        use automate_api::{FieldDescriptor, FieldKind, WorkflowTrigger, WorkflowTypeDescriptor};
+
+        WorkflowTypeDescriptor {
+            id: Self::type_id().to_string(),
+            name: "RSS Feed".to_string(),
+            description: "Watches a feed and files a task for each new entry.".to_string(),
+            documentation: DOCUMENTATION.to_string(),
+            trigger: WorkflowTrigger::Cron {
+                default_schedule: "@daily".to_string(),
+            },
+            fields: [
+                FieldDescriptor::new(
+                    crate::config_path!(RssConfig: name),
+                    "Name",
+                    FieldKind::Text {
+                        placeholder: Some("Citation Needed".into()),
+                    },
+                )
+                .with_help(
+                    "Used to label the tasks this creates, so you can tell them apart at a glance.",
+                )
+                .required(),
+                FieldDescriptor::new(
+                    crate::config_path!(RssConfig: url),
+                    "Feed URL",
+                    FieldKind::Url {
+                        placeholder: Some("https://example.com/rss/".into()),
+                    },
+                )
+                .with_help("The address of the RSS or Atom feed itself, not the page it describes.")
+                .required(),
+                FieldDescriptor::new(
+                    crate::config_path!(RssConfig: homepage),
+                    "Homepage",
+                    FieldKind::Url {
+                        placeholder: Some("https://example.com/".into()),
+                    },
+                )
+                .with_help(
+                    "Used to resolve relative links inside entries, which many feeds rely on.",
+                )
+                .required(),
+                FieldDescriptor::new(
+                    crate::config_path!(RssConfig: filter),
+                    "Filter",
+                    FieldKind::Filter {
+                        fields: vec!["title".into(), "description".into(), "link".into()],
+                    },
+                )
+                .with_help("Only file entries matching this. Leave it empty to file every entry."),
+            ]
+            .into_iter()
+            .chain(crate::todoist_target_fields!(
+                RssConfig,
+                project = Some("Hobbies"),
+                section = Some("Reading")
+            ))
+            .collect(),
+        }
+    }
+}
 
 impl Job for RssWorkflow {
     type JobType = RssConfig;
@@ -52,15 +179,6 @@ impl Job for RssWorkflow {
     /// rate limit or throttle, so a failed run waits an hour before retrying.
     fn timeout(&self) -> chrono::TimeDelta {
         chrono::TimeDelta::hours(1)
-    }
-
-    #[instrument("workflow.rss.setup", skip(self, services), err(Display))]
-    async fn setup(
-        &self,
-        services: impl Services + Send + Sync + 'static,
-    ) -> Result<(), human_errors::Error> {
-        let config = services.config();
-        CronJob::schedule(&config.workflows.rss, services).await
     }
 
     #[instrument("workflow.rss.handle", skip(self, ctx, job), fields(job = %job))]

@@ -30,8 +30,8 @@ pub fn is_demo() -> bool {
 /// A sample signed-in user for demo mode.
 pub fn admin_user() -> AdminUser {
     AdminUser {
-        name: "Demo User".to_string(),
         email: Some("demo@example.com".to_string()),
+        ..AdminUser::new("Demo User")
     }
 }
 

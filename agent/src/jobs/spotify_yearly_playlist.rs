@@ -1,6 +1,25 @@
+use automate_api::{ConnectionId, ConnectionStatus};
 use chrono::{Datelike, TimeDelta};
 
+use crate::connections::{ConnectionSecret, ConnectionStore};
 use crate::{prelude::*, publishers::SpotifyClient};
+
+/// Identifies which linked Spotify account a run is for.
+///
+/// The credential itself is deliberately not carried here. It lives encrypted in
+/// the connection, so a queue message names the account rather than holding the
+/// means to use it - which also means a refreshed token is written back to one
+/// place instead of riding along in every subsequent message.
+#[derive(Clone, Serialize, Deserialize)]
+pub struct SpotifyYearlyPlaylistTask {
+    pub connection: ConnectionId,
+}
+
+impl std::fmt::Display for SpotifyYearlyPlaylistTask {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.connection)
+    }
+}
 
 #[derive(Clone)]
 pub struct SpotifyYearlyPlaylistWorkflow;
@@ -8,7 +27,7 @@ pub struct SpotifyYearlyPlaylistWorkflow;
 crate::register_job!(SpotifyYearlyPlaylistWorkflow);
 
 impl Job for SpotifyYearlyPlaylistWorkflow {
-    type JobType = OAuth2RefreshToken;
+    type JobType = SpotifyYearlyPlaylistTask;
 
     fn partition() -> &'static str {
         "spotify/yearly-playlist"
@@ -30,14 +49,61 @@ impl Job for SpotifyYearlyPlaylistWorkflow {
         job: &Self::JobType,
     ) -> Result<(), human_errors::Error> {
         let services = ctx.services();
-        let token = match crate::web::refresh_or_notify("spotify", job, services).await? {
+        let connections = ConnectionStore::for_services(services);
+
+        let Some(connection) = connections.get(job.connection).await? else {
+            // The account was unlinked while this run was queued. Completing
+            // here stops the loop, which is what unlinking is meant to do.
+            info!(
+                connection.id = %job.connection,
+                "Skipping a run for a connection that no longer exists."
+            );
+            return Ok(());
+        };
+
+        let ConnectionSecret::OAuth2 {
+            access_token,
+            refresh_token,
+            expires_at,
+        } = connections.open(&connection)?
+        else {
+            return Err(human_errors::user(
+                "This Spotify connection does not hold an authorization grant.",
+                &["Reconnect your Spotify account."],
+            ));
+        };
+
+        let stored = OAuth2RefreshToken::new(access_token, refresh_token, expires_at);
+
+        let token = match crate::web::refresh_or_notify("spotify", &stored, services).await? {
             Some(token) => token,
             // The refresh token has expired or been revoked: a re-authorization
-            // reminder has been raised. Completing here (rather than erroring)
-            // removes this queued message, and deliberately skipping the delayed
-            // re-enqueue below stops us from using the dead account.
-            None => return Ok(()),
+            // reminder has been raised. Marking the connection and completing
+            // here (rather than erroring) removes this queued message, and
+            // deliberately skipping the delayed re-enqueue stops us from using
+            // the dead account.
+            None => {
+                connections
+                    .set_status(job.connection, ConnectionStatus::NeedsReauthorization)
+                    .await?;
+                return Ok(());
+            }
         };
+
+        // Write the renewed grant back, so the next run starts from it rather
+        // than repeating the refresh.
+        if token.access_token() != stored.access_token() {
+            connections
+                .update_secret(
+                    job.connection,
+                    ConnectionSecret::OAuth2 {
+                        access_token: token.access_token().to_string(),
+                        refresh_token: token.refresh_token().to_string(),
+                        expires_at: token.expires_at(),
+                    },
+                )
+                .await?;
+        }
 
         let client = SpotifyClient::new(token.clone(), services.http_client());
         let user = client.get_current_user().await?;
@@ -80,18 +146,15 @@ impl Job for SpotifyYearlyPlaylistWorkflow {
             }
         }
 
-        // Re-enqueue under the key we were given, so a connection keeps the same
-        // identity for as long as it lives. The very first message comes from the
-        // OAuth callback with a generated key (it has no idea whose account this
-        // is yet), so on that first run we fall back to the Spotify account id —
-        // which also collapses a duplicate connection of the same account onto
-        // the existing one, since `enqueue` upserts on the key.
-        let key: std::borrow::Cow<'static, str> = match ctx.key() {
-            Some(key) => key.to_string().into(),
-            None => user.id.clone().into(),
-        };
-
-        Self::dispatch_delayed(token, Some(key), TimeDelta::hours(1), services).await?;
+        // Keyed by the connection, so a linked account has exactly one run
+        // pending at a time no matter how often it is re-authorised.
+        Self::dispatch_delayed(
+            job.clone(),
+            Some(job.connection.to_string().into()),
+            TimeDelta::hours(1),
+            services,
+        )
+        .await?;
 
         Ok(())
     }

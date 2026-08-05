@@ -14,10 +14,13 @@ pub use automate_api::{Connection, IntegrationInfo};
 
 use crate::config::Config;
 use crate::prelude::*;
-use crate::services::AppServices;
+use crate::services::{AppContext, AppServices};
 
 pub mod github_app;
 mod oauth2;
+mod state;
+
+pub use state::PendingAuthorizations;
 
 /// Where to send the visitor to begin setup, and the CSRF state to remember.
 pub struct SetupRedirect {
@@ -26,6 +29,12 @@ pub struct SetupRedirect {
 }
 
 /// What to tell the visitor once setup finishes.
+///
+/// Derives [`Debug`] — unlike [`SetupRedirect`], which holds the CSRF state —
+/// because there is nothing in here that is not already being shown to the
+/// person, and a test asserting a setup was refused wants to be able to say what
+/// it got instead.
+#[derive(Debug)]
 pub struct SetupComplete {
     pub heading: String,
     pub message: String,
@@ -38,12 +47,44 @@ pub struct SetupComplete {
 /// configuration alone — they are consulted while *routing* a request, before
 /// there is anything to give them a context for.
 pub struct IntegrationContext<'a> {
-    pub services: &'a AppServices,
+    /// The installation-wide handle, from which per-account services are
+    /// derived. Held rather than a scoped handle because a setup flow spans two
+    /// requests and the account is only settled between them.
+    pub context: &'a AppContext,
+
+    /// The account that started this request.
+    ///
+    /// Meaningful to [`Integration::begin_setup`], [`Integration::connections`]
+    /// and [`Integration::disconnect`], which all act for whoever is asking.
+    ///
+    /// [`Integration::complete_setup`] must **not** use it. A callback arrives
+    /// from the provider, not from the application, so nothing about the request
+    /// can be trusted to say whose authorisation it completes — that comes from
+    /// [`IntegrationContext::pending`], which recorded it server-side when the
+    /// flow began.
+    pub initiator: TenantId,
+
     /// The public base URL, without a trailing slash.
     pub base_url: &'a str,
 }
 
 impl IntegrationContext<'_> {
+    /// Services for the account that started this request.
+    pub fn services(&self) -> AppServices {
+        self.context.tenant(self.initiator.clone())
+    }
+
+    /// Services for a specific account, used by a callback once it has
+    /// established whose authorisation it is completing.
+    pub fn for_tenant(&self, tenant: TenantId) -> AppServices {
+        self.context.tenant(tenant)
+    }
+
+    /// The register of authorisations that have begun but not yet come back.
+    pub fn pending(&self) -> PendingAuthorizations<AppServices> {
+        PendingAuthorizations::new(self.context.tenant(TenantId::system()))
+    }
+
     /// The absolute URL a provider should redirect back to, for integrations
     /// whose protocol requires the redirect URI to be sent with the request.
     pub fn callback_url(&self, integration: &dyn Integration, id: &str) -> String {
@@ -259,15 +300,14 @@ mod tests {
 
     #[tokio::test]
     async fn an_integration_cannot_be_disconnected_unless_it_opts_in() {
-        let services = crate::services::ServicesContainer::new_mock()
-            .await
-            .unwrap();
+        let context = crate::services::AppContext::new_mock(|_| {}).await.unwrap();
         let err = Generic
             .disconnect(
                 "github",
                 "1",
                 IntegrationContext {
-                    services: &services,
+                    context: &context,
+                    initiator: TenantId::local(),
                     base_url: "https://example.com",
                 },
             )

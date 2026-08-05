@@ -23,7 +23,112 @@ impl Display for YnabStocksConfig {
 #[derive(Clone)]
 pub struct YnabStocksWorkflow;
 
+/// The setup notes shown while somebody is configuring one of these.
+const DOCUMENTATION: &str = r#"## What this does
+
+Values the holdings you have written into a YNAB account's notes, converts them
+into the budget's currency, and records an adjustment transaction so the
+account's balance matches what the holdings are actually worth. It does not
+create accounts, choose categories, or touch anything else in the budget.
+
+Adjustments smaller than one unit of the budget's currency are skipped, so a
+share that moved by a penny does not leave a transaction behind every day.
+
+## Finding the budget id
+
+**Budget** is the budget's UUID, which looks like
+`3fa85f64-5717-4562-b3fc-2c963f66afa6`. Open the budget in the YNAB web app and
+take it from the address bar: it is the segment between the host and `/budget`.
+The budget's display name will not work here, because YNAB's API addresses
+budgets by id and names are not unique.
+
+## Telling it what you hold
+
+The holdings live in the **account note** in YNAB, not in this form. That is
+deliberate: which shares sit in which account is a fact about the budget, and
+keeping it in the budget means you can add an account without coming back here.
+
+Open the account in YNAB, edit its notes, and add a line beginning with
+`/automate:stock`:
+
+```
+/automate:stock MSFT=100 AAPL=50 cost_basis=USD5000 cgt_rate=40% payee_name="My Broker"
+```
+
+The directive occupies a single line and the rest of the note is left alone, so
+you can keep your own notes above and below it.
+
+- Each `SYMBOL=quantity` pair is a holding. Quantities may be fractional.
+- `cost_basis` is what you paid, optionally with a currency prefix
+  (`USD5000`, or just `5000` for the budget's own currency). It is only used to
+  work out the gain.
+- `cgt_rate` is the capital gains rate to deduct from that gain, so the account
+  reflects what the holding is worth to you after tax. Omitted means no
+  deduction.
+- `payee_name` names the payee on the adjustment transactions. Defaults to
+  `Stock Market`.
+
+Accounts with no such directive, and closed accounts, are left alone entirely.
+
+## What this needs configured
+
+Two credentials, both set on the installation rather than here:
+
+- `connections.ynab.api_key` — a YNAB personal access token, created from your
+  YNAB account settings. It needs write access, since this records
+  transactions.
+- `connections.alphavantage.api_key` — used for quotes and exchange rates. A
+  free key is available from
+  [AlphaVantage](https://www.alphavantage.co/support/#api-key).
+
+## Scheduling
+
+AlphaVantage's free tier is rate limited and each holding costs a request or
+two, so this runs `@daily` by default and backs off for an hour after a failed
+run. Prices do not move overnight in a way a budget cares about, so more often
+than daily mostly buys rate-limit errors.
+"#;
+
 crate::register_job!(YnabStocksWorkflow);
+crate::register_workflow_type!(YnabStocksWorkflow);
+
+impl crate::workflows::ConfigurableWorkflow for YnabStocksWorkflow {
+    type ConfigType = YnabStocksConfig;
+
+    fn type_id() -> &'static str {
+        "ynab-stocks"
+    }
+
+    fn describe(config: &Self::JobType) -> String {
+        format!("Stocks in {}", config.budget)
+    }
+
+    fn descriptor() -> automate_api::WorkflowTypeDescriptor {
+        use automate_api::{FieldDescriptor, FieldKind, WorkflowTrigger, WorkflowTypeDescriptor};
+
+        WorkflowTypeDescriptor {
+            id: <Self as crate::workflows::ConfigurableWorkflow>::type_id().to_string(),
+            name: "YNAB Stock Prices".to_string(),
+            description: "Keeps the value of stock accounts in a YNAB budget up to date."
+                .to_string(),
+            documentation: DOCUMENTATION.to_string(),
+            trigger: WorkflowTrigger::Cron {
+                default_schedule: "@daily".to_string(),
+            },
+            fields: [FieldDescriptor::new(
+                crate::config_path!(YnabStocksConfig: budget),
+                "Budget",
+                FieldKind::Text {
+                    placeholder: Some("00000000-0000-0000-0000-000000000000".into()),
+                },
+            )
+            .with_help("The identifier of the YNAB budget, which appears in its URL.")
+            .required()]
+            .into_iter()
+            .collect(),
+        }
+    }
+}
 
 /// The persisted synchronisation state for a single budget. The account mirror
 /// allows us to fetch only the changes since our last run by supplying the
@@ -72,15 +177,6 @@ impl Job for YnabStocksWorkflow {
     /// limited, so a failed run backs off for a long time before retrying.
     fn timeout(&self) -> chrono::TimeDelta {
         chrono::TimeDelta::hours(1)
-    }
-
-    #[instrument("workflow.ynab_stocks.setup", skip(self, services), err(Display))]
-    async fn setup(
-        &self,
-        services: impl Services + Send + Sync + 'static,
-    ) -> Result<(), human_errors::Error> {
-        let config = services.config();
-        CronJob::schedule(&config.workflows.ynab_stocks, services).await
     }
 
     #[instrument("workflow.ynab_stocks.handle", skip(self, ctx, job), fields(job = %job))]

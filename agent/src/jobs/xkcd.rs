@@ -6,8 +6,8 @@ use crate::prelude::*;
 use crate::publishers::{TodoistCreateTask, TodoistCreateTaskPayload};
 use crate::{
     collectors::{Collector, XkcdCollector},
-    config::TodoistConfig,
     filter::Filter,
+    publishers::TodoistTarget,
     services::Services,
 };
 
@@ -17,7 +17,7 @@ pub struct XkcdConfig {
     pub filter: Filter,
 
     #[serde(default)]
-    pub todoist: TodoistConfig,
+    pub todoist: TodoistTarget,
 }
 
 impl Display for XkcdConfig {
@@ -29,7 +29,79 @@ impl Display for XkcdConfig {
 #[derive(Clone)]
 pub struct XkcdWorkflow;
 
+/// The setup notes shown while somebody is configuring one of these.
+const DOCUMENTATION: &str = r#"## What this does
+
+Watches [xkcd](https://xkcd.com/) and files a Todoist task for each new comic,
+with the comic itself embedded in the task's body along with its hover text —
+which is half the joke, and the half most feed readers drop.
+
+There is nothing to point this at. The feed it reads is
+[xkcd's own](https://xkcd.com/rss.xml), so the only decisions are where the
+tasks go and how often to look. There is also no reason to have two of these:
+they would read the same feed and share the same record of what has been seen,
+so the second one would find nothing to file.
+
+The first run files every comic currently in the feed — four of them, as xkcd
+publishes it — rather than only what arrives afterwards.
+
+## Scheduling
+
+This polls rather than being pushed to, so the schedule is what decides how
+soon a new comic reaches you. xkcd publishes on Mondays, Wednesdays and
+Fridays, so `@daily` is enough; anything faster only adds requests.
+
+## Choosing which comics to file
+
+The filter runs against each comic and can match on `title`, `url` and
+`has_image`. Leaving it empty files every comic, which is the usual answer.
+The one case worth a filter is the occasional interactive comic that has no
+image to embed:
+
+```
+has_image == true
+```
+"#;
+
 crate::register_job!(XkcdWorkflow);
+crate::register_workflow_type!(XkcdWorkflow);
+
+impl crate::workflows::ConfigurableWorkflow for XkcdWorkflow {
+    type ConfigType = XkcdConfig;
+
+    fn type_id() -> &'static str {
+        "xkcd"
+    }
+
+    fn descriptor() -> automate_api::WorkflowTypeDescriptor {
+        use automate_api::{FieldDescriptor, FieldKind, WorkflowTrigger, WorkflowTypeDescriptor};
+
+        WorkflowTypeDescriptor {
+            id: <Self as crate::workflows::ConfigurableWorkflow>::type_id().to_string(),
+            name: "XKCD".to_string(),
+            description: "Files a task for each new XKCD comic.".to_string(),
+            documentation: DOCUMENTATION.to_string(),
+            trigger: WorkflowTrigger::Cron {
+                default_schedule: "@daily".to_string(),
+            },
+            fields: [FieldDescriptor::new(
+                crate::config_path!(XkcdConfig: filter),
+                "Filter",
+                FieldKind::Filter {
+                    fields: vec!["title".into(), "url".into(), "has_image".into()],
+                },
+            )
+            .with_help("Only file comics matching this. Leave it empty to file every comic.")]
+            .into_iter()
+            .chain(crate::todoist_target_fields!(
+                XkcdConfig,
+                project = Some("Hobbies"),
+                section = Some("Reading")
+            ))
+            .collect(),
+        }
+    }
+}
 
 impl Job for XkcdWorkflow {
     type JobType = XkcdConfig;
@@ -42,15 +114,6 @@ impl Job for XkcdWorkflow {
     /// failed run waits an hour before retrying to avoid hammering it.
     fn timeout(&self) -> chrono::TimeDelta {
         chrono::TimeDelta::hours(1)
-    }
-
-    #[instrument("workflow.xkcd.setup", skip(self, services), err(Display))]
-    async fn setup(
-        &self,
-        services: impl Services + Send + Sync + 'static,
-    ) -> Result<(), human_errors::Error> {
-        let config = services.config();
-        CronJob::schedule(&config.workflows.xkcd, services).await
     }
 
     #[instrument("workflow.xkcd.handle", skip(self, ctx, job), fields(job = %job))]

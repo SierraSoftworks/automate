@@ -8,7 +8,7 @@ mod todoist_upsert;
 pub use spotify::SpotifyClient;
 pub use spotify_add_to_playlist::{SpotifyAddToPlaylist, SpotifyAddToPlaylistPayload};
 
-pub use todoist::{TodoistClient, TodoistDueDate};
+pub use todoist::{TODOIST_PROVIDER, TodoistClient, TodoistDueDate, TodoistTarget};
 
 pub use todoist_complete::{TodoistCompleteTask, TodoistCompleteTaskPayload};
 pub use todoist_create::{TodoistCreateTask, TodoistCreateTaskPayload};

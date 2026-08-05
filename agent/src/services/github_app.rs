@@ -6,6 +6,8 @@ use jsonwebtoken::{Algorithm, EncodingKey, Header};
 use crate::config::GitHubAppConfig;
 use crate::prelude::*;
 
+/// The API a GitHub App's management calls go to unless the operator names
+/// another one, which only a GitHub Enterprise Server instance would.
 const GITHUB_API_URL: &str = "https://api.github.com";
 
 /// Installation tokens live for an hour. Caching them for slightly less leaves
@@ -16,6 +18,10 @@ const TOKEN_CACHE_MINUTES: i64 = 50;
 /// backdates `iat` slightly to tolerate clock skew between us and GitHub.
 const JWT_TTL_SECONDS: i64 = 9 * 60;
 const JWT_SKEW_SECONDS: i64 = 60;
+
+/// The only algorithm GitHub accepts for an App JWT, which is why the key is
+/// always an RSA one.
+const APP_JWT_ALGORITHM: Algorithm = Algorithm::RS256;
 
 const TOKEN_CACHE_PARTITION: &str = "github/installation-token";
 
@@ -47,7 +53,6 @@ pub struct GitHubInstallation {
 pub struct GitHubAppClient {
     app_id: String,
     key: Arc<EncodingKey>,
-    algorithm: Algorithm,
     api_url: String,
     http_client: reqwest::Client,
 }
@@ -68,27 +73,12 @@ impl GitHubAppClient {
         Ok(Self {
             app_id: config.app_id.clone(),
             key: Arc::new(key),
-            algorithm: Algorithm::RS256,
-            api_url: GITHUB_API_URL.to_string(),
+            api_url: config
+                .api_url
+                .clone()
+                .unwrap_or_else(|| GITHUB_API_URL.to_string()),
             http_client,
         })
-    }
-
-    /// Builds a client signing with a symmetric key, so that tests can exercise
-    /// the HTTP paths without shipping an RSA private key in the repository.
-    #[cfg(test)]
-    pub fn new_for_test(
-        app_id: &str,
-        api_url: impl Into<String>,
-        http_client: reqwest::Client,
-    ) -> Self {
-        Self {
-            app_id: app_id.to_string(),
-            key: Arc::new(EncodingKey::from_secret(b"test-key")),
-            algorithm: Algorithm::HS256,
-            api_url: api_url.into(),
-            http_client,
-        }
     }
 
     fn claims(&self, now: chrono::DateTime<Utc>) -> AppClaims {
@@ -101,7 +91,7 @@ impl GitHubAppClient {
 
     fn jwt(&self) -> Result<String, human_errors::Error> {
         jsonwebtoken::encode(
-            &Header::new(self.algorithm),
+            &Header::new(APP_JWT_ALGORITHM),
             &self.claims(Utc::now()),
             &self.key,
         )
@@ -342,10 +332,26 @@ mod tests {
     use wiremock::matchers::{method, path, query_param};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
+    /// A client for an App whose calls land on the mock server.
+    ///
+    /// Built through [`GitHubAppClient::new`], from a configuration, which is
+    /// the constructor the running agent uses: the only thing a test arranges
+    /// is where the calls go, and that is a thing an operator can arrange too.
+    fn client(server: &MockServer, services: &impl Services) -> GitHubAppClient {
+        GitHubAppClient::new(
+            &crate::testing::github_app(server.uri()),
+            services.http_client(),
+        )
+        .expect("build a client for the App under test")
+    }
+
     #[test]
     fn claims_stay_inside_githubs_ten_minute_window() {
-        let client =
-            GitHubAppClient::new_for_test("123", "https://example.com", reqwest::Client::new());
+        let client = GitHubAppClient::new(
+            &crate::testing::github_app("https://example.com"),
+            reqwest::Client::new(),
+        )
+        .expect("build a client for the App under test");
         let now = Utc::now();
         let claims = client.claims(now);
 
@@ -359,6 +365,21 @@ mod tests {
             "GitHub rejects JWTs expiring more than ten minutes out"
         );
         assert!(claims.exp > now.timestamp());
+    }
+
+    /// Almost every instance is on github.com and says nothing about an API
+    /// URL, so leaving it out has to mean github.com rather than nowhere.
+    #[test]
+    fn an_app_that_names_no_api_talks_to_github_com() {
+        let config = GitHubAppConfig {
+            api_url: None,
+            ..crate::testing::github_app("https://ghe.example.com/api/v3")
+        };
+
+        let client = GitHubAppClient::new(&config, reqwest::Client::new())
+            .expect("build a client for the App under test");
+
+        assert_eq!(client.api_url, GITHUB_API_URL);
     }
 
     #[tokio::test]
@@ -378,7 +399,7 @@ mod tests {
             .mount(&server)
             .await;
 
-        let client = GitHubAppClient::new_for_test("123", server.uri(), services.http_client());
+        let client = client(&server, &services);
 
         for _ in 0..3 {
             assert_eq!(
@@ -404,7 +425,7 @@ mod tests {
             .mount(&server)
             .await;
 
-        let client = GitHubAppClient::new_for_test("123", server.uri(), services.http_client());
+        let client = client(&server, &services);
         let err = client
             .installation_token(42, &services)
             .await
@@ -429,7 +450,7 @@ mod tests {
             .mount(&server)
             .await;
 
-        let client = GitHubAppClient::new_for_test("123", server.uri(), services.http_client());
+        let client = client(&server, &services);
 
         assert_eq!(
             client.installations().await.expect("list installations"),
@@ -480,7 +501,7 @@ mod tests {
             .mount(&server)
             .await;
 
-        let client = GitHubAppClient::new_for_test("123", server.uri(), services.http_client());
+        let client = client(&server, &services);
         let installations = client.installations().await.expect("list installations");
 
         assert_eq!(installations.len(), INSTALLATIONS_PER_PAGE + 1);
@@ -505,7 +526,7 @@ mod tests {
             .mount(&server)
             .await;
 
-        let client = GitHubAppClient::new_for_test("123", server.uri(), services.http_client());
+        let client = client(&server, &services);
         assert_eq!(client.installations().await.unwrap().len(), 1);
     }
 
@@ -523,7 +544,7 @@ mod tests {
             .mount(&server)
             .await;
 
-        let client = GitHubAppClient::new_for_test("123", server.uri(), services.http_client());
+        let client = client(&server, &services);
         client.uninstall(42).await.expect("uninstall");
     }
 
@@ -542,7 +563,7 @@ mod tests {
             .mount(&server)
             .await;
 
-        let client = GitHubAppClient::new_for_test("123", server.uri(), services.http_client());
+        let client = client(&server, &services);
         client
             .uninstall(42)
             .await
@@ -562,7 +583,7 @@ mod tests {
             .mount(&server)
             .await;
 
-        let client = GitHubAppClient::new_for_test("123", server.uri(), services.http_client());
+        let client = client(&server, &services);
         let err = client
             .uninstall(42)
             .await

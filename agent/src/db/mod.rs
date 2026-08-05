@@ -2,13 +2,28 @@ use std::{borrow::Cow, pin::Pin};
 
 use human_errors as errors;
 
+mod audit;
 mod cache;
 mod partition;
 mod sqlite;
 
+/// Advice offered when a database operation fails for reasons outside our
+/// control, such as an unreadable or damaged database file.
+const ADVICE_DB_ERROR: &[&str] = &[
+    "Make sure that the database file is accessible and not corrupted.",
+    "If the problem persists, please report the issue to the development team via GitHub.",
+];
+
+/// Advice offered when a database operation fails in a way that indicates a bug
+/// rather than anything the operator can act on.
+const ADVICE_REPORT_DEV: &[&str] =
+    &["Please report this issue to the development team via GitHub."];
+
 use crate::prelude::*;
+#[allow(unused_imports)]
+pub use audit::{AuditCategory, AuditEntry, AuditOutcome, AuditQuery, AuditRecord, AuditStore};
 pub use partition::Partition;
-pub use sqlite::SqliteDatabase;
+pub use sqlite::{SqliteDatabase, TenantDb};
 
 #[allow(dead_code)]
 #[async_trait::async_trait]
@@ -30,6 +45,20 @@ pub trait KeyValueStore {
         key: impl Into<Cow<'static, str>> + Send,
         value: T,
     ) -> Result<(), errors::Error>;
+
+    /// Writes a value only if the key is not already taken, reporting whether it
+    /// was written.
+    ///
+    /// [`KeyValueStore::set`] overwrites, which is what almost every caller
+    /// wants. This exists for the callers generating their own random
+    /// identifiers, where quietly overwriting a colliding key would destroy an
+    /// unrelated record rather than reporting the collision so it can be retried.
+    async fn insert<T: Serialize + Send + 'static>(
+        &self,
+        partition: impl Into<Cow<'static, str>> + Send,
+        key: impl Into<Cow<'static, str>> + Send,
+        value: T,
+    ) -> Result<bool, errors::Error>;
 
     async fn remove(
         &self,

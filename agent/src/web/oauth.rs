@@ -14,8 +14,13 @@ use serde::Deserialize;
 pub struct OAuth2Config {
     pub name: String,
 
-    #[serde(default)]
-    pub jobs: Vec<String>,
+    /// Retained so that a configuration file written before connections existed
+    /// still loads. It used to name the queue partitions a completed
+    /// authorisation seeded; the work a provider drives is now decided in code
+    /// alongside the provider itself, so the two cannot drift apart.
+    #[allow(dead_code)]
+    #[serde(default, rename = "jobs")]
+    pub deprecated_jobs: Vec<String>,
 
     /// Optional access-control filter governing who may use this provider's setup
     /// wizard. It is evaluated exactly like the admin ACL — against the request
@@ -39,7 +44,7 @@ pub struct OAuth2Config {
     /// `[connections.todoist]` configuration, so it only needs to specify the
     /// fields that should differ (for example a dedicated project or section).
     #[serde(default)]
-    pub todoist: crate::config::TodoistConfig,
+    pub todoist: crate::publishers::TodoistTarget,
 }
 
 impl OAuth2Config {
@@ -252,12 +257,30 @@ pub struct OAuth2RefreshToken {
 }
 
 impl OAuth2RefreshToken {
+    /// Rebuilds a grant from a stored connection's credential.
+    pub fn new(
+        access_token: String,
+        refresh_token: String,
+        expires_at: chrono::DateTime<chrono::Utc>,
+    ) -> Self {
+        Self {
+            access_token,
+            refresh_token,
+            expires_at,
+        }
+    }
+
     pub fn needs_refresh(&self) -> bool {
         chrono::Utc::now() + chrono::Duration::minutes(5) >= self.expires_at
     }
 
     pub fn access_token(&self) -> &str {
         &self.access_token
+    }
+
+    /// The durable half of the grant, which is what a connection stores.
+    pub fn refresh_token(&self) -> &str {
+        &self.refresh_token
     }
 
     /// When the access token expires. Safe to show an administrator, unlike the

@@ -1,8 +1,21 @@
 target/
 config.toml
+# The database, and the two sidecars WAL mode keeps beside it.
 *.sqlite
+*.sqlite-wal
+*.sqlite-shm
+*.sqlite.key
 
 # The UI's build output, embedded into the agent at compile time. Nothing here is
 # tracked: `trunk build` wipes the directory on every run, and `agent/build.rs`
 # recreates it so the agent still compiles without a UI build.
 ui/dist/
+
+# The end-to-end suite's local state. The dependencies and the browsers Playwright
+# downloads are installed rather than authored, and the report and results are
+# rewritten by every run — Playwright empties `test-results/` before each one.
+# `e2e/package-lock.json` is deliberately *not* here: CI installs from it.
+e2e/node_modules/
+e2e/test-results/
+e2e/playwright-report/
+e2e/.playwright/

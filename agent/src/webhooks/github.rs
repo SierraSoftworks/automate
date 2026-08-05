@@ -60,22 +60,58 @@ const RESOLVING_ACTIONS: &[&str] = &[
     "unassigned",
 ];
 
-#[derive(Clone, Deserialize, Default)]
+/// What one person asked us to do with the deliveries their GitHub sends.
+///
+/// This one keeps its shared secret, where the other webhook workflows dropped
+/// theirs. The address alone proves that whoever posted knew the URL; GitHub's
+/// `X-Hub-Signature-256` proves that GitHub posted it, and that the body has not
+/// been altered on the way. That is a stronger claim, and it is worth having
+/// here in particular because these deliveries cause writes to somebody's
+/// repositories — approving and merging pull requests — rather than merely
+/// filing a task somebody can ignore.
+#[derive(Clone, Default, Serialize, Deserialize)]
 pub struct GitHubWebhookConfig {
+    /// What to call this workflow, so it can be told apart from the others in a
+    /// list of them.
+    pub name: String,
+
+    /// The GitHub App installation whose deliveries this workflow handles, which
+    /// is to say the account the App was installed on.
+    ///
+    /// Optional in storage although the form insists on it, because a workflow
+    /// written before this field existed still has to load; the same compromise
+    /// [`crate::publishers::TodoistTarget`] makes for the same reason.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub connection: Option<automate_api::ConnectionId>,
+
     /// The shared secret configured on the GitHub webhook, used to verify the
     /// `X-Hub-Signature-256` HMAC. Deliveries are rejected when this is unset,
     /// because the events it carries drive writes to your repositories.
     #[serde(default)]
     pub secret: String,
 
-    /// Enables auto-merge handling for `pull_request` events when present.
+    /// How this workflow treats `pull_request` events, including whether it
+    /// treats them at all.
+    ///
+    /// This used to be an `Option`, whose presence was the switch. That read
+    /// tidily and cost the settings inside it any way of being configured:
+    /// [`crate::config_path!`] borrows the field it names, and there is nothing
+    /// to borrow through a `None`. An explicit `enabled` says the same thing
+    /// while leaving `auto_merge.filter` a path that exists.
     #[serde(default)]
-    pub auto_merge: Option<GitHubAutoMergeConfig>,
+    pub auto_merge: GitHubAutoMergeConfig,
 
-    /// Enables Todoist reminders for comments, assignments and security alerts
-    /// when present.
+    /// Whether, and how, comments, assignments and security alerts become
+    /// Todoist reminders. An explicit switch for the same reason as
+    /// `auto_merge`.
     #[serde(default)]
-    pub attention: Option<GitHubAttentionConfig>,
+    pub attention: GitHubAttentionConfig,
+}
+
+impl Display for GitHubWebhookConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "github/{}", self.name)
+    }
 }
 
 /// The entry point for GitHub's organization-level webhook.
@@ -86,6 +122,106 @@ pub struct GitHubWebhookConfig {
 /// which knows how to act on it.
 #[derive(Clone)]
 pub struct GitHubWebhook;
+
+/// The setup notes shown while somebody is configuring one of these.
+const DOCUMENTATION: &str = r#"## What this does
+
+Listens to one GitHub organisation's (or repository's) webhook deliveries and
+acts on them as they arrive, rather than by polling. Two independent things can
+be switched on, and both are off until you say otherwise:
+
+- **Auto-merge** turns on GitHub's own auto-merge for pull requests you select,
+  so they merge themselves once their checks pass.
+- **Reminders** raise a Todoist task when a comment, an assignment or a
+  security alert wants your attention, and complete it when the subject is
+  dealt with.
+
+With both off this workflow still keeps the GitHub notifications inbox in sync,
+which is the only thing it does without being asked.
+
+## Getting the address
+
+Save the workflow first. Its address is generated when it is created and shown
+on the workflow afterwards; there is nothing to paste into GitHub until then.
+
+Then, in GitHub:
+
+1. Go to the organisation's webhook settings at
+   `https://github.com/organizations/<org>/settings/hooks`, or a single
+   repository's at `https://github.com/<owner>/<repo>/settings/hooks`, and
+   choose **Add webhook**.
+2. Set **Payload URL** to this workflow's address.
+3. Set **Content type** to `application/json`. The form-encoded option will not
+   parse.
+4. Fill in **Secret** — see below.
+5. Under **Which events**, select the ones you actually want. Pull request
+   events feed auto-merge; issue comments, pull request reviews, assignments
+   and the Dependabot, code scanning and secret scanning alerts feed reminders.
+
+GitHub sends a `ping` when the webhook is created, which is accepted and
+ignored; a green tick in its **Recent Deliveries** tab means the address is
+right.
+
+## The webhook secret
+
+Unlike the other webhook workflows, this one insists on a shared secret. The
+address alone proves somebody knew the URL; GitHub's `X-Hub-Signature-256`
+header proves that *GitHub* sent the delivery and that nothing rewrote it on
+the way. That stronger claim is worth having here in particular, because these
+deliveries can approve and merge pull requests in your repositories rather than
+merely filing a task you can ignore.
+
+Generate a long random string, paste the same value into GitHub's **Secret**
+field and into **Webhook secret** here. They have to match exactly: GitHub
+computes the signature with its copy and we check it with ours. While this
+field is empty every delivery is refused, which fails closed rather than
+quietly accepting anything.
+
+See GitHub's notes on
+[validating webhook deliveries](https://docs.github.com/en/webhooks/using-webhooks/validating-webhook-deliveries)
+for what is being checked.
+
+## Auto-merge
+
+**Enable auto-merge** is the switch; nothing below it happens while it is off.
+
+**Auto-merge these pull requests** selects which ones to act on, matching on
+`action`, `author`, `sender`, `title`, `draft`, `repository`,
+`repository_name`, `repository_owner` and `private`. The default is the case
+this exists for:
+
+```
+action == "opened" && author in ["dependabot[bot]", "dependabot-preview[bot]"]
+```
+
+**Approve them too** additionally leaves an approving review. Repositories with
+a required-review branch protection rule need one before auto-merge can
+complete, so it is necessary there and gratuitous everywhere else — it spends a
+real approval on somebody else's diff. **Approval message** is the body of that
+review.
+
+Auto-merge writes to your repositories, so it needs the GitHub App installed on
+the account that owns them, named by **GitHub installation**.
+
+## Reminders
+
+**File reminders** is the switch. Below it are three filters, one per kind of
+event, each matching on `kind`, `event`, `action`, `resolved`, `repository`,
+`repository_owner`, `repository_name`, `number`, `title`, `author`, `assignee`,
+`subject_author`, `body` and `severity`.
+
+- **Comments** defaults to everything except Dependabot's own commentary.
+  `subject_author == "your-username"` narrows it to threads on your own issues
+  and pull requests, which is usually what people mean.
+- **Assignments** defaults to `false` — nothing — because only you know which
+  account is yours. `assignee == "your-username"` is the answer.
+- **Security alerts** defaults to `true`, all of them. Narrow it with
+  `severity in ["critical", "high"]` if that is too much.
+
+Comments and assignments on the same issue or pull request collapse onto one
+task, so a busy thread does not become a wall of them. Security alerts get one
+task each, because each needs its own fix.
+"#;
 
 impl GitHubWebhook {
     /// Verifies the `X-Hub-Signature-256` header, which GitHub populates with
@@ -130,18 +266,19 @@ impl GitHubWebhook {
         Ok(())
     }
 
-    fn header<'a>(job: &'a WebhookEvent, name: &str) -> Option<&'a str> {
-        job.headers
+    fn header<'a>(event: &'a WebhookEvent, name: &str) -> Option<&'a str> {
+        event
+            .headers
             .iter()
             .find(|(key, _)| key.eq_ignore_ascii_case(name))
             .map(|(_, value)| value.as_str())
     }
 
     async fn track_installation(
-        job: &WebhookEvent,
+        event: &WebhookEvent,
         services: &(impl Services + Send + Sync + 'static),
     ) -> Result<(), human_errors::Error> {
-        let event: GitHubInstallationEvent = job.json()?;
+        let event: GitHubInstallationEvent = event.json()?;
         let installation = crate::services::GitHubInstallation {
             id: event.installation.id,
             account: event.installation.account.login.clone(),
@@ -173,9 +310,223 @@ impl GitHubWebhook {
 }
 
 crate::register_job!(GitHubWebhook);
+crate::register_workflow_type!(GitHubWebhook);
+
+impl crate::workflows::ConfigurableWorkflow for GitHubWebhook {
+    type ConfigType = GitHubWebhookConfig;
+
+    fn type_id() -> &'static str {
+        "github"
+    }
+
+    fn describe(config: &Self::ConfigType) -> String {
+        config.name.clone()
+    }
+
+    fn descriptor() -> automate_api::WorkflowTypeDescriptor {
+        use automate_api::{FieldDescriptor, FieldKind, WorkflowTrigger, WorkflowTypeDescriptor};
+
+        WorkflowTypeDescriptor {
+            id: Self::type_id().to_string(),
+            name: "GitHub".to_string(),
+            description:
+                "Reacts to what happens in your GitHub organisation, as it happens rather than on a poll."
+                    .to_string(),
+            documentation: DOCUMENTATION.to_string(),
+            trigger: WorkflowTrigger::Webhook {
+                source: "github".to_string(),
+            },
+            fields: [
+                FieldDescriptor::new(
+                    crate::config_path!(GitHubWebhookConfig: name),
+                    "Name",
+                    FieldKind::Text {
+                        placeholder: Some("SierraSoftworks".into()),
+                    },
+                )
+                .with_help(
+                    "Used to label this workflow, so you can tell it apart from your others.",
+                )
+                .required(),
+                FieldDescriptor::new(
+                    crate::config_path!(GitHubWebhookConfig: connection),
+                    "GitHub installation",
+                    FieldKind::Connection {
+                        provider: crate::integrations::github_app::GITHUB_PROVIDER.to_string(),
+                    },
+                )
+                .with_help(
+                    "Which installation of the GitHub App this workflow serves — the GitHub account you installed it on. Its deliveries are the ones this workflow handles, and its repositories are the ones auto-merge can write to.",
+                )
+                .required(),
+                FieldDescriptor::new(
+                    crate::config_path!(GitHubWebhookConfig: secret),
+                    "Webhook secret",
+                    FieldKind::Text {
+                        placeholder: Some("a long random string".into()),
+                    },
+                )
+                .with_help(
+                    "The secret you set on the webhook in GitHub. Unlike the other webhooks, this one is checked: these deliveries can approve and merge your pull requests, so we want proof that GitHub sent them and that nothing altered them on the way. Deliveries are ignored while this is empty.",
+                ),
+            ]
+            .into_iter()
+            .chain(Self::auto_merge_fields())
+            .chain(Self::attention_fields())
+            .collect(),
+        }
+    }
+}
+
+impl GitHubWebhook {
+    /// The names a `pull_request` delivery exposes to a filter, taken from the
+    /// [`Filterable`] impl on [`GitHubPullRequestEvent`] so the editor suggests
+    /// what the evaluator will actually answer to.
+    fn pull_request_filter_fields() -> Vec<String> {
+        [
+            "action",
+            "author",
+            "sender",
+            "title",
+            "draft",
+            "repository",
+            "repository_name",
+            "repository_owner",
+            "private",
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .collect()
+    }
+
+    /// The names an attention event exposes to a filter, from the [`Filterable`]
+    /// impl on [`GitHubAttentionEvent`].
+    fn attention_filter_fields() -> Vec<String> {
+        [
+            "kind",
+            "event",
+            "action",
+            "resolved",
+            "repository",
+            "repository_owner",
+            "repository_name",
+            "number",
+            "title",
+            "author",
+            "assignee",
+            "subject_author",
+            "body",
+            "severity",
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .collect()
+    }
+
+    /// The settings [`GitHubAutoMergeWorkflow`] is handed, as form fields.
+    ///
+    /// Every default here is the constant the struct's own `serde(default)` uses,
+    /// so a form left untouched and a configuration that omitted the section
+    /// describe the same behaviour rather than two behaviours that happen to
+    /// coincide today.
+    fn auto_merge_fields() -> [automate_api::FieldDescriptor; 4] {
+        use automate_api::{FieldDescriptor, FieldKind};
+
+        [
+            FieldDescriptor::new(
+                crate::config_path!(GitHubWebhookConfig: auto_merge.enabled),
+                "Enable auto-merge",
+                FieldKind::Boolean,
+            )
+            .with_help(
+                "Turn on GitHub's own auto-merge for the pull requests below, so they merge themselves once their checks pass. Off until you say otherwise, because this writes to your repositories.",
+            )
+            .with_default(false),
+            FieldDescriptor::new(
+                crate::config_path!(GitHubWebhookConfig: auto_merge.filter),
+                "Auto-merge these pull requests",
+                FieldKind::Filter {
+                    fields: Self::pull_request_filter_fields(),
+                },
+            )
+            .with_help(
+                "Which pull requests to act on. The default is newly opened Dependabot ones, which is the case this exists for.",
+            )
+            .with_default(crate::jobs::DEFAULT_AUTO_MERGE_FILTER),
+            FieldDescriptor::new(
+                crate::config_path!(GitHubWebhookConfig: auto_merge.approve),
+                "Approve them too",
+                FieldKind::Boolean,
+            )
+            .with_help(
+                "Leave an approving review as well, which repositories with a required-review branch protection rule need before auto-merge can complete. Leave this off unless you have such a rule: it spends a real approval on somebody else's diff.",
+            )
+            .with_default(false),
+            FieldDescriptor::new(
+                crate::config_path!(GitHubWebhookConfig: auto_merge.approval_message),
+                "Approval message",
+                FieldKind::TextArea {
+                    placeholder: Some(crate::jobs::DEFAULT_APPROVAL_MESSAGE.into()),
+                },
+            )
+            .with_help("The body of the review left when approval is switched on.")
+            .with_default(crate::jobs::DEFAULT_APPROVAL_MESSAGE),
+        ]
+    }
+
+    /// The settings [`GitHubAttentionWorkflow`] is handed, as form fields.
+    fn attention_fields() -> [automate_api::FieldDescriptor; 4] {
+        use automate_api::{FieldDescriptor, FieldKind};
+
+        [
+            FieldDescriptor::new(
+                crate::config_path!(GitHubWebhookConfig: attention.enabled),
+                "File reminders",
+                FieldKind::Boolean,
+            )
+            .with_help(
+                "Raise a Todoist task when something in these repositories wants your attention. Off until you say otherwise, so an upgrade cannot start filling your inbox.",
+            )
+            .with_default(false),
+            FieldDescriptor::new(
+                crate::config_path!(GitHubWebhookConfig: attention.comments),
+                "Remind me about these comments",
+                FieldKind::Filter {
+                    fields: Self::attention_filter_fields(),
+                },
+            )
+            .with_help(
+                "Which comments and reviews are worth a task. The default is everything except Dependabot's own commentary; `subject_author == \"you\"` narrows it to your own issues and pull requests.",
+            )
+            .with_default(crate::jobs::DEFAULT_COMMENT_FILTER),
+            FieldDescriptor::new(
+                crate::config_path!(GitHubWebhookConfig: attention.assignments),
+                "Remind me about these assignments",
+                FieldKind::Filter {
+                    fields: Self::attention_filter_fields(),
+                },
+            )
+            .with_help(
+                "Which assignments are worth a task. Nothing by default, because only you know which account is yours — `assignee == \"you\"` is the usual answer.",
+            )
+            .with_default(crate::jobs::DEFAULT_ASSIGNMENT_FILTER),
+            FieldDescriptor::new(
+                crate::config_path!(GitHubWebhookConfig: attention.security_alerts),
+                "Remind me about these security alerts",
+                FieldKind::Filter {
+                    fields: Self::attention_filter_fields(),
+                },
+            )
+            .with_help(
+                "Which Dependabot, code scanning and secret scanning alerts are worth a task. All of them by default; `severity in [\"critical\", \"high\"]` if that is too much.",
+            )
+            .with_default(crate::jobs::DEFAULT_SECURITY_ALERT_FILTER),
+        ]
+    }
+}
 
 impl Job for GitHubWebhook {
-    type JobType = WebhookEvent;
+    type JobType = crate::webhooks::WebhookDelivery;
 
     fn partition() -> &'static str {
         "webhooks/github"
@@ -188,27 +539,33 @@ impl Job for GitHubWebhook {
         job: &Self::JobType,
     ) -> Result<(), human_errors::Error> {
         let services = ctx.services();
-        let config = services.config();
-        let github = &config.webhooks.github;
+
+        // Read now rather than carried in the delivery, so that an edit made
+        // between the delivery arriving and this running is the one that applies.
+        let Some(config) = job.config::<GitHubWebhookConfig>(services).await? else {
+            return Ok(());
+        };
+
+        let event = &job.event;
 
         // Unlike the observability webhooks, GitHub deliveries cause us to write
         // to repositories, so an unsigned delivery is rejected rather than
         // trusted.
-        if github.secret.is_empty() {
+        if config.secret.is_empty() {
             warn!(
-                "Received a GitHub webhook but no webhooks.github.secret is configured; rejecting request."
+                "Received a GitHub webhook for a workflow with no secret configured; rejecting request."
             );
             return Ok(());
         }
 
-        let Some(signature) = Self::header(job, "x-hub-signature-256") else {
+        let Some(signature) = Self::header(event, "x-hub-signature-256") else {
             warn!(
                 "Received a GitHub webhook without an X-Hub-Signature-256 header; rejecting request."
             );
             return Ok(());
         };
 
-        if let Err(err) = Self::verify_signature(&github.secret, &job.body, signature) {
+        if let Err(err) = Self::verify_signature(&config.secret, &event.body, signature) {
             warn!(
                 "Failed to verify GitHub webhook signature, rejecting request: {}",
                 err
@@ -219,8 +576,9 @@ impl Job for GitHubWebhook {
         // GitHub identifies each delivery with a GUID which is preserved across
         // its own retries, making it a natural idempotency key for the jobs we
         // fan out to.
-        let delivery = Self::header(job, "x-github-delivery").map(|id| Cow::Owned(id.to_string()));
-        let event_type = Self::header(job, "x-github-event").unwrap_or_default();
+        let delivery =
+            Self::header(event, "x-github-delivery").map(|id| Cow::Owned(id.to_string()));
+        let event_type = Self::header(event, "x-github-event").unwrap_or_default();
 
         if event_type == "ping" {
             info!("Received a GitHub webhook ping event.");
@@ -231,23 +589,43 @@ impl Job for GitHubWebhook {
         // registry accurate even when someone installs the App from GitHub
         // rather than through the wizard.
         if event_type == "installation" {
-            return Self::track_installation(job, services).await;
+            return Self::track_installation(event, services).await;
         }
 
         let mut handled = false;
 
-        if event_type == "pull_request" && github.auto_merge.is_some() {
-            let event: GitHubPullRequestEvent = job.json()?;
-            GitHubAutoMergeWorkflow::dispatch(event, delivery.clone(), services).await?;
+        if event_type == "pull_request" && config.auto_merge.enabled {
+            let pull_request: GitHubPullRequestEvent = event.json()?;
+            GitHubAutoMergeWorkflow::dispatch(
+                crate::jobs::GitHubAutoMergeTask {
+                    config: config.auto_merge.clone(),
+                    // Which installation this workflow serves, so the job mints
+                    // its token from what its owner chose rather than from what
+                    // the delivery claims to be.
+                    connection: config.connection,
+                    event: pull_request,
+                },
+                delivery.clone(),
+                services,
+            )
+            .await?;
             handled = true;
         }
 
-        if github.attention.is_some() {
+        if config.attention.enabled {
             // A payload we cannot interpret is skipped rather than raised, so that
             // an unmodelled variant cannot poison the queue by retrying forever.
-            match GitHubAttentionEvent::parse(event_type, job) {
-                Ok(Some(event)) => {
-                    GitHubAttentionWorkflow::dispatch(event, delivery, services).await?;
+            match GitHubAttentionEvent::parse(event_type, event) {
+                Ok(Some(attention)) => {
+                    GitHubAttentionWorkflow::dispatch(
+                        crate::jobs::GitHubAttentionTask {
+                            config: config.attention.clone(),
+                            event: attention,
+                        },
+                        delivery,
+                        services,
+                    )
+                    .await?;
                     handled = true;
                 }
                 Ok(None) => {}
@@ -746,7 +1124,27 @@ mod tests {
     use super::*;
     use std::collections::HashMap;
 
+    use crate::{
+        webhooks::WebhookDelivery,
+        workflow_store::{WorkflowDraft, WorkflowStore},
+    };
+
     const BODY: &str = r#"{"action":"opened","number":1,"pull_request":{"node_id":"PR_node","number":1,"html_url":"https://github.com/example/repo/pull/1","title":"Bump serde","draft":false,"user":{"login":"dependabot[bot]"}},"repository":{"name":"repo","full_name":"example/repo","private":false,"owner":{"login":"example"}},"sender":{"login":"dependabot[bot]"}}"#;
+
+    /// An `issue_comment` delivery, which is what an attention event looks like
+    /// arriving. [`BODY`] cannot stand in: it is a `pull_request` payload whose
+    /// action is `opened`, which normalises to nothing.
+    const COMMENT_BODY: &str = r#"{"action":"created","issue":{"number":7,"title":"Fix the thing","html_url":"https://github.com/example/repo/issues/7","user":{"login":"notheotherben"}},"comment":{"body":"Any update on this?","html_url":"https://github.com/example/repo/issues/7#issuecomment-1","user":{"login":"someone-else"}},"repository":{"name":"repo","full_name":"example/repo","private":false,"owner":{"login":"example"}},"sender":{"login":"someone-else"}}"#;
+
+    /// A section that is switched on but otherwise left at its defaults.
+    fn on() -> serde_json::Value {
+        serde_json::json!({ "enabled": true })
+    }
+
+    /// A section that is switched off, which is also what an omitted one means.
+    fn off() -> serde_json::Value {
+        serde_json::json!({ "enabled": false })
+    }
 
     fn sign(secret: &str, body: &str) -> String {
         let mut mac = HmacSha256::new_from_slice(secret.as_bytes()).unwrap();
@@ -754,18 +1152,33 @@ mod tests {
         format!("sha256={}", hex::encode(mac.finalize().into_bytes()))
     }
 
-    fn event(headers: &[(&str, &str)]) -> WebhookEvent {
-        WebhookEvent {
-            body: BODY.to_string(),
-            query: String::new(),
-            headers: headers
-                .iter()
-                .map(|(k, v)| (k.to_string(), v.to_string()))
-                .collect::<HashMap<_, _>>(),
+    /// A delivery of [`BODY`] carrying the given headers.
+    fn event(workflow: automate_api::WorkflowId, headers: &[(&str, &str)]) -> WebhookDelivery {
+        event_of(workflow, BODY, headers)
+    }
+
+    /// A delivery of an arbitrary body, for the tests which need a payload other
+    /// than the sample pull request.
+    fn event_of(
+        workflow: automate_api::WorkflowId,
+        body: &str,
+        headers: &[(&str, &str)],
+    ) -> WebhookDelivery {
+        WebhookDelivery {
+            workflow,
+            event: WebhookEvent {
+                body: body.to_string(),
+                query: String::new(),
+                headers: headers
+                    .iter()
+                    .map(|(k, v)| (k.to_string(), v.to_string()))
+                    .collect::<HashMap<_, _>>(),
+            },
         }
     }
 
-    fn delivery(body: serde_json::Value) -> WebhookEvent {
+    /// A bare event, for the parsing tests which never reach a stored workflow.
+    fn payload(body: serde_json::Value) -> WebhookEvent {
         WebhookEvent {
             body: body.to_string(),
             query: String::new(),
@@ -773,29 +1186,120 @@ mod tests {
         }
     }
 
+    /// Mock services holding one GitHub workflow, and that workflow's id.
+    ///
+    /// Both sections are passed as JSON rather than as their own types so that a
+    /// test can say exactly which keys the stored configuration carries — which
+    /// is the difference between "switched off" and "written before this was
+    /// configurable", and those have to behave the same way.
     async fn services_with(
         secret: &str,
-        auto_merge: Option<GitHubAutoMergeConfig>,
-    ) -> crate::services::ServicesContainer<crate::db::SqliteDatabase> {
-        let secret = secret.to_string();
-        crate::services::ServicesContainer::new_custom_mock(move |config, _| {
-            config.webhooks.github = GitHubWebhookConfig {
-                secret,
-                auto_merge,
-                attention: Some(GitHubAttentionConfig::default()),
-            };
-        })
-        .await
-        .expect("build mock services")
+        auto_merge: serde_json::Value,
+        attention: serde_json::Value,
+    ) -> (
+        crate::services::ServicesContainer<crate::db::TenantDb>,
+        automate_api::WorkflowId,
+    ) {
+        let services = crate::services::ServicesContainer::new_mock()
+            .await
+            .expect("build mock services");
+
+        let workflow = WorkflowStore::new(&services)
+            .with_index(&services)
+            .create(WorkflowDraft {
+                type_id: "github".into(),
+                config: serde_json::json!({
+                    "name": "SierraSoftworks",
+                    "secret": secret,
+                    "auto_merge": auto_merge,
+                    "attention": attention,
+                }),
+                schedule: None,
+                enabled: true,
+            })
+            .await
+            .expect("store the workflow")
+            .id;
+
+        (services, workflow)
+    }
+
+    /// Mock services holding one GitHub workflow which serves `connection`, and
+    /// that workflow's id.
+    ///
+    /// Separate from [`services_with`] because only the tests about which
+    /// installation a workflow serves care about the field, and threading it
+    /// through every other call would say nothing.
+    async fn services_serving(
+        connection: Option<automate_api::ConnectionId>,
+    ) -> (
+        crate::services::ServicesContainer<crate::db::TenantDb>,
+        automate_api::WorkflowId,
+    ) {
+        let services = crate::services::ServicesContainer::new_mock()
+            .await
+            .expect("build mock services");
+
+        let workflow = WorkflowStore::new(&services)
+            .with_index(&services)
+            .create(WorkflowDraft {
+                type_id: "github".into(),
+                config: serde_json::json!({
+                    "name": "SierraSoftworks",
+                    "connection": connection,
+                    "secret": "secret",
+                    "auto_merge": on(),
+                    "attention": off(),
+                }),
+                schedule: None,
+                enabled: true,
+            })
+            .await
+            .expect("store the workflow")
+            .id;
+
+        (services, workflow)
+    }
+
+    /// Runs one delivery the way the consumer would.
+    async fn run(
+        services: &crate::services::ServicesContainer<crate::db::TenantDb>,
+        delivery: &WebhookDelivery,
+    ) -> Result<(), human_errors::Error> {
+        GitHubWebhook
+            .handle(
+                JobContext::new(services.clone(), chrono::Utc::now(), None, None),
+                delivery,
+            )
+            .await
     }
 
     async fn dispatched<S: Services>(services: &S) -> usize {
+        auto_merge_tasks(services).await.len()
+    }
+
+    /// The auto-merge tasks queued, with their settings, so a test can assert on
+    /// what the job will actually be told rather than only that it was told.
+    async fn auto_merge_tasks<S: Services>(services: &S) -> Vec<crate::jobs::GitHubAutoMergeTask> {
         services
             .queue()
-            .peek::<_, serde_json::Value>(GitHubAutoMergeWorkflow::partition(), 10)
+            .peek::<_, crate::jobs::GitHubAutoMergeTask>(GitHubAutoMergeWorkflow::partition(), 10)
             .await
             .expect("peek the auto-merge queue")
-            .len()
+            .into_iter()
+            .map(|message| message.payload)
+            .collect()
+    }
+
+    async fn attention_tasks<S: Services>(services: &S) -> Vec<crate::jobs::GitHubAttentionTask> {
+        services
+            .queue()
+            .peek::<_, crate::jobs::GitHubAttentionTask>(GitHubAttentionWorkflow::partition(), 10)
+            .await
+            .expect("peek the attention queue")
+            .into_iter()
+            .map(|message| message.payload)
+            .collect()
     }
 
     async fn refreshes<S: Services>(services: &S) -> usize {
@@ -832,14 +1336,10 @@ mod tests {
 
     #[tokio::test]
     async fn unsigned_deliveries_are_rejected() {
-        let services = services_with("secret", Some(GitHubAutoMergeConfig::default())).await;
-        let job = event(&[("X-GitHub-Event", "pull_request")]);
+        let (services, workflow) = services_with("secret", on(), on()).await;
+        let job = event(workflow, &[("X-GitHub-Event", "pull_request")]);
 
-        GitHubWebhook
-            .handle(
-                JobContext::new(services.clone(), chrono::Utc::now(), None, None),
-                &job,
-            )
+        run(&services, &job)
             .await
             .expect("an unsigned delivery should be rejected without erroring");
 
@@ -847,19 +1347,60 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn pull_request_events_are_dispatched_to_the_auto_merge_queue() {
-        let services = services_with("secret", Some(GitHubAutoMergeConfig::default())).await;
-        let job = event(&[
-            ("X-GitHub-Event", "pull_request"),
-            ("X-GitHub-Delivery", "delivery-1"),
-            ("X-Hub-Signature-256", &sign("secret", BODY)),
-        ]);
+    async fn deliveries_are_rejected_while_the_workflow_has_no_secret() {
+        // The signature is the only thing telling us GitHub sent this rather
+        // than somebody who found the URL, and these deliveries can merge pull
+        // requests, so a workflow that cannot check one does nothing at all.
+        let (services, workflow) = services_with("", on(), on()).await;
+        let job = event(
+            workflow,
+            &[
+                ("X-GitHub-Event", "pull_request"),
+                ("X-Hub-Signature-256", &sign("secret", BODY)),
+            ],
+        );
 
-        GitHubWebhook
-            .handle(
-                JobContext::new(services.clone(), chrono::Utc::now(), None, None),
-                &job,
-            )
+        run(&services, &job)
+            .await
+            .expect("an unverifiable delivery should be rejected without erroring");
+
+        assert_eq!(dispatched(&services).await, 0);
+        assert_eq!(refreshes(&services).await, 0);
+    }
+
+    #[tokio::test]
+    async fn a_delivery_signed_with_another_workflows_secret_is_rejected() {
+        // Each workflow now carries its own secret, so a delivery signed for one
+        // of somebody's organisations must not be accepted by another.
+        let (services, workflow) = services_with("secret", on(), on()).await;
+        let job = event(
+            workflow,
+            &[
+                ("X-GitHub-Event", "pull_request"),
+                ("X-Hub-Signature-256", &sign("a-different-secret", BODY)),
+            ],
+        );
+
+        run(&services, &job)
+            .await
+            .expect("a mis-signed delivery should be rejected without erroring");
+
+        assert_eq!(dispatched(&services).await, 0);
+    }
+
+    #[tokio::test]
+    async fn pull_request_events_are_dispatched_to_the_auto_merge_queue() {
+        let (services, workflow) = services_with("secret", on(), on()).await;
+        let job = event(
+            workflow,
+            &[
+                ("X-GitHub-Event", "pull_request"),
+                ("X-GitHub-Delivery", "delivery-1"),
+                ("X-Hub-Signature-256", &sign("secret", BODY)),
+            ],
+        );
+
+        run(&services, &job)
             .await
             .expect("a signed pull_request delivery should be dispatched");
 
@@ -873,7 +1414,7 @@ mod tests {
 
     #[test]
     fn issue_comments_normalise_onto_their_thread() {
-        let job = delivery(serde_json::json!({
+        let job = payload(serde_json::json!({
             "action": "created",
             "issue": {
                 "number": 7,
@@ -908,7 +1449,7 @@ mod tests {
 
     #[test]
     fn edited_comments_do_not_warrant_attention() {
-        let job = delivery(serde_json::json!({
+        let job = payload(serde_json::json!({
             "action": "edited",
             "issue": { "number": 7, "title": "Fix the thing", "html_url": "https://example.com" },
             "comment": { "body": "Any update on this?" },
@@ -928,7 +1469,7 @@ mod tests {
 
     #[test]
     fn unassignment_resolves_the_thread() {
-        let job = delivery(serde_json::json!({
+        let job = payload(serde_json::json!({
             "action": "unassigned",
             "pull_request": {
                 "number": 3,
@@ -956,7 +1497,7 @@ mod tests {
 
     #[test]
     fn dependabot_alerts_describe_the_vulnerable_package() {
-        let job = delivery(serde_json::json!({
+        let job = payload(serde_json::json!({
             "action": "created",
             "alert": {
                 "number": 12,
@@ -991,7 +1532,7 @@ mod tests {
 
     #[test]
     fn secret_scanning_alerts_describe_the_leaked_secret() {
-        let job = delivery(serde_json::json!({
+        let job = payload(serde_json::json!({
             "action": "resolved",
             "alert": {
                 "number": 4,
@@ -1016,7 +1557,7 @@ mod tests {
 
     #[test]
     fn code_scanning_alerts_describe_the_rule() {
-        let job = delivery(serde_json::json!({
+        let job = payload(serde_json::json!({
             "action": "created",
             "alert": {
                 "number": 9,
@@ -1044,17 +1585,16 @@ mod tests {
 
     #[tokio::test]
     async fn notification_events_schedule_a_refresh() {
-        let services = services_with("secret", None).await;
-        let job = event(&[
-            ("X-GitHub-Event", "issue_comment"),
-            ("X-Hub-Signature-256", &sign("secret", BODY)),
-        ]);
+        let (services, workflow) = services_with("secret", off(), on()).await;
+        let job = event(
+            workflow,
+            &[
+                ("X-GitHub-Event", "issue_comment"),
+                ("X-Hub-Signature-256", &sign("secret", BODY)),
+            ],
+        );
 
-        GitHubWebhook
-            .handle(
-                JobContext::new(services.clone(), chrono::Utc::now(), None, None),
-                &job,
-            )
+        run(&services, &job)
             .await
             .expect("a signed issue_comment delivery should schedule a refresh");
 
@@ -1062,37 +1602,202 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn pull_request_events_are_ignored_when_auto_merge_is_not_configured() {
-        let services = services_with("secret", None).await;
-        let job = event(&[
-            ("X-GitHub-Event", "pull_request"),
-            ("X-Hub-Signature-256", &sign("secret", BODY)),
-        ]);
+    async fn a_matching_pull_request_is_left_alone_while_auto_merge_is_switched_off() {
+        // [`BODY`] is a newly opened Dependabot pull request, which is precisely
+        // what the default filter selects — so the only thing that can be
+        // stopping this is the switch, which is the point of having one.
+        let (services, workflow) = services_with("secret", off(), on()).await;
+        let job = event(
+            workflow,
+            &[
+                ("X-GitHub-Event", "pull_request"),
+                ("X-Hub-Signature-256", &sign("secret", BODY)),
+            ],
+        );
 
-        GitHubWebhook
-            .handle(
-                JobContext::new(services.clone(), chrono::Utc::now(), None, None),
-                &job,
-            )
+        run(&services, &job)
             .await
-            .expect("an unconfigured event should be ignored without erroring");
+            .expect("a switched-off section should be skipped without erroring");
 
         assert_eq!(dispatched(&services).await, 0);
     }
 
     #[tokio::test]
-    async fn unsupported_events_are_ignored() {
-        let services = services_with("secret", Some(GitHubAutoMergeConfig::default())).await;
-        let job = event(&[
-            ("X-GitHub-Event", "check_suite"),
-            ("X-Hub-Signature-256", &sign("secret", BODY)),
-        ]);
+    async fn a_section_written_before_the_switch_existed_is_off() {
+        // Somebody's stored configuration says `auto_merge = {}`, which used to
+        // mean "on" because presence was the switch. It has to read as off now,
+        // or an upgrade would hand a capability to people who never asked for
+        // it — the same reading an omitted section gets.
+        let (services, workflow) =
+            services_with("secret", serde_json::json!({}), serde_json::json!({})).await;
+        let job = event(
+            workflow,
+            &[
+                ("X-GitHub-Event", "pull_request"),
+                ("X-Hub-Signature-256", &sign("secret", BODY)),
+            ],
+        );
 
-        GitHubWebhook
-            .handle(
-                JobContext::new(services.clone(), chrono::Utc::now(), None, None),
-                &job,
-            )
+        run(&services, &job).await.expect("the delivery should run");
+
+        assert_eq!(dispatched(&services).await, 0);
+        assert!(attention_tasks(&services).await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn switching_auto_merge_on_dispatches_a_task_carrying_this_workflows_filter() {
+        // The settings travel with the dispatch, so the thing worth asserting is
+        // not that a task was queued but that it was queued with what *this*
+        // workflow was configured with rather than a compiled-in default.
+        let (services, workflow) = services_with(
+            "secret",
+            serde_json::json!({ "enabled": true, "filter": r#"repository == "example/repo""# }),
+            off(),
+        )
+        .await;
+        let job = event(
+            workflow,
+            &[
+                ("X-GitHub-Event", "pull_request"),
+                ("X-Hub-Signature-256", &sign("secret", BODY)),
+            ],
+        );
+
+        run(&services, &job)
+            .await
+            .expect("a switched-on section should dispatch");
+
+        let tasks = auto_merge_tasks(&services).await;
+        assert_eq!(tasks.len(), 1);
+        assert_eq!(
+            tasks[0].config.filter.raw(),
+            r#"repository == "example/repo""#
+        );
+        assert_ne!(
+            tasks[0].config.filter.raw(),
+            crate::jobs::DEFAULT_AUTO_MERGE_FILTER,
+            "the workflow's own filter should reach the job, not the default it would have had",
+        );
+    }
+
+    #[tokio::test]
+    async fn the_workflow_tells_the_job_which_installation_it_serves() {
+        // The connection is what says which installation this workflow handles
+        // deliveries for, and the job is where that gets checked and the token
+        // minted from it — so it has to travel with the dispatch. Until it did,
+        // the field was stored, asked for on the form, and read by nothing.
+        let connection = automate_api::ConnectionId::from_entropy(0xC0FFEE);
+        let (services, workflow) = services_serving(Some(connection)).await;
+        let job = event(
+            workflow,
+            &[
+                ("X-GitHub-Event", "pull_request"),
+                ("X-Hub-Signature-256", &sign("secret", BODY)),
+            ],
+        );
+
+        run(&services, &job)
+            .await
+            .expect("a signed pull_request delivery should be dispatched");
+
+        let tasks = auto_merge_tasks(&services).await;
+        assert_eq!(tasks.len(), 1);
+        assert_eq!(tasks[0].connection, Some(connection));
+    }
+
+    #[tokio::test]
+    async fn a_workflow_naming_no_installation_dispatches_without_one() {
+        // A workflow stored before the field existed still has to work, and the
+        // job's fallback to the delivery's own claim can only happen if the
+        // absence reaches it rather than being turned into some default.
+        let (services, workflow) = services_serving(None).await;
+        let job = event(
+            workflow,
+            &[
+                ("X-GitHub-Event", "pull_request"),
+                ("X-Hub-Signature-256", &sign("secret", BODY)),
+            ],
+        );
+
+        run(&services, &job)
+            .await
+            .expect("a signed pull_request delivery should be dispatched");
+
+        let tasks = auto_merge_tasks(&services).await;
+        assert_eq!(tasks.len(), 1);
+        assert_eq!(tasks[0].connection, None);
+    }
+
+    #[tokio::test]
+    async fn a_comment_is_left_alone_while_attention_is_switched_off() {
+        let (services, workflow) = services_with("secret", off(), off()).await;
+        let job = event_of(
+            workflow,
+            COMMENT_BODY,
+            &[
+                ("X-GitHub-Event", "issue_comment"),
+                ("X-Hub-Signature-256", &sign("secret", COMMENT_BODY)),
+            ],
+        );
+
+        run(&services, &job)
+            .await
+            .expect("a switched-off section should be skipped without erroring");
+
+        assert!(attention_tasks(&services).await.is_empty());
+        assert_eq!(
+            refreshes(&services).await,
+            1,
+            "the notifications inbox still moved, which is not what the switch governs",
+        );
+    }
+
+    #[tokio::test]
+    async fn switching_attention_on_dispatches_a_task_carrying_this_workflows_filters() {
+        let (services, workflow) = services_with(
+            "secret",
+            off(),
+            serde_json::json!({ "enabled": true, "comments": r#"author == "someone-else""# }),
+        )
+        .await;
+        let job = event_of(
+            workflow,
+            COMMENT_BODY,
+            &[
+                ("X-GitHub-Event", "issue_comment"),
+                ("X-Hub-Signature-256", &sign("secret", COMMENT_BODY)),
+            ],
+        );
+
+        run(&services, &job)
+            .await
+            .expect("a switched-on section should dispatch");
+
+        let tasks = attention_tasks(&services).await;
+        assert_eq!(tasks.len(), 1);
+        assert_eq!(
+            tasks[0].config.comments.raw(),
+            r#"author == "someone-else""#
+        );
+        assert_ne!(
+            tasks[0].config.comments.raw(),
+            crate::jobs::DEFAULT_COMMENT_FILTER,
+            "the workflow's own filter should reach the job, not the default it would have had",
+        );
+    }
+
+    #[tokio::test]
+    async fn unsupported_events_are_ignored() {
+        let (services, workflow) = services_with("secret", on(), on()).await;
+        let job = event(
+            workflow,
+            &[
+                ("X-GitHub-Event", "check_suite"),
+                ("X-Hub-Signature-256", &sign("secret", BODY)),
+            ],
+        );
+
+        run(&services, &job)
             .await
             .expect("an unsupported event should be ignored without erroring");
 
@@ -1101,10 +1806,50 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn installation_events_maintain_the_registry() {
-        let services = services_with("secret", None).await;
+    async fn a_delivery_for_a_paused_workflow_does_nothing() {
+        // Pausing exists so somebody can stop a busy organisation's deliveries
+        // without losing their configuration, which only works if a paused
+        // workflow is quiet.
+        let (services, workflow) = services_with("secret", on(), on()).await;
 
-        let payload = |action: &str| {
+        WorkflowStore::new(&services)
+            .with_index(&services)
+            .update(
+                workflow,
+                WorkflowDraft {
+                    type_id: "github".into(),
+                    config: serde_json::json!({
+                        "name": "SierraSoftworks",
+                        "secret": "secret",
+                        "auto_merge": on(),
+                        "attention": on(),
+                    }),
+                    schedule: None,
+                    enabled: false,
+                },
+            )
+            .await
+            .unwrap();
+
+        let job = event(
+            workflow,
+            &[
+                ("X-GitHub-Event", "pull_request"),
+                ("X-Hub-Signature-256", &sign("secret", BODY)),
+            ],
+        );
+
+        run(&services, &job).await.unwrap();
+
+        assert_eq!(dispatched(&services).await, 0);
+        assert_eq!(refreshes(&services).await, 0);
+    }
+
+    #[tokio::test]
+    async fn installation_events_maintain_the_connection() {
+        let (services, workflow) = services_with("secret", off(), on()).await;
+
+        let body = |action: &str| {
             serde_json::json!({
                 "action": action,
                 "installation": {
@@ -1115,57 +1860,234 @@ mod tests {
             .to_string()
         };
 
-        let deliver = async |body: String,
-                             services: &crate::services::ServicesContainer<
-            crate::db::SqliteDatabase,
-        >| {
-            let job = WebhookEvent {
-                body: body.clone(),
-                query: String::new(),
-                headers: [
-                    ("X-GitHub-Event".to_string(), "installation".to_string()),
-                    ("X-Hub-Signature-256".to_string(), sign("secret", &body)),
-                ]
-                .into_iter()
-                .collect::<HashMap<_, _>>(),
+        let deliver =
+            async |body: String,
+                   services: &crate::services::ServicesContainer<crate::db::TenantDb>| {
+                let job = WebhookDelivery {
+                    workflow,
+                    event: WebhookEvent {
+                        body: body.clone(),
+                        query: String::new(),
+                        headers: [
+                            ("X-GitHub-Event".to_string(), "installation".to_string()),
+                            ("X-Hub-Signature-256".to_string(), sign("secret", &body)),
+                        ]
+                        .into_iter()
+                        .collect::<HashMap<_, _>>(),
+                    },
+                };
+
+                run(services, &job)
+                    .await
+                    .expect("the installation event should be handled");
             };
 
-            GitHubWebhook
-                .handle(
-                    JobContext::new(services.clone(), chrono::Utc::now(), None, None),
-                    &job,
-                )
+        let linked = async |services: &crate::services::ServicesContainer<crate::db::TenantDb>| {
+            crate::connections::ConnectionStore::for_services(services)
+                .list_for_provider(crate::integrations::github_app::GITHUB_PROVIDER)
                 .await
-                .expect("the installation event should be handled");
+                .expect("list the linked GitHub accounts")
         };
 
-        deliver(payload("created"), &services).await;
+        deliver(body("created"), &services).await;
 
-        let recorded = services
-            .kv()
-            .get::<crate::services::GitHubInstallation>(
-                crate::integrations::github_app::INSTALLATIONS_PARTITION,
-                "notheotherben",
-            )
-            .await
-            .expect("read the registry")
-            .expect("the installation should be recorded");
-        assert_eq!(recorded.id, 42);
-        assert_eq!(recorded.account_type, "User");
+        let recorded = linked(&services).await;
+        assert_eq!(recorded.len(), 1);
+        assert_eq!(recorded[0].account.as_deref(), Some("notheotherben"));
+        // The account type rides on the connection now; there is no second
+        // record left for it to live in.
+        assert_eq!(
+            recorded[0]
+                .metadata
+                .get(crate::integrations::github_app::ACCOUNT_TYPE)
+                .and_then(serde_json::Value::as_str),
+            Some("User")
+        );
 
-        deliver(payload("deleted"), &services).await;
+        deliver(body("deleted"), &services).await;
 
         assert!(
-            services
-                .kv()
-                .get::<crate::services::GitHubInstallation>(
-                    crate::integrations::github_app::INSTALLATIONS_PARTITION,
-                    "notheotherben",
-                )
-                .await
-                .expect("read the registry")
-                .is_none(),
+            linked(&services).await.is_empty(),
             "uninstalling should forget the account"
         );
+    }
+
+    #[test]
+    fn a_stored_configuration_names_the_workflow_it_describes() {
+        let workflow = crate::workflows::lookup("github").expect("the type is registered");
+
+        assert_eq!(
+            workflow
+                .describe(&serde_json::json!({ "name": "SierraSoftworks" }))
+                .unwrap(),
+            "SierraSoftworks",
+        );
+    }
+
+    /// The value a form would be prefilled with for `path`.
+    fn descriptor_default(path: &str) -> serde_json::Value {
+        use crate::workflows::ConfigurableWorkflow;
+
+        GitHubWebhook::descriptor()
+            .fields
+            .into_iter()
+            .find(|field| field.name == path)
+            .unwrap_or_else(|| panic!("the descriptor should describe '{path}'"))
+            .default
+            .unwrap_or_else(|| panic!("'{path}' should offer a default"))
+    }
+
+    #[test]
+    fn an_untouched_form_says_the_same_thing_as_an_omitted_section() {
+        // A new form starts at the descriptor's defaults; a stored configuration
+        // that leaves a section out starts at the struct's `serde(default)`.
+        // Those are two copies of the same intention, and if they drift then
+        // "I left it alone" and "I never had it" quietly come to mean different
+        // things — which nobody notices until a filter stops matching.
+        let omitted: GitHubWebhookConfig =
+            serde_json::from_value(serde_json::json!({ "name": "SierraSoftworks" }))
+                .expect("a configuration naming only the workflow should load");
+
+        for (path, from_the_struct) in [
+            (
+                crate::config_path!(GitHubWebhookConfig: auto_merge.enabled),
+                serde_json::to_value(omitted.auto_merge.enabled).unwrap(),
+            ),
+            (
+                crate::config_path!(GitHubWebhookConfig: auto_merge.filter),
+                serde_json::to_value(&omitted.auto_merge.filter).unwrap(),
+            ),
+            (
+                crate::config_path!(GitHubWebhookConfig: auto_merge.approve),
+                serde_json::to_value(omitted.auto_merge.approve).unwrap(),
+            ),
+            (
+                crate::config_path!(GitHubWebhookConfig: auto_merge.approval_message),
+                serde_json::to_value(&omitted.auto_merge.approval_message).unwrap(),
+            ),
+            (
+                crate::config_path!(GitHubWebhookConfig: attention.enabled),
+                serde_json::to_value(omitted.attention.enabled).unwrap(),
+            ),
+            (
+                crate::config_path!(GitHubWebhookConfig: attention.comments),
+                serde_json::to_value(&omitted.attention.comments).unwrap(),
+            ),
+            (
+                crate::config_path!(GitHubWebhookConfig: attention.assignments),
+                serde_json::to_value(&omitted.attention.assignments).unwrap(),
+            ),
+            (
+                crate::config_path!(GitHubWebhookConfig: attention.security_alerts),
+                serde_json::to_value(&omitted.attention.security_alerts).unwrap(),
+            ),
+        ] {
+            assert_eq!(
+                descriptor_default(path),
+                from_the_struct,
+                "the form and the configuration disagree about what '{path}' starts as",
+            );
+        }
+    }
+
+    #[test]
+    fn both_sections_start_switched_off() {
+        // The switches are what make these settings reachable by a dotted path,
+        // but they are also a promise: nobody acquires the ability to merge
+        // their own pull requests, or a stream of Todoist tasks, by upgrading.
+        let omitted: GitHubWebhookConfig =
+            serde_json::from_value(serde_json::json!({ "name": "SierraSoftworks" })).unwrap();
+
+        assert!(!omitted.auto_merge.enabled);
+        assert!(!omitted.attention.enabled);
+        assert_eq!(descriptor_default("auto_merge.enabled"), false);
+        assert_eq!(descriptor_default("attention.enabled"), false);
+    }
+
+    #[test]
+    fn the_form_asks_for_everything_these_deliveries_are_treated_by() {
+        // Listed rather than counted, so that dropping a setting off the form -
+        // which is how these came to be unconfigurable in the first place - is a
+        // decision somebody makes here instead of a number quietly going down.
+        use crate::workflows::ConfigurableWorkflow;
+
+        let names: Vec<String> = GitHubWebhook::descriptor()
+            .fields
+            .into_iter()
+            .map(|field| field.name)
+            .collect();
+
+        assert_eq!(
+            names,
+            vec![
+                "name",
+                "connection",
+                "secret",
+                "auto_merge.enabled",
+                "auto_merge.filter",
+                "auto_merge.approve",
+                "auto_merge.approval_message",
+                "attention.enabled",
+                "attention.comments",
+                "attention.assignments",
+                "attention.security_alerts",
+            ],
+        );
+    }
+
+    #[test]
+    fn the_installation_is_the_only_thing_besides_a_name_a_workflow_must_be_told() {
+        // Which installation a workflow serves cannot be inferred from a
+        // delivery we have not yet decided to trust, and installing the App is
+        // now what puts an account in the picker, so insisting on it is a
+        // question somebody can actually answer. Everything else has a sensible
+        // starting point.
+        use crate::workflows::ConfigurableWorkflow;
+
+        let required: Vec<String> = GitHubWebhook::descriptor()
+            .fields
+            .into_iter()
+            .filter(|field| field.required)
+            .map(|field| field.name)
+            .collect();
+
+        assert_eq!(required, vec!["name", "connection"]);
+    }
+
+    #[test]
+    fn the_filter_editor_offers_the_names_the_events_actually_answer_to() {
+        // A suggested field the `Filterable` impl does not know about evaluates
+        // to null, so the filter silently never matches; the editor's list and
+        // the impl have to be the same list.
+        let pull_request: GitHubPullRequestEvent =
+            serde_json::from_str(BODY).expect("the sample pull request should load");
+
+        for name in GitHubWebhook::pull_request_filter_fields() {
+            assert!(
+                !matches!(pull_request.get(&name), crate::filter::FilterValue::Null),
+                "the editor suggests '{name}', which a pull request does not answer to",
+            );
+        }
+
+        let attention = GitHubAttentionEvent::parse(
+            "issue_comment",
+            &payload(serde_json::from_str(COMMENT_BODY).expect("the sample comment should load")),
+        )
+        .expect("the comment should parse")
+        .expect("the comment should warrant attention");
+
+        // `assignee` and `severity` are null on a comment by nature - they only
+        // exist on an assignment or an alert - so they are excused here rather
+        // than dropped from the editor's suggestions.
+        for name in GitHubWebhook::attention_filter_fields() {
+            if matches!(name.as_str(), "assignee" | "severity") {
+                continue;
+            }
+
+            assert!(
+                !matches!(attention.get(&name), crate::filter::FilterValue::Null),
+                "the editor suggests '{name}', which an attention event does not answer to",
+            );
+        }
     }
 }

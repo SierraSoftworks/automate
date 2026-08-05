@@ -28,11 +28,18 @@ api_key = "${{ env.GITHUB_API_KEY }}"
 # app_id = "123456"
 # slug = "my-automate"  # the App's URL slug, from its public page
 # private_key = "${{ env.GITHUB_APP_PRIVATE_KEY }}"
+# Where the App's management calls are addressed, defaulting to
+# https://api.github.com. A GitHub Enterprise Server instance serves its API
+# from its own host instead, so an App registered there needs this.
+# api_url = "https://github.example.com/api/v3"
 # Who may use the install wizard, evaluated exactly like the OAuth providers'
 # acl. Admin-gated when omitted.
 # acl = 'true'
 
 [connections.todoist]
+# Superseded by per-account connections, which each user manages themselves.
+# This is imported once on start-up into the account a single-user installation
+# runs as, after which you can delete this section.
 api_key = "${{ env.TODOIST_API_KEY }}"
 
 [connections.ynab]
@@ -47,7 +54,10 @@ api_key = "${{ env.ALPHAVANTAGE_API_KEY }}"
 
 [oauth2.spotify]
 name = "Spotify"
-jobs = ["spotify/yearly-playlist"]
+# `jobs` is no longer needed and is ignored if present. Completing an
+# authorisation now stores a connection and starts whatever that provider
+# drives, which is decided in code alongside the provider so the two cannot
+# drift apart.
 # The provider key doubles as the integration id, so this is set up at
 # /integrations/spotify/setup and its callback stays at /oauth/spotify/callback
 # (the redirect URI registered with Spotify).
@@ -69,12 +79,18 @@ scopes = [
 ]
 # When this provider's refresh token expires or is revoked, automate raises a
 # Todoist reminder (with a link to re-authorize) using the settings below, merged
-# over the global [connections.todoist]. Omit to fall back to the Inbox.
+# Where this workflow files its tasks. Omit `project` to fall back to the Inbox.
+# Add `connection = "two-words"` to choose between several linked Todoist
+# accounts; with only one connected it is used automatically.
 todoist = { project = "Software", section = "Accounts" }
 
 
 [web]
 address = "127.0.0.1:8080"
+# Where the SQLite database is kept. The encryption key protecting stored
+# credentials lives beside it as "<database>.key" unless you configure one
+# explicitly below, so moving the database moves both.
+# database = "database.sqlite"
 # base_url is used to construct absolute URLs (e.g. the OIDC redirect URI, and the
 # re-authorization links in OAuth expiry reminders, which are built from a
 # background job that has no incoming request to infer the host from). When
@@ -85,7 +101,47 @@ address = "127.0.0.1:8080"
 # service runs behind a trusted reverse proxy that sets these headers.
 # trust_proxy = true
 
+[web.auth]
+# Whether several people may sign in and each keep their own workflows and
+# connections. Off by default, so upgrading an existing installation changes
+# nothing until you opt in.
+# multi_tenant = true
+
+# The account owning everything when no identity provider is configured. Naming
+# this after the username you will eventually sign in as means adopting an
+# identity provider later leaves your existing workflows where they are.
+# local_user = "you@example.com"
+
+# Two independent gates, both evaluated against the same filter surface as the
+# legacy [web.admin] acl below. `user_acl` decides who may sign in at all;
+# `admin_acl` decides who may administer the installation and impersonate other
+# users. When either is omitted it falls back to [web.admin] acl, so an existing
+# configuration keeps behaving exactly as it did.
+# user_acl = 'true'
+# admin_acl = 'claims.email == "you@example.com"'
+
+# The key protecting stored credentials, as base64 or hexadecimal. Generate one
+# with: openssl rand -base64 32
+# When omitted, a key is generated into a file beside the database on first run
+# - back that file up, because without it stored credentials cannot be read.
+# secret_key = "${{ env.AUTOMATE_SECRET_KEY }}"
+
+# Keys previously used to encrypt credentials. Values are only ever written with
+# the current key, but are read with whichever key sealed them, so a rotated key
+# stays listed here until every record that used it has been rewritten.
+# previous_secret_keys = []
+
+# [web.auth.oidc] takes the same settings as [web.admin.oidc] below, plus:
+# username_claim - the claim identifying the account, which becomes the key
+# everything the user owns is stored under. Defaults to "preferred_username",
+# falling back to "sub". Choose a claim that does not change: renaming an
+# account is a deliberate migration rather than something that happens by itself.
+
 [web.admin]
+# Superseded by [web.auth] above, and retained so existing configurations keep
+# working. Under this section there is a single gate: passing it grants full
+# access, so it governs both signing in and administrator status.
+#
 # The admin area is denied by default; you must provide an `acl` that evaluates to
 # true to grant access. The filter can reference `client_ip`, `method`, `path`,
 # `headers.*`, and (when OIDC is configured) validated token claims via `claims.*`.
@@ -105,98 +161,6 @@ client_secret = '11111111111111111111111111111111111111111111111111'
 # refresh token is issued and sessions renew silently instead of ending when
 # the ID token expires.
 scopes = ['openid', 'profile', 'email', 'offline_access']
-
-[webhooks.azure_monitor]
-# filter = 'true'
-todoist = { project = "Software", section = "Outages" }
-
-[webhooks.github]
-# Add an organization (or repository) webhook in GitHub pointing at
-# POST /webhooks/github with a JSON content type. Deliveries are rejected unless
-# a secret is configured, because the events it carries drive writes to your
-# repositories.
-# secret = "xxxxxx"  # Shared secret used to verify the X-Hub-Signature-256 HMAC
-#
-# Events which move the notifications inbox (issues, pull requests, reviews,
-# comments, discussions, releases, security advisories) also schedule a
-# debounced fetch of [[workflows.github_notifications]], so notifications are
-# collected seconds after something happens instead of on the cron interval. No
-# configuration is needed - subscribe the webhook to those events and lower the
-# workflow's cron to a safety net.
-
-# Enables GitHub's native auto-merge behaviour on pull requests matching the
-# filter, so they merge themselves once their required checks pass. Remove this
-# section to disable auto-merge handling entirely. Requires the webhook to
-# deliver "Pull requests" events, and connections.github.api_key to hold a token
-# with the `repo` scope for the repositories you want to manage.
-[webhooks.github.auto_merge]
-# filter = 'action == "opened" && author in ["dependabot[bot]", "dependabot-preview[bot]"]'
-# Leave an approving review as well, for repositories whose branch protection
-# requires one before auto-merge can complete.
-# approve = true
-# approval_message = "This pull request has been automatically approved because it was raised by a trusted account."
-# Repositories which do not have their "Allow auto-merge" setting turned on get a
-# one-off reminder task (keyed on the repository, so later pull requests from it
-# do not raise more), filed using the settings below merged over the global
-# [connections.todoist].
-todoist = { project = "Software", section = "Maintenance" }
-
-# Raises a Todoist task when an issue, pull request or repository needs your
-# attention. Comments and assignments collapse onto one task per issue/PR (so a
-# busy thread does not spam you), while each security alert gets its own. Remove
-# this section to disable the behaviour entirely.
-#
-# NOTE: this overlaps with [[workflows.github_notifications]], which raises its
-# own task keyed on the notification thread. Narrow that workflow's filter to
-# whatever you do not cover here, or you will get two tasks for the same thread.
-#
-# Filters can reference: kind ("comment", "assignment", "security_alert"), event,
-# action, resolved, repository, repository_owner, repository_name, number, title,
-# author, assignee, subject_author (the issue/PR author), body and severity.
-[webhooks.github.attention]
-# Comments and reviews. Defaults to everything except Dependabot's own
-# commentary - add yourself so your own replies do not nag you, and consider
-# narrowing it to threads that concern you.
-comments = '!(author in ["dependabot[bot]", "dependabot-preview[bot]", "notheotherben"]) && subject_author == "notheotherben"'
-# Assignments and unassignments. Defaults to `false`, because only you know
-# which account is yours. An unassignment completes the task again.
-assignments = 'assignee == "notheotherben"'
-# Dependabot, code scanning and secret scanning alerts. Defaults to all of them;
-# resolving or dismissing an alert completes its task.
-# security_alerts = 'severity in ["critical", "high"]'
-todoist = { project = "Hobbies", section = "Open Source" }
-
-[webhooks.grafana]
-# secret = "xxxxxx"  # Optional authorization header value for webhook authentication
-# filter = 'true'
-todoist = { project = "Software", section = "Outages" }
-
-[webhooks.grey]
-# secret = "xxxxxx"  # Shared secret used to verify the Grey-Webhook-Signature HMAC
-# dashboard_url = "https://grey.example.com"  # Optional link back to the Grey status page
-# filter = 'state.healthy == false'  # e.g. only act on entities becoming unhealthy
-todoist = { project = "Software", section = "Outages" }
-
-[webhooks.honeycomb]
-trusted_secrets = [
-    # "xxxxxx"
-]
-# filter = 'true'
-todoist = { project = "Software", section = "Outages" }
-
-[webhooks.sentry]
-# secret = "xxxxxx"
-# filter = 'true'
-todoist = { project = "Software", section = "Errors" }
-
-[webhooks.tailscale]
-# secret = "xxxxxx"
-# filter = 'true'
-todoist = { project = "Software", section = "Security" }
-
-[webhooks.terraform]
-# secret = "xxxxxx"
-todoist = { project = "Software", section = "Maintenance" }
 
 [[workflows.calendars]]
 name = "Personal"
@@ -239,20 +203,24 @@ cron = "0 */6 * * *"
 name = "Word of the Day"
 homepage = "https://www.merriam-webster.com/word"
 url = "https://www.merriam-webster.com/word/feed/rss2"
+cron = "@daily"
 
 [[workflows.youtube]]
 name = "Alexander the Ok"
 channel_id = "UC9XjwCMWhes6R3jtOzZx50A"
+cron = "0 */6 * * *"
 
 [[workflows.youtube]]
 name = "Dakar"
 channel_id = "UCJVKwvv58Xo3Rt4rF3NiL9w"
 filter = "title contains \"extended highlights\""
+cron = "0 */6 * * *"
 
 [[workflows.youtube]]
 name = "Formula 1"
 channel_id = "UCB_qr75-ydFVKSF9Dmo6izg"
 filter = "title contains \"highlights | \" && !(title contains \"f2 \")"
+cron = "0 */6 * * *"
 
 [[workflows.xkcd]]
 cron = "0 8 * * *"

@@ -5,7 +5,8 @@ use actix_web::{HttpRequest, HttpResponse, dev::HttpServiceFactory, web};
 
 use crate::integrations::{Integration, IntegrationContext, Registry, state_cookie_path};
 use crate::prelude::*;
-use crate::services::AppServices;
+use crate::services::{AppContext, AppServices};
+use crate::web::api::Scoped;
 use crate::web::helpers::request::{base_url, is_https};
 use crate::web::helpers::wizard::{
     PublicWizardOutcome, SETUP_STATE_COOKIE, access_denied_page, admin_only_page, error_page,
@@ -137,14 +138,16 @@ async fn setup_home(
     )
 }
 
-#[instrument("web.integrations.start", skip(services, registry, req), fields(integration = %integration, otel.kind=?OpenTelemetrySpanKind::Server))]
+#[instrument("web.integrations.start", skip(services, context, registry, req), fields(integration = %integration, otel.kind=?OpenTelemetrySpanKind::Server))]
 async fn setup_start(
     services: web::Data<AppServices>,
+    context: web::Data<AppContext>,
     registry: web::Data<Registry>,
     integration: web::Path<String>,
     req: HttpRequest,
 ) -> HttpResponse {
     let services = services.get_ref();
+    let initiator = TenantId::local();
     let id = integration.into_inner();
 
     let (integration, _) = match resolve(&registry, &id, || {
@@ -174,7 +177,8 @@ async fn setup_start(
         .begin_setup(
             &id,
             IntegrationContext {
-                services,
+                context: &context,
+                initiator: initiator.clone(),
                 base_url: &base,
             },
         )
@@ -205,15 +209,17 @@ async fn setup_start(
     }
 }
 
-#[instrument("web.integrations.callback", skip(services, registry, req, query), fields(integration = %integration, otel.kind=?OpenTelemetrySpanKind::Server))]
+#[instrument("web.integrations.callback", skip(services, context, registry, req, query), fields(integration = %integration, otel.kind=?OpenTelemetrySpanKind::Server))]
 async fn setup_callback(
     services: web::Data<AppServices>,
+    context: web::Data<AppContext>,
     registry: web::Data<Registry>,
     integration: web::Path<String>,
     req: HttpRequest,
     query: web::Query<HashMap<String, String>>,
 ) -> HttpResponse {
     let services = services.get_ref();
+    let initiator = TenantId::local();
     let id = integration.into_inner();
 
     let (integration, name) = match resolve(&registry, &id, || {
@@ -266,7 +272,8 @@ async fn setup_callback(
         .complete_setup(
             &id,
             IntegrationContext {
-                services,
+                context: &context,
+                initiator: initiator.clone(),
                 base_url: &base,
             },
             &query,
@@ -303,12 +310,14 @@ pub async fn list(registry: web::Data<Registry>) -> HttpResponse {
 /// `GET /api/v1/integrations/{integration}/connections` — the accounts currently
 /// connected. Admin-gated by `api_auth`.
 pub async fn list_connections(
-    services: web::Data<AppServices>,
+    scoped: Scoped,
+    context: web::Data<AppContext>,
     registry: web::Data<Registry>,
     integration: web::Path<String>,
     req: HttpRequest,
 ) -> HttpResponse {
-    let services = services.get_ref();
+    let services = &*scoped;
+    let initiator = scoped.tenant().clone();
     let id = integration.into_inner();
 
     let (integration, _) = match resolve(&registry, &id, || {
@@ -330,7 +339,8 @@ pub async fn list_connections(
         .connections(
             &id,
             IntegrationContext {
-                services,
+                context: &context,
+                initiator: initiator.clone(),
                 base_url: &base,
             },
         )
@@ -348,14 +358,16 @@ pub async fn list_connections(
 
 /// `DELETE /api/v1/integrations/{integration}/connections/{connection}` — severs
 /// a connection. Admin-gated by `api_auth`.
-#[instrument("web.integrations.disconnect", skip(services, registry, req), fields(otel.kind=?OpenTelemetrySpanKind::Server))]
+#[instrument("web.integrations.disconnect", skip(scoped, context, registry, req), fields(otel.kind=?OpenTelemetrySpanKind::Server))]
 pub async fn disconnect(
-    services: web::Data<AppServices>,
+    scoped: Scoped,
+    context: web::Data<AppContext>,
     registry: web::Data<Registry>,
     path: web::Path<(String, String)>,
     req: HttpRequest,
 ) -> HttpResponse {
-    let services = services.get_ref();
+    let services = &*scoped;
+    let initiator = scoped.tenant().clone();
     let (id, connection) = path.into_inner();
 
     let (integration, _) = match resolve(&registry, &id, || {
@@ -378,7 +390,8 @@ pub async fn disconnect(
             &id,
             &connection,
             IntegrationContext {
-                services,
+                context: &context,
+                initiator: initiator.clone(),
                 base_url: &base,
             },
         )
@@ -398,12 +411,14 @@ pub async fn disconnect(
 /// authorization URL for the admin SPA to open in a popup, and sets the state
 /// cookie the callback verifies. Admin-gated by `api_auth`.
 pub async fn start(
-    services: web::Data<AppServices>,
+    scoped: Scoped,
+    context: web::Data<AppContext>,
     registry: web::Data<Registry>,
     integration: web::Path<String>,
     req: HttpRequest,
 ) -> HttpResponse {
-    let services = services.get_ref();
+    let services = &*scoped;
+    let initiator = scoped.tenant().clone();
     let id = integration.into_inner();
 
     let (integration, _) = match resolve(&registry, &id, || {
@@ -425,7 +440,8 @@ pub async fn start(
         .begin_setup(
             &id,
             IntegrationContext {
-                services,
+                context: &context,
+                initiator: initiator.clone(),
                 base_url: &base,
             },
         )
@@ -463,13 +479,12 @@ mod tests {
 
     use crate::config::OidcConfig;
     use crate::filter::Filter;
-    use crate::services::ServicesContainer;
     use crate::web::OAuth2Config;
 
     fn spotify(acl: Option<&str>) -> OAuth2Config {
         OAuth2Config {
             name: "Spotify".to_string(),
-            jobs: vec!["spotify/yearly-playlist".to_string()],
+            deprecated_jobs: Vec::new(),
             acl: acl.map(|a| Filter::new(a).unwrap()),
             client_id: "client".to_string(),
             client_secret: "secret".to_string(),
@@ -483,8 +498,8 @@ mod tests {
     /// Services with a single OAuth2 provider configured, the given admin ACL, an
     /// optional provider ACL, and optionally admin OIDC (which the wizard gate
     /// only checks for presence, never contacts).
-    async fn service(admin_acl: &str, provider_acl: Option<&str>, oidc: bool) -> AppServices {
-        ServicesContainer::new_custom_mock(|config, _| {
+    async fn service(admin_acl: &str, provider_acl: Option<&str>, oidc: bool) -> AppContext {
+        AppContext::new_mock(|config| {
             config.web.admin.acl = Filter::new(admin_acl).unwrap();
             // A fixed base URL so the wizard doesn't depend on a Host header.
             config.web.base_url = Some("http://localhost:8080".to_string());
@@ -494,6 +509,7 @@ mod tests {
                     client_id: "client".to_string(),
                     client_secret: "secret".to_string(),
                     scopes: vec![],
+                    username_claim: None,
                 });
             }
             config
@@ -505,12 +521,13 @@ mod tests {
     }
 
     macro_rules! app {
-        ($services:expr) => {{
-            let services = $services;
-            let registry = Registry::new(&services.config()).unwrap();
+        ($context:expr) => {{
+            let context = $context;
+            let registry = Registry::new(&context.config()).unwrap();
             actix_test::init_service(
                 App::new()
-                    .app_data(web::Data::new(services))
+                    .app_data(web::Data::new(context.tenant(TenantId::local())))
+                    .app_data(web::Data::new(context))
                     .app_data(web::Data::new(registry))
                     .service(configure())
                     .service(configure_oauth_callback()),
@@ -519,8 +536,8 @@ mod tests {
         }};
     }
 
-    async fn wizard_home_status(services: AppServices) -> StatusCode {
-        let app = app!(services);
+    async fn wizard_home_status(context: AppContext) -> StatusCode {
+        let app = app!(context);
         let req = actix_test::TestRequest::get()
             .uri("/integrations/spotify/setup")
             .to_request();
@@ -651,21 +668,22 @@ mod tests {
     /// the closest reachable user error on this path.
     #[actix_web::test]
     async fn a_user_error_is_reported_as_a_bad_request() {
-        let services = service("true", None, false).await;
-        let registry = Registry::new(&services.config()).unwrap();
+        let configured = service("true", None, false).await;
+        let registry = Registry::new(&configured.config()).unwrap();
 
         // Resolve through the registry, then take the provider away so
         // `begin_setup` fails the way it would for a half-configured instance.
+        let stripped = AppContext::new_mock(|config| {
+            config.web.admin.acl = Filter::new("true").unwrap();
+            config.web.base_url = Some("http://localhost:8080".to_string());
+        })
+        .await
+        .unwrap();
+
         let app = actix_test::init_service(
             App::new()
-                .app_data(web::Data::new(
-                    ServicesContainer::new_custom_mock(|config, _| {
-                        config.web.admin.acl = Filter::new("true").unwrap();
-                        config.web.base_url = Some("http://localhost:8080".to_string());
-                    })
-                    .await
-                    .unwrap(),
-                ))
+                .app_data(web::Data::new(stripped.tenant(TenantId::local())))
+                .app_data(web::Data::new(stripped))
                 .app_data(web::Data::new(registry))
                 .service(configure()),
         )

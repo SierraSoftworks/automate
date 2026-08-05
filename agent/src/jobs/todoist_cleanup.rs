@@ -4,16 +4,16 @@ use std::str::FromStr;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    config::TodoistConfig,
     jobs::CronJobConfig,
     prelude::*,
+    publishers::TodoistTarget,
     publishers::{TodoistClient, TodoistUpsertTaskState},
 };
 
 #[derive(Clone, Serialize, Deserialize, Default)]
 pub struct TodoistCleanupConfig {
     #[serde(default)]
-    pub todoist: TodoistConfig,
+    pub todoist: TodoistTarget,
 }
 
 impl Display for TodoistCleanupConfig {
@@ -67,8 +67,7 @@ impl Job for TodoistCleanupWorkflow {
         job: &Self::JobType,
     ) -> Result<(), human_errors::Error> {
         let services = ctx.services();
-        let config = services.config().connections.todoist.merge(&job.todoist);
-        let client = TodoistClient::new(&config)?;
+        let client = TodoistClient::connect(services, &job.todoist).await?;
 
         let entries = services
             .kv()

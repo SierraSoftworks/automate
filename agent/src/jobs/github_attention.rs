@@ -1,5 +1,5 @@
-use crate::config::TodoistConfig;
 use crate::prelude::*;
+use crate::publishers::TodoistTarget;
 use crate::publishers::{
     TodoistCompleteTask, TodoistCompleteTaskPayload, TodoistDueDate, TodoistUpsertTask,
     TodoistUpsertTaskPayload,
@@ -21,8 +21,50 @@ pub fn subject_key(repository: &str, number: u64) -> String {
     format!("github/attention/{repository}#{number}")
 }
 
-#[derive(Clone, Deserialize)]
+/// What the GitHub webhook hands this job.
+///
+/// The settings travel with the event rather than being read from the
+/// installation's configuration, because they now belong to the workflow the
+/// delivery arrived for — this job serves whichever one dispatched it.
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+pub struct GitHubAttentionTask {
+    pub config: GitHubAttentionConfig,
+    pub event: GitHubAttentionEvent,
+}
+
+impl std::fmt::Display for GitHubAttentionTask {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "github/attention")
+    }
+}
+
+/// The comments an untouched attention section raises a task for.
+///
+/// These are held as their source text as well as being parsed, so that the
+/// form's defaults and the `serde(default)`s are the same strings rather than
+/// two copies that agree until one of them is edited.
+pub const DEFAULT_COMMENT_FILTER: &str =
+    r#"!(author in ["dependabot[bot]", "dependabot-preview[bot]"])"#;
+
+/// The assignments an untouched attention section raises a task for: none, since
+/// only the person configuring it knows which account is theirs.
+pub const DEFAULT_ASSIGNMENT_FILTER: &str = "false";
+
+/// The security alerts an untouched attention section raises a task for: all of
+/// them. This is what [`Filter::default`] means, spelled out so the form can
+/// offer the same text the struct falls back to.
+pub const DEFAULT_SECURITY_ALERT_FILTER: &str = "true";
+
+#[derive(Clone, Serialize, Deserialize)]
 pub struct GitHubAttentionConfig {
+    /// Whether this workflow files Todoist reminders at all.
+    ///
+    /// Off unless somebody says so, so that an upgrade cannot start filling
+    /// anybody's inbox — and so the settings below can be reached by a dotted
+    /// path, which an `Option` around the whole section could not be.
+    #[serde(default)]
+    pub enabled: bool,
+
     /// Selects the comments and reviews worth raising a task for. Defaults to
     /// everything except Dependabot's own commentary; add yourself so that your
     /// own replies do not nag you.
@@ -40,27 +82,27 @@ pub struct GitHubAttentionConfig {
     pub security_alerts: Filter,
 
     #[serde(default)]
-    pub todoist: TodoistConfig,
+    pub todoist: TodoistTarget,
 }
 
 impl Default for GitHubAttentionConfig {
     fn default() -> Self {
         Self {
+            enabled: false,
             comments: default_comment_filter(),
             assignments: default_assignment_filter(),
             security_alerts: Filter::default(),
-            todoist: TodoistConfig::default(),
+            todoist: TodoistTarget::default(),
         }
     }
 }
 
 fn default_comment_filter() -> Filter {
-    Filter::new(r#"!(author in ["dependabot[bot]", "dependabot-preview[bot]"])"#)
-        .expect("the default comment filter is always valid")
+    Filter::new(DEFAULT_COMMENT_FILTER).expect("the default comment filter is always valid")
 }
 
 fn default_assignment_filter() -> Filter {
-    Filter::new("false").expect("the literal `false` filter is always valid")
+    Filter::new(DEFAULT_ASSIGNMENT_FILTER).expect("the literal `false` filter is always valid")
 }
 
 /// Raises a Todoist task when an issue, pull request or repository needs the
@@ -142,7 +184,7 @@ impl GitHubAttentionWorkflow {
 crate::register_job!(GitHubAttentionWorkflow);
 
 impl Job for GitHubAttentionWorkflow {
-    type JobType = GitHubAttentionEvent;
+    type JobType = GitHubAttentionTask;
 
     fn partition() -> &'static str {
         "github/attention"
@@ -155,12 +197,8 @@ impl Job for GitHubAttentionWorkflow {
         job: &Self::JobType,
     ) -> Result<(), human_errors::Error> {
         let services = ctx.services();
-        let config = services.config();
-
-        let Some(attention) = config.webhooks.github.attention.as_ref() else {
-            debug!("Attention handling is not configured; ignoring {job}.");
-            return Ok(());
-        };
+        let attention = &job.config;
+        let job = &job.event;
 
         let filter = match job.kind {
             GitHubAttentionKind::Comment => &attention.comments,
@@ -209,7 +247,6 @@ impl Job for GitHubAttentionWorkflow {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::webhooks::GitHubWebhookConfig;
     use rstest::rstest;
 
     fn comment(author: &str) -> GitHubAttentionEvent {
@@ -233,18 +270,17 @@ mod tests {
         }
     }
 
+    /// Pairs an event with the settings the workflow it arrived for holds.
+    fn task(event: GitHubAttentionEvent, config: GitHubAttentionConfig) -> GitHubAttentionTask {
+        GitHubAttentionTask { config, event }
+    }
+
     async fn services_with(
-        attention: GitHubAttentionConfig,
-    ) -> crate::services::ServicesContainer<crate::db::SqliteDatabase> {
-        crate::services::ServicesContainer::new_custom_mock(move |config, _| {
-            config.webhooks.github = GitHubWebhookConfig {
-                secret: "secret".to_string(),
-                auto_merge: None,
-                attention: Some(attention),
-            };
-        })
-        .await
-        .expect("build mock services")
+        _attention: GitHubAttentionConfig,
+    ) -> crate::services::ServicesContainer<crate::db::TenantDb> {
+        crate::services::ServicesContainer::new_mock()
+            .await
+            .expect("build mock services")
     }
 
     async fn upserts<S: Services>(services: &S) -> Vec<String> {
@@ -284,15 +320,66 @@ mod tests {
         );
     }
 
+    #[test]
+    fn a_section_nobody_has_filled_in_is_switched_off() {
+        // The switch replaced an `Option` whose presence turned this on, so an
+        // empty object reads as off now — otherwise upgrading would start
+        // filling somebody's Todoist inbox on their behalf.
+        let empty: GitHubAttentionConfig = serde_json::from_value(serde_json::json!({}))
+            .expect("an empty section should load at its defaults");
+
+        assert!(!empty.enabled);
+        assert!(!GitHubAttentionConfig::default().enabled);
+    }
+
+    #[test]
+    fn the_settings_survive_being_stored_and_read_back() {
+        // These belong to a workflow's stored configuration now, so they have to
+        // write as well as read; a filter that did not round-trip would quietly
+        // revert to its default the next time the workflow was saved.
+        let config = GitHubAttentionConfig {
+            enabled: true,
+            assignments: Filter::new(r#"assignee == "notheotherben""#).unwrap(),
+            ..Default::default()
+        };
+
+        let round_tripped: GitHubAttentionConfig = serde_json::from_value(
+            serde_json::to_value(&config).expect("the settings should write"),
+        )
+        .expect("the settings should read back");
+
+        assert!(round_tripped.enabled);
+        assert_eq!(
+            round_tripped.assignments.raw(),
+            r#"assignee == "notheotherben""#
+        );
+        assert_eq!(round_tripped.comments.raw(), DEFAULT_COMMENT_FILTER);
+    }
+
+    #[test]
+    fn the_advertised_defaults_are_the_ones_the_struct_uses() {
+        // The form offers these constants as its starting values. The security
+        // alert one is the odd case: the struct reaches it through
+        // `Filter::default()` rather than a named function, so the constant is a
+        // second copy of that meaning and this is what keeps them equal.
+        let empty: GitHubAttentionConfig = serde_json::from_value(serde_json::json!({})).unwrap();
+
+        assert_eq!(empty.comments.raw(), DEFAULT_COMMENT_FILTER);
+        assert_eq!(empty.assignments.raw(), DEFAULT_ASSIGNMENT_FILTER);
+        assert_eq!(empty.security_alerts.raw(), DEFAULT_SECURITY_ALERT_FILTER);
+        assert_eq!(Filter::default().raw(), DEFAULT_SECURITY_ALERT_FILTER);
+    }
+
     #[tokio::test]
     async fn every_comment_on_a_thread_collapses_onto_one_task() {
-        let services = services_with(GitHubAttentionConfig::default()).await;
+        let config = GitHubAttentionConfig::default();
+        let services = services_with(config.clone()).await;
 
         for author in ["notheotherben", "someone-else"] {
             GitHubAttentionWorkflow
                 .handle(
                     JobContext::new(services.clone(), chrono::Utc::now(), None, None),
-                    &comment(author),
+                    &task(comment(author), config.clone()),
                 )
                 .await
                 .expect("the comment should raise a task");
@@ -306,12 +393,13 @@ mod tests {
 
     #[tokio::test]
     async fn filtered_out_comments_raise_nothing() {
-        let services = services_with(GitHubAttentionConfig::default()).await;
+        let config = GitHubAttentionConfig::default();
+        let services = services_with(config.clone()).await;
 
         GitHubAttentionWorkflow
             .handle(
                 JobContext::new(services.clone(), chrono::Utc::now(), None, None),
-                &comment("dependabot[bot]"),
+                &task(comment("dependabot[bot]"), config.clone()),
             )
             .await
             .expect("a filtered comment should be ignored");
@@ -321,7 +409,8 @@ mod tests {
 
     #[tokio::test]
     async fn resolved_alerts_complete_their_task() {
-        let services = services_with(GitHubAttentionConfig::default()).await;
+        let config = GitHubAttentionConfig::default();
+        let services = services_with(config.clone()).await;
 
         let mut event = comment("dependabot[bot]");
         event.kind = GitHubAttentionKind::SecurityAlert;
@@ -333,7 +422,7 @@ mod tests {
         GitHubAttentionWorkflow
             .handle(
                 JobContext::new(services.clone(), chrono::Utc::now(), None, None),
-                &event,
+                &task(event, config.clone()),
             )
             .await
             .expect("a resolved alert should complete its task");

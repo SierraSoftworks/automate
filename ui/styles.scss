@@ -204,6 +204,217 @@ pre {
       border-color: $danger;
     }
   }
+
+  // Available without drawing the eye: no border or fill until pointed at.
+  &--subtle {
+    border-color: transparent;
+    background: transparent;
+    color: $text-secondary;
+
+    &:hover:not(:disabled) {
+      background: $fill-light;
+      border-color: transparent;
+      color: $text-regular;
+    }
+  }
+
+  // A request is in flight. The button is already disabled, so this only has to
+  // say why it stopped responding.
+  &--busy {
+    position: relative;
+    color: transparent;
+
+    &::after {
+      content: "";
+      position: absolute;
+      width: 0.85em;
+      height: 0.85em;
+      border: 2px solid currentColor;
+      border-top-color: transparent;
+      border-radius: 50%;
+      color: $text-secondary;
+      animation: btn-spin 640ms linear infinite;
+    }
+  }
+}
+
+@keyframes btn-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+// -----------------------------------------------------------------------------
+// Form fields
+//
+// Every configurable value in the application is entered through one of these,
+// so the row shape is defined once: label, control, then either help text or an
+// error - never both, because an error is the more urgent of the two and
+// stacking them makes the following field jump as the user types.
+// -----------------------------------------------------------------------------
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  margin-bottom: 1.1rem;
+
+  &__label {
+    font-size: 0.8125rem;
+    font-weight: 600;
+    color: $text-regular;
+  }
+
+  &__required {
+    margin-left: 0.2rem;
+    color: $danger;
+  }
+
+  &__control {
+    display: flex;
+    flex-direction: column;
+  }
+
+  &__help,
+  &__error {
+    margin: 0;
+    font-size: 0.75rem;
+    line-height: 1.45;
+  }
+
+  &__help {
+    color: $text-secondary;
+  }
+
+  &__error {
+    color: $danger;
+  }
+
+  &__input {
+    width: 100%;
+    box-sizing: border-box;
+    font-family: inherit;
+    font-size: 0.875rem;
+    line-height: 1.4;
+    padding: 0.55rem 0.7rem;
+    color: $text-primary;
+    background: $bg-white;
+    border: 1px solid $border-base;
+    border-radius: $radius-sm;
+    transition: border-color $transition, box-shadow $transition;
+
+    &::placeholder {
+      color: $text-placeholder;
+    }
+
+    &:hover:not(:disabled) {
+      border-color: $text-placeholder;
+    }
+
+    &:focus-visible {
+      @include focus-ring;
+    }
+
+    &:disabled {
+      background: $fill-light;
+      color: $text-secondary;
+      cursor: not-allowed;
+    }
+
+    &--invalid {
+      border-color: $danger;
+
+      &:focus-visible {
+        outline: none;
+        border-color: $danger;
+        box-shadow: 0 0 0 2px rgba(245, 108, 108, 0.18);
+      }
+    }
+  }
+
+  &__textarea {
+    resize: vertical;
+    min-height: 4.5rem;
+
+    &--mono {
+      font-family: $font-mono;
+      font-size: 0.8125rem;
+    }
+  }
+
+  &__select {
+    // The browser draws its own arrow, which sits badly against our padding.
+    appearance: none;
+    padding-right: 2rem;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23909399' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 0.6rem center;
+    background-size: 1rem;
+    cursor: pointer;
+  }
+}
+
+// A toggle for the settings that are simply on or off.
+.switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.6rem;
+  cursor: pointer;
+  user-select: none;
+
+  &--disabled {
+    cursor: not-allowed;
+    opacity: 0.5;
+  }
+
+  // Kept in the accessibility tree and focusable, but visually replaced by the
+  // track below, so keyboard and screen-reader use are unaffected.
+  &__input {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    opacity: 0;
+    margin: 0;
+  }
+
+  &__track {
+    position: relative;
+    flex: none;
+    width: 2.4rem;
+    height: 1.35rem;
+    border-radius: 999px;
+    background: $border-base;
+    transition: background $transition;
+  }
+
+  &__thumb {
+    position: absolute;
+    top: 2px;
+    left: 2px;
+    width: calc(1.35rem - 4px);
+    height: calc(1.35rem - 4px);
+    border-radius: 50%;
+    background: $bg-white;
+    box-shadow: $shadow-sm;
+    transition: transform $transition;
+  }
+
+  &__input:checked + &__track {
+    background: $brand;
+  }
+
+  &__input:checked + &__track &__thumb {
+    transform: translateX(1.05rem);
+  }
+
+  &__input:focus-visible + &__track {
+    @include focus-ring;
+  }
+
+  &__label {
+    font-size: 0.875rem;
+    color: $text-regular;
+  }
 }
 
 // Refresh button icon (spins while a refresh is in flight)
@@ -891,6 +1102,442 @@ footer {
   left: 50%;
   transform: translate(-50%, -50%);
   width: min(90vw, 30rem);
+}
+
+// Connections: the services an account has linked.
+.connections {
+  @include card;
+  padding: 1.5rem;
+  margin-bottom: 1.5rem;
+
+  &__intro {
+    margin: 0 0 1.25rem;
+    font-size: 0.875rem;
+    color: $text-secondary;
+    max-width: 62ch;
+  }
+
+  &__form {
+    padding: 1.25rem;
+    margin-bottom: 1.5rem;
+    background: $fill-lighter;
+    border: 1px solid $border-lighter;
+    border-radius: $radius;
+    max-width: 32rem;
+  }
+
+  &__form-title {
+    margin: 0 0 1rem;
+    font-size: 0.9375rem;
+    font-weight: 600;
+    color: $text-primary;
+  }
+
+  &__empty {
+    margin: 0;
+    font-size: 0.875rem;
+    color: $text-secondary;
+  }
+
+  &__list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+}
+
+.connection {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  padding: 0.75rem 1rem;
+  border: 1px solid $border-lighter;
+  border-radius: $radius;
+  background: $bg-white;
+
+  &__detail {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+  }
+
+  &__name {
+    font-weight: 600;
+    font-size: 0.9375rem;
+    color: $text-primary;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  &__meta {
+    font-size: 0.75rem;
+    color: $text-secondary;
+  }
+
+  &__status {
+    flex: none;
+    font-size: 0.75rem;
+    font-weight: 600;
+    padding: 0.2rem 0.55rem;
+    border-radius: 999px;
+
+    &--warning {
+      color: $warning;
+      background: $warning-bg;
+      border: 1px solid $warning-border;
+    }
+
+    &--error {
+      color: $danger;
+      background: $danger-bg;
+      border: 1px solid $danger-border;
+    }
+  }
+}
+
+// The links between the admin pages.
+.admin-nav {
+  display: flex;
+  gap: 0.25rem;
+  margin-bottom: 1.5rem;
+  border-bottom: 1px solid $border-lighter;
+
+  &__link {
+    padding: 0.5rem 0.9rem;
+    font-size: 0.875rem;
+    font-weight: 500;
+    color: $text-secondary;
+    text-decoration: none;
+    border-bottom: 2px solid transparent;
+    margin-bottom: -1px;
+    transition: color 0.2s, border-color 0.2s;
+
+    &:hover {
+      color: $brand;
+    }
+
+    &--active {
+      color: $brand;
+      border-bottom-color: $brand;
+    }
+  }
+}
+
+// Workflows: the things a person has asked Automate to watch.
+.workflows {
+  @include card;
+  padding: 1.5rem;
+  margin-bottom: 1.5rem;
+
+  &__title {
+    margin: 0 0 1rem;
+    font-size: 1.125rem;
+    font-weight: 600;
+    color: $text-primary;
+  }
+
+  &__empty {
+    margin: 0 0 1.25rem;
+    font-size: 0.875rem;
+    color: $text-secondary;
+  }
+
+  &__list {
+    list-style: none;
+    margin: 0 0 1.5rem;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+
+  &__form {
+    padding: 1.25rem;
+    background: $fill-lighter;
+    border: 1px solid $border-lighter;
+    border-radius: $radius;
+    max-width: 34rem;
+  }
+
+  &__form-title {
+    margin: 0 0 1rem;
+    font-size: 0.9375rem;
+    font-weight: 600;
+    color: $text-primary;
+  }
+
+  &__form-description {
+    margin: -0.25rem 0 1rem;
+    font-size: 0.8125rem;
+    color: $text-secondary;
+  }
+}
+
+.workflow {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  padding: 0.75rem 1rem;
+  border: 1px solid $border-lighter;
+  border-radius: $radius;
+  background: $bg-white;
+
+  &__summary {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+  }
+
+  // Shown where an upgrade removed the workflow type this was created from.
+  &__orphaned {
+    margin: 0;
+    padding: 0.6rem 0.75rem;
+    font-size: 0.8125rem;
+    color: $text-secondary;
+    background: $fill-light;
+    border-left: 3px solid $border-light;
+    border-radius: $radius-sm;
+  }
+
+  &__detail {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+  }
+
+  &__name {
+    font-weight: 600;
+    font-size: 0.9375rem;
+    color: $text-primary;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  &__meta {
+    font-size: 0.75rem;
+    color: $text-secondary;
+  }
+
+  &__status {
+    flex: none;
+    font-size: 0.75rem;
+    font-weight: 600;
+    padding: 0.2rem 0.55rem;
+    border-radius: 999px;
+
+    &--paused {
+      color: $text-secondary;
+      background: $fill-light;
+      border: 1px solid $border-light;
+    }
+  }
+}
+
+// The editing form, shown inline beneath the workflow it belongs to.
+.workflow-form {
+  padding: 1rem;
+  background: $fill-lighter;
+  border: 1px solid $border-lighter;
+  border-radius: $radius;
+
+  &__actions {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin-top: 0.5rem;
+  }
+}
+
+// The address a webhook workflow is reached at.
+.webhook-address {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0.75rem 1rem;
+  background: $fill-lighter;
+  border: 1px solid $border-lighter;
+  border-radius: $radius;
+
+  &__label {
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: $text-secondary;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+
+  &__row {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+
+  &__url {
+    flex: 1;
+    min-width: 0;
+    padding: 0.45rem 0.65rem;
+    font-family: $font-mono;
+    font-size: 0.8125rem;
+    color: $text-primary;
+    background: $bg-white;
+    border: 1px solid $border-light;
+    border-radius: $radius-sm;
+
+    &:focus {
+      outline: none;
+      border-color: $brand;
+    }
+  }
+
+  &__rotate {
+    align-self: flex-start;
+    padding: 0;
+    font-size: 0.75rem;
+    color: $text-secondary;
+    background: none;
+    border: none;
+    text-decoration: underline;
+    cursor: pointer;
+
+    &:hover {
+      color: $danger;
+    }
+  }
+
+  &__confirm {
+    padding: 0.65rem 0.75rem;
+    background: $danger-bg;
+    border: 1px solid $danger-border;
+    border-radius: $radius-sm;
+  }
+
+  &__warning {
+    margin: 0 0 0.6rem;
+    font-size: 0.8125rem;
+    color: $danger;
+  }
+
+  &__actions {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+
+  &__error {
+    margin: 0;
+    font-size: 0.8125rem;
+    color: $danger;
+  }
+}
+
+// The setup guidance a workflow type ships with.
+.documentation {
+  margin: 0 0 1.25rem;
+
+  &__toggle {
+    padding: 0;
+    font-size: 0.8125rem;
+    font-weight: 500;
+    color: $brand;
+    background: none;
+    border: none;
+    text-decoration: underline;
+    cursor: pointer;
+
+    &:hover { color: $brand-dark; }
+  }
+
+  &__body {
+    margin-top: 0.75rem;
+    padding: 1rem 1.25rem;
+    font-size: 0.875rem;
+    line-height: 1.6;
+    color: $text-regular;
+    background: $brand-tint;
+    border: 1px solid $brand-tint-border;
+    border-radius: $radius;
+
+    h2, h3, h4 {
+      margin: 1.25rem 0 0.5rem;
+      font-size: 0.9375rem;
+      font-weight: 600;
+      color: $text-primary;
+
+      &:first-child { margin-top: 0; }
+    }
+
+    p { margin: 0 0 0.75rem; }
+    p:last-child { margin-bottom: 0; }
+
+    ul, ol {
+      margin: 0 0 0.75rem;
+      padding-left: 1.25rem;
+    }
+
+    li { margin-bottom: 0.25rem; }
+
+    a {
+      color: $brand;
+      text-decoration: underline;
+    }
+
+    code {
+      padding: 0.1rem 0.3rem;
+      font-family: $font-mono;
+      font-size: 0.8125rem;
+      background: $bg-white;
+      border: 1px solid $brand-tint-border;
+      border-radius: $radius-sm;
+    }
+
+    pre {
+      margin: 0 0 0.75rem;
+      padding: 0.75rem;
+      overflow-x: auto;
+      background: $bg-white;
+      border: 1px solid $brand-tint-border;
+      border-radius: $radius-sm;
+
+      code {
+        padding: 0;
+        border: none;
+        background: none;
+      }
+    }
+  }
+}
+
+// A form drawn from a workflow type's description rather than written by hand.
+.dynamic-form {
+  display: flex;
+  flex-direction: column;
+
+  // Shown where a picker cannot offer anything yet, because the account or
+  // project that scopes it has not been chosen.
+  &__unavailable {
+    margin: 0;
+    padding: 0.5rem 0.75rem;
+    font-size: 0.8125rem;
+    color: $text-secondary;
+    background: $fill-light;
+    border: 1px dashed $border-light;
+    border-radius: $radius-sm;
+  }
+
+  &__hint {
+    margin: 0.35rem 0 0;
+    font-size: 0.75rem;
+    color: $text-placeholder;
+  }
 }
 
 // -----------------------------------------------------------------------------

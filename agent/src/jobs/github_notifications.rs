@@ -10,7 +10,7 @@ use crate::publishers::{
     TodoistCompleteTask, TodoistCompleteTaskPayload, TodoistDueDate, TodoistUpsertTask,
     TodoistUpsertTaskPayload,
 };
-use crate::{config::TodoistConfig, filter::Filter};
+use crate::{filter::Filter, publishers::TodoistTarget};
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct GitHubNotificationsConfig {
@@ -18,7 +18,7 @@ pub struct GitHubNotificationsConfig {
     pub filter: Filter,
 
     #[serde(default)]
-    pub todoist: TodoistConfig,
+    pub todoist: TodoistTarget,
 
     event: Option<<GitHubNotificationsCollector as Collector>::Item>,
 }

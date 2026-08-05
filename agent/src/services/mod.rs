@@ -1,6 +1,9 @@
 use std::sync::Arc;
 
+use automate_api::TenantId;
+
 use crate::config::Config;
+use crate::crypto::SecretStore;
 
 mod alphavantage;
 pub mod debounce;
@@ -18,11 +21,80 @@ use tracing_batteries::Session;
 /// Individual job handlers remain generic over the [`Services`] trait so they
 /// can be unit-tested with mocks, but the dynamic job dispatch registry needs a
 /// single concrete type to remain object-safe.
-pub type AppServices = ServicesContainer<crate::db::SqliteDatabase>;
+///
+/// The storage handle it carries is scoped to a single tenant, so anything
+/// holding an `AppServices` can only reach that tenant's records. Widening the
+/// scope requires the root [`crate::db::SqliteDatabase`], which only
+/// installation-level code holds.
+pub type AppServices = ServicesContainer<crate::db::TenantDb>;
 
 /// The user agent applied to the shared HTTP client used across collectors and
 /// publishers.
 pub const HTTP_USER_AGENT: &str = "SierraSoftworks/automate";
+
+/// The installation-wide handle from which tenant-scoped [`AppServices`] are
+/// derived.
+///
+/// This is the only thing that can reach across tenants, and it is deliberately
+/// held in very few places: `main`, the job consumer, and the parts of the web
+/// layer that resolve who a request is acting for. Everything downstream of
+/// those receives an [`AppServices`], which cannot widen its own scope.
+#[derive(Clone)]
+pub struct AppContext {
+    config: Arc<Config>,
+    database: crate::db::SqliteDatabase,
+    secrets: Arc<SecretStore>,
+    http_client: reqwest::Client,
+    session: Arc<Session>,
+}
+
+impl AppContext {
+    pub fn new(
+        config: crate::config::Config,
+        database: crate::db::SqliteDatabase,
+        secrets: SecretStore,
+        session: Arc<Session>,
+    ) -> Self {
+        let http_client = reqwest::Client::builder()
+            .user_agent(HTTP_USER_AGENT)
+            .build()
+            .expect("Failed to build the default HTTP client.");
+
+        Self {
+            config: Arc::new(config),
+            database,
+            secrets: Arc::new(secrets),
+            http_client,
+            session,
+        }
+    }
+
+    /// Derives the services used to act on one tenant's behalf.
+    pub fn tenant(&self, tenant: TenantId) -> AppServices {
+        ServicesContainer {
+            config: self.config.clone(),
+            database: self.database.tenant(tenant.clone()),
+            tenant,
+            secrets: self.secrets.clone(),
+            http_client: self.http_client.clone(),
+            session: self.session.clone(),
+        }
+    }
+
+    /// The unscoped database handle, for installation-level work such as
+    /// enumerating tenants or reading the cross-tenant audit log.
+    pub fn database(&self) -> &crate::db::SqliteDatabase {
+        &self.database
+    }
+
+    pub fn config(&self) -> Arc<Config> {
+        self.config.clone()
+    }
+
+    pub fn session(&self) -> &Session {
+        &self.session
+    }
+}
 
 pub trait Services
 where
@@ -39,9 +111,29 @@ where
     #[allow(dead_code)]
     fn session(&self) -> &Session;
 
+    /// Encrypts and decrypts the credentials this installation holds on behalf
+    /// of its users.
+    ///
+    /// Reached through the services rather than a global so that a test can
+    /// supply its own key, and so anything touching a secret says so in its
+    /// signature.
+    #[allow(dead_code)]
+    fn secrets(&self) -> &SecretStore;
+
+    /// The account these services act for.
+    ///
+    /// Knowing your own name is not the same as being able to use somebody
+    /// else's: there is still no way to obtain a handle to another account. This
+    /// exists because the stores built on top need the name to reconstruct the
+    /// context their credentials are sealed against.
+    fn tenant(&self) -> &TenantId;
+
     fn kv(&self) -> impl crate::db::KeyValueStore + Clone + Send + Sync + 'static;
     fn queue(&self) -> impl crate::db::Queue + Clone + Send + Sync + 'static;
     fn cache(&self) -> impl crate::db::Cache + Clone + Send + Sync + 'static;
+
+    /// The audit log for this tenant.
+    fn audit(&self) -> impl crate::db::AuditStore + Clone + Send + Sync + 'static;
 
     /// A shared [`reqwest::Client`] configured with the default user agent.
     ///
@@ -51,66 +143,136 @@ where
     fn http_client(&self) -> reqwest::Client;
 }
 
-pub struct ServicesContainer<D: crate::db::KeyValueStore + crate::db::Queue + crate::db::Cache> {
+/// Lets a borrowed handle stand in for an owned one.
+///
+/// Job handlers receive `&impl Services` from their context, while the stores
+/// built on top take ownership. Without this every call site would have to clone
+/// first, which says nothing useful and is easy to get wrong.
+impl<S: Services> Services for &S {
+    fn config(&self) -> Arc<Config> {
+        (*self).config()
+    }
+
+    fn session(&self) -> &Session {
+        (*self).session()
+    }
+
+    fn tenant(&self) -> &TenantId {
+        (*self).tenant()
+    }
+
+    fn secrets(&self) -> &SecretStore {
+        (*self).secrets()
+    }
+
+    fn kv(&self) -> impl crate::db::KeyValueStore + Clone + Send + Sync + 'static {
+        (*self).kv()
+    }
+
+    fn queue(&self) -> impl crate::db::Queue + Clone + Send + Sync + 'static {
+        (*self).queue()
+    }
+
+    fn cache(&self) -> impl crate::db::Cache + Clone + Send + Sync + 'static {
+        (*self).cache()
+    }
+
+    fn audit(&self) -> impl crate::db::AuditStore + Clone + Send + Sync + 'static {
+        (*self).audit()
+    }
+
+    fn http_client(&self) -> reqwest::Client {
+        (*self).http_client()
+    }
+}
+
+pub struct ServicesContainer<
+    D: crate::db::KeyValueStore + crate::db::Queue + crate::db::Cache + crate::db::AuditStore,
+> {
     pub config: Arc<Config>,
     pub database: D,
+
+    /// The account these services act for.
+    ///
+    /// Held here rather than asked of the storage handle so that the trait bound
+    /// stays about storage, and so a mock backed by something else still has an
+    /// account.
+    pub tenant: TenantId,
+
+    pub secrets: Arc<SecretStore>,
     pub http_client: reqwest::Client,
     pub session: Arc<Session>,
 }
 
-impl<D: crate::db::KeyValueStore + crate::db::Queue + crate::db::Cache + Clone> Clone
-    for ServicesContainer<D>
+impl<
+    D: crate::db::KeyValueStore + crate::db::Queue + crate::db::Cache + crate::db::AuditStore + Clone,
+> Clone for ServicesContainer<D>
 {
     fn clone(&self) -> Self {
         Self {
             config: self.config.clone(),
             database: self.database.clone(),
+            tenant: self.tenant.clone(),
+            secrets: self.secrets.clone(),
             http_client: self.http_client.clone(),
             session: self.session.clone(),
         }
     }
 }
 
-impl<D> ServicesContainer<D>
-where
-    D: crate::db::KeyValueStore + crate::db::Queue + crate::db::Cache,
-{
-    pub fn new(config: crate::config::Config, database: D, session: Arc<Session>) -> Self {
-        let http_client = reqwest::Client::builder()
-            .user_agent(HTTP_USER_AGENT)
-            .build()
-            .expect("Failed to build the default HTTP client.");
+#[cfg(test)]
+impl AppContext {
+    /// Builds a root context backed by an in-memory database and a throwaway
+    /// encryption key.
+    pub async fn new_mock(
+        f: impl Sized + FnOnce(&mut Config),
+    ) -> Result<Self, human_errors::Error> {
+        let database = crate::db::SqliteDatabase::open_in_memory().await?;
 
-        Self {
-            config: Arc::new(config),
+        let mut config = Config::default();
+        f(&mut config);
+
+        let session = Arc::new(
+            Session::new("automate", "0.0.0-test").with_battery(tracing_batteries::Testing),
+        );
+
+        Ok(AppContext::new(
+            config,
             database,
-            http_client,
+            SecretStore::ephemeral(),
             session,
-        }
+        ))
     }
 }
 
 #[cfg(test)]
-impl ServicesContainer<crate::db::SqliteDatabase> {
+impl ServicesContainer<crate::db::TenantDb> {
     pub async fn new_mock() -> Result<Self, human_errors::Error> {
-        let database = crate::db::SqliteDatabase::open_in_memory().await?;
-        let config = Config::default();
-        let session = Arc::new(
-            Session::new("automate", "0.0.0-test").with_battery(tracing_batteries::Testing),
-        );
-        Ok(Self::new(config, database, session))
+        Self::new_custom_mock(|_, _| {}).await
     }
 
+    /// Builds mock services, letting the caller adjust the configuration and
+    /// seed the database first.
+    ///
+    /// Routed through [`AppContext`] so that tests construct their services the
+    /// same way the running agent does.
     pub async fn new_custom_mock(
-        f: impl Sized + FnOnce(&mut Config, &crate::db::SqliteDatabase),
+        f: impl Sized + FnOnce(&mut Config, &crate::db::TenantDb),
     ) -> Result<Self, human_errors::Error> {
-        let database = crate::db::SqliteDatabase::open_in_memory().await?;
+        let root = crate::db::SqliteDatabase::open_in_memory().await?;
+        let database = root.tenant(TenantId::local());
+
         let mut config = Config::default();
         f(&mut config, &database);
+
         let session = Arc::new(
             Session::new("automate", "0.0.0-test").with_battery(tracing_batteries::Testing),
         );
-        Ok(Self::new(config, database, session))
+
+        Ok(
+            AppContext::new(config, root, SecretStore::ephemeral(), session)
+                .tenant(TenantId::local()),
+        )
     }
 }
 
@@ -119,6 +281,7 @@ where
     D: crate::db::KeyValueStore
         + crate::db::Queue
         + crate::db::Cache
+        + crate::db::AuditStore
         + Clone
         + Send
         + Sync
@@ -132,6 +295,14 @@ where
         &self.session
     }
 
+    fn tenant(&self) -> &TenantId {
+        &self.tenant
+    }
+
+    fn secrets(&self) -> &SecretStore {
+        &self.secrets
+    }
+
     fn kv(&self) -> impl crate::db::KeyValueStore + Clone + Send + Sync + 'static {
         self.database.clone()
     }
@@ -141,6 +312,10 @@ where
     }
 
     fn cache(&self) -> impl crate::db::Cache + Clone + Send + Sync + 'static {
+        self.database.clone()
+    }
+
+    fn audit(&self) -> impl crate::db::AuditStore + Clone + Send + Sync + 'static {
         self.database.clone()
     }
 

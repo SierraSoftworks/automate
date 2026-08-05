@@ -6,7 +6,10 @@
 //! handled separately via a popup (see [`crate::auth::begin_login`]). A `401` that survives a refresh
 //! is surfaced as [`ApiError::Unauthorized`] so callers can prompt for sign-in.
 
-use automate_api::{AdminUser, Connection, IntegrationInfo, KeyValueEntry, QueueMessage};
+use automate_api::{
+    AdminUser, Connection, ConnectionSummary, IntegrationInfo, KeyValueEntry, OptionItem,
+    QueueMessage, Workflow, WorkflowTypeDescriptor,
+};
 use gloo_net::http::{Request, Response};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -51,9 +54,12 @@ struct ServerError {
 /// The HTTP verbs used by the client. A small enum so a request can be rebuilt for the
 /// post-refresh retry.
 #[derive(Clone, Copy)]
+#[allow(dead_code)]
 enum Verb {
     Get,
     Post,
+    Put,
+    Patch,
     Delete,
 }
 
@@ -67,6 +73,8 @@ fn build<B: Serialize>(
     let builder = match verb {
         Verb::Get => Request::get(url),
         Verb::Post => Request::post(url),
+        Verb::Put => Request::put(url),
+        Verb::Patch => Request::patch(url),
         Verb::Delete => Request::delete(url),
     };
     let builder = match token {
@@ -227,6 +235,162 @@ pub async fn delete_queue(partition: &str, key: &str) -> Result<(), ApiError> {
         urlencode(key)
     ))
     .await
+}
+
+/// The services this account has linked.
+pub async fn list_service_connections() -> Result<Vec<ConnectionSummary>, ApiError> {
+    get_json("/connections").await
+}
+
+/// Links a service using a token the user obtained from it.
+pub async fn create_service_connection(
+    provider: &str,
+    name: &str,
+    key: &str,
+) -> Result<ConnectionSummary, ApiError> {
+    let body = serde_json::json!({ "provider": provider, "name": name, "key": key });
+    let response = send(Verb::Post, "/connections", Some(&body)).await?;
+
+    if !response.ok() {
+        return Err(error_from_response(response).await);
+    }
+
+    response
+        .json::<ConnectionSummary>()
+        .await
+        .map_err(|err| ApiError::Server(err.to_string()))
+}
+
+/// Renames a linked service.
+#[allow(dead_code)]
+pub async fn rename_service_connection(
+    id: &str,
+    name: &str,
+) -> Result<ConnectionSummary, ApiError> {
+    let body = serde_json::json!({ "name": name });
+    let response = send(Verb::Patch, &format!("/connections/{}", urlencode(id)), Some(&body)).await?;
+
+    if !response.ok() {
+        return Err(error_from_response(response).await);
+    }
+
+    response
+        .json::<ConnectionSummary>()
+        .await
+        .map_err(|err| ApiError::Server(err.to_string()))
+}
+
+/// Unlinks a service.
+pub async fn delete_service_connection(id: &str) -> Result<(), ApiError> {
+    delete(&format!("/connections/{}", urlencode(id))).await
+}
+
+/// The kinds of workflow that can be created, and the form that configures each.
+///
+/// Fetched rather than compiled in, so a workflow type added to the agent is one
+/// this can offer without being rebuilt.
+pub async fn list_workflow_types() -> Result<Vec<WorkflowTypeDescriptor>, ApiError> {
+    get_json("/workflow-types").await
+}
+
+/// The workflows this account has configured.
+pub async fn list_workflows() -> Result<Vec<Workflow>, ApiError> {
+    get_json("/workflows").await
+}
+
+/// Configures a new workflow.
+pub async fn create_workflow(
+    type_id: &str,
+    config: &serde_json::Value,
+    schedule: Option<&str>,
+    enabled: bool,
+) -> Result<Workflow, ApiError> {
+    let body = serde_json::json!({
+        "type": type_id,
+        "config": config,
+        "schedule": schedule,
+        "enabled": enabled,
+    });
+
+    json_response(send(Verb::Post, "/workflows", Some(&body)).await?).await
+}
+
+/// Replaces a workflow's configuration.
+///
+/// Sends the whole configuration rather than the parts that changed, because
+/// the agent cannot otherwise tell a field that was cleared from one that was
+/// simply not mentioned.
+pub async fn update_workflow(
+    id: &str,
+    config: &serde_json::Value,
+    schedule: Option<&str>,
+    enabled: bool,
+) -> Result<Workflow, ApiError> {
+    let body = serde_json::json!({
+        "config": config,
+        "schedule": schedule,
+        "enabled": enabled,
+    });
+
+    json_response(
+        send(
+            Verb::Put,
+            &format!("/workflows/{}", urlencode(id)),
+            Some(&body),
+        )
+        .await?,
+    )
+    .await
+}
+
+/// Issues a new webhook address, and stops the old one working.
+pub async fn rotate_webhook(id: &str) -> Result<Workflow, ApiError> {
+    json_response(
+        send(
+            Verb::Post,
+            &format!("/workflows/{}/rotate-webhook", urlencode(id)),
+            None::<&()>,
+        )
+        .await?,
+    )
+    .await
+}
+
+/// Removes a workflow.
+pub async fn delete_workflow(id: &str) -> Result<(), ApiError> {
+    delete(&format!("/workflows/{}", urlencode(id))).await
+}
+
+/// The choices a picker should offer, fetched through a linked account.
+pub async fn list_connection_options(
+    connection: &str,
+    source: &str,
+    parent: Option<&str>,
+) -> Result<Vec<OptionItem>, ApiError> {
+    let mut url = format!(
+        "/connections/{}/options/{}",
+        urlencode(connection),
+        urlencode(source)
+    );
+    if let Some(parent) = parent {
+        url.push_str(&format!("?parent={}", urlencode(parent)));
+    }
+
+    get_json(&url).await
+}
+
+/// Reads a JSON body, turning a refusal into the message it carries.
+async fn json_response<T: serde::de::DeserializeOwned>(
+    response: gloo_net::http::Response,
+) -> Result<T, ApiError> {
+    if !response.ok() {
+        return Err(error_from_response(response).await);
+    }
+
+    response
+        .json::<T>()
+        .await
+        .map_err(|err| ApiError::Server(err.to_string()))
 }
 
 /// Lists the integrations configured on the agent.
