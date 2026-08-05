@@ -9,6 +9,9 @@ use crate::{
 
 #[derive(Clone, Serialize, Deserialize, Default)]
 pub struct GitHubNotificationsCleanupConfig {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub connection: Option<automate_api::ConnectionId>,
+
     #[serde(default)]
     pub filter: Filter,
 }
@@ -23,6 +26,73 @@ impl Display for GitHubNotificationsCleanupConfig {
 pub struct GitHubNotificationsCleanupWorkflow;
 
 crate::register_job!(GitHubNotificationsCleanupWorkflow);
+crate::register_workflow_type!(GitHubNotificationsCleanupWorkflow);
+
+impl crate::workflows::ConfigurableWorkflow for GitHubNotificationsCleanupWorkflow {
+    type ConfigType = GitHubNotificationsCleanupConfig;
+
+    fn type_id() -> &'static str {
+        "github-notifications-cleanup"
+    }
+
+    fn describe(_config: &Self::ConfigType) -> String {
+        "GitHub notifications cleanup".to_string()
+    }
+
+    fn descriptor() -> automate_api::WorkflowTypeDescriptor {
+        use automate_api::{
+            ConnectionKind, FieldDescriptor, FieldKind, WorkflowTrigger, WorkflowTypeDescriptor,
+        };
+
+        WorkflowTypeDescriptor {
+            id: Self::type_id().to_string(),
+            name: "GitHub Notifications Cleanup".to_string(),
+            description: "Marks notifications done once their issue or pull request is closed."
+                .to_string(),
+            documentation: r#"## What this does
+
+Checks your GitHub notifications and marks threads done when their issue or pull
+request has been closed or merged. It uses the selected personal access token,
+so each user cleans up only their own notification inbox.
+
+The token needs the `notifications` scope and access to any private repositories
+whose notification subjects should be checked.
+"#
+            .to_string(),
+            trigger: WorkflowTrigger::Cron {
+                default_schedule: "@hourly".to_string(),
+            },
+            fields: vec![
+                FieldDescriptor::new(
+                    crate::config_path!(GitHubNotificationsCleanupConfig: connection),
+                    "GitHub account",
+                    FieldKind::Connection {
+                        provider: crate::integrations::github_app::GITHUB_PROVIDER.to_string(),
+                        connection_kind: Some(ConnectionKind::ApiKey),
+                    },
+                )
+                .with_help("Which GitHub personal access token owns the notifications to clean up.")
+                .required(),
+                FieldDescriptor::new(
+                    crate::config_path!(GitHubNotificationsCleanupConfig: filter),
+                    "Filter",
+                    FieldKind::Filter {
+                        fields: vec![
+                            "reason".into(),
+                            "repository.name".into(),
+                            "repository.full_name".into(),
+                            "repository.owner".into(),
+                            "subject.title".into(),
+                            "subject.type".into(),
+                            "unread".into(),
+                        ],
+                    },
+                )
+                .with_help("Only clean up notifications matching this expression."),
+            ],
+        }
+    }
+}
 
 impl Job for GitHubNotificationsCleanupWorkflow {
     type JobType = GitHubNotificationsCleanupConfig;
@@ -38,30 +108,25 @@ impl Job for GitHubNotificationsCleanupWorkflow {
         chrono::TimeDelta::hours(1)
     }
 
-    #[instrument(
-        "workflow.github_notifications_cleanup.setup",
-        skip(self, services),
-        err(Display)
-    )]
-    async fn setup(
-        &self,
-        services: impl Services + Send + Sync + 'static,
-    ) -> Result<(), human_errors::Error> {
-        let config = services.config();
-        CronJob::schedule(
-            std::slice::from_ref(&config.workflows.github_notifications_cleanup),
-            services,
-        )
-        .await
-    }
-
     async fn handle(
         &self,
         ctx: JobContext<impl Services + Send + Sync + 'static>,
         job: &Self::JobType,
     ) -> Result<(), human_errors::Error> {
         let services = ctx.services();
-        let collector = GitHubNotificationsCollector::new();
+        let connection = job.connection.ok_or_else(|| {
+            human_errors::user(
+                "This GitHub notifications cleanup workflow has no GitHub account selected.",
+                &["Edit the workflow and select a GitHub personal access token connection."],
+            )
+        })?;
+        let api_key = crate::connections::resolve_api_key(
+            connection,
+            crate::integrations::github_app::GITHUB_PROVIDER,
+            services,
+        )
+        .await?;
+        let collector = GitHubNotificationsCollector::with_api_key(api_key);
 
         let (notifications, _) = collector.fetch_since(None, services).await?;
 
@@ -80,5 +145,34 @@ impl Job for GitHubNotificationsCleanupWorkflow {
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::workflows::ConfigurableWorkflow;
+
+    #[test]
+    fn cleanup_is_a_scheduled_workflow_requiring_a_github_pat() {
+        let descriptor = GitHubNotificationsCleanupWorkflow::descriptor();
+        assert!(matches!(
+            descriptor.trigger,
+            automate_api::WorkflowTrigger::Cron { .. }
+        ));
+
+        let connection = descriptor
+            .fields
+            .iter()
+            .find(|field| field.name == "connection")
+            .unwrap();
+        assert!(connection.required);
+        assert!(matches!(
+            &connection.kind,
+            automate_api::FieldKind::Connection {
+                provider,
+                connection_kind: Some(automate_api::ConnectionKind::ApiKey),
+            } if provider == crate::integrations::github_app::GITHUB_PROVIDER
+        ));
     }
 }

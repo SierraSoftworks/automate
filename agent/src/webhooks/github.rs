@@ -301,6 +301,7 @@ impl crate::workflows::ConfigurableWorkflow for GitHubWebhook {
                     "GitHub installation",
                     FieldKind::Connection {
                         provider: crate::integrations::github_app::GITHUB_PROVIDER.to_string(),
+                        connection_kind: Some(automate_api::ConnectionKind::GitHubApp),
                     },
                 )
                 .with_help(

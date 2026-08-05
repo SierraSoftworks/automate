@@ -485,6 +485,48 @@ impl<S: Services> ConnectionStore<S> {
     }
 }
 
+/// Opens the API key held by one selected connection.
+///
+/// Workflows carry connection identifiers rather than credentials. Resolving
+/// through services scoped to the workflow's tenant ensures that an identifier
+/// from another account cannot be used even if it happens to exist there.
+pub async fn resolve_api_key(
+    id: ConnectionId,
+    provider: &str,
+    services: &(impl Services + Send + Sync + 'static),
+) -> Result<String, human_errors::Error> {
+    let store = ConnectionStore::for_services(services);
+    let Some(connection) = store.get(id).await? else {
+        return Err(human_errors::user(
+            format!("The selected {provider} connection ('{id}') no longer exists."),
+            &["Link the account again, or select another connection for this workflow."],
+        ));
+    };
+
+    if connection.provider != provider {
+        return Err(human_errors::user(
+            format!("The selected connection is not a {provider} connection."),
+            &["Select a connection for the service this workflow uses."],
+        ));
+    }
+
+    if !connection.status.is_usable() {
+        return Err(human_errors::user(
+            format!("The selected {provider} connection needs attention before it can be used."),
+            &["Open Connections and repair or replace its credential."],
+        ));
+    }
+
+    let ConnectionSecret::ApiKey { key } = store.open(&connection)? else {
+        return Err(human_errors::user(
+            format!("The selected {provider} connection does not contain an API key."),
+            &["Select a personal access token connection instead."],
+        ));
+    };
+
+    Ok(key)
+}
+
 /// Moves credentials out of the configuration file and into connections.
 ///
 /// An installation configured before connections existed keeps its Todoist key
@@ -501,30 +543,67 @@ pub async fn import_configured_credentials<S: Services>(
 ) -> Result<usize, human_errors::Error> {
     let config = services.config();
     let store = ConnectionStore::new(services, tenant.clone());
+    let mut imported = 0;
 
-    let Some(api_key) = config
+    if let Some(api_key) = config
         .connections
         .todoist
         .api_key
         .as_deref()
         .map(str::trim)
         .filter(|key| !key.is_empty())
-    else {
-        return Ok(0);
-    };
+    {
+        imported += import_api_key(
+            &store,
+            crate::publishers::TODOIST_PROVIDER,
+            "Todoist",
+            api_key,
+            &tenant,
+        )
+        .await?;
+    }
 
-    if !store
-        .list_for_provider(crate::publishers::TODOIST_PROVIDER)
+    if let Some(api_key) = config
+        .connections
+        .github
+        .api_key
+        .as_deref()
+        .map(str::trim)
+        .filter(|key| !key.is_empty())
+    {
+        imported += import_api_key(
+            &store,
+            crate::integrations::github_app::GITHUB_PROVIDER,
+            "GitHub",
+            api_key,
+            &tenant,
+        )
+        .await?;
+    }
+
+    Ok(imported)
+}
+
+async fn import_api_key<S: Services>(
+    store: &ConnectionStore<S>,
+    provider: &str,
+    name: &str,
+    api_key: &str,
+    tenant: &TenantId,
+) -> Result<usize, human_errors::Error> {
+    if store
+        .list_for_provider(provider)
         .await?
-        .is_empty()
+        .iter()
+        .any(|connection| connection.kind == ConnectionKind::ApiKey)
     {
         return Ok(0);
     }
 
     let connection = store
         .create(
-            crate::publishers::TODOIST_PROVIDER,
-            "Todoist",
+            provider,
+            name,
             None,
             ConnectionSecret::ApiKey {
                 key: api_key.to_string(),
@@ -535,8 +614,7 @@ pub async fn import_configured_credentials<S: Services>(
     warn!(
         connection.id = %connection.id,
         user.account = %tenant,
-        "Imported the Todoist API key from your configuration file into a connection. \
-         You can now remove [connections.todoist] from config.toml."
+        "Imported the {name} API key from your configuration file into a connection."
     );
 
     Ok(1)
@@ -595,6 +673,33 @@ mod tests {
             ConnectionSecret::ApiKey { key } => assert_eq!(key, "tok"),
             other => panic!("expected an api key, got {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn resolving_a_pat_rejects_an_app_connection_from_the_same_provider() {
+        let context = AppContext::new_mock(|_| {}).await.unwrap();
+        let services = context.tenant(alice());
+        let connection = ConnectionStore::for_services(&services)
+            .create(
+                crate::integrations::github_app::GITHUB_PROVIDER,
+                "Example Org",
+                Some("example".into()),
+                ConnectionSecret::GitHubApp {
+                    installation_id: 42,
+                },
+            )
+            .await
+            .unwrap();
+
+        let error = resolve_api_key(
+            connection.id,
+            crate::integrations::github_app::GITHUB_PROVIDER,
+            &services,
+        )
+        .await
+        .unwrap_err();
+
+        assert!(error.to_string().contains("does not contain an API key"));
     }
 
     #[tokio::test]
@@ -996,6 +1101,49 @@ mod tests {
             0
         );
         assert_eq!(store.list_for_provider("todoist").await.unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_configured_github_pat_is_imported_beside_app_installations() {
+        let context = AppContext::new_mock(|config| {
+            config.connections.github.api_key = Some("legacy-github-pat".into());
+        })
+        .await
+        .unwrap();
+        let services = context.tenant(alice());
+        let store = ConnectionStore::new(services.clone(), alice());
+        store
+            .create(
+                crate::integrations::github_app::GITHUB_PROVIDER,
+                "Example Org",
+                Some("example".into()),
+                ConnectionSecret::GitHubApp {
+                    installation_id: 42,
+                },
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            import_configured_credentials(services, alice())
+                .await
+                .unwrap(),
+            1
+        );
+
+        let connections = store
+            .list_for_provider(crate::integrations::github_app::GITHUB_PROVIDER)
+            .await
+            .unwrap();
+        assert_eq!(connections.len(), 2);
+        let pat = connections
+            .iter()
+            .find(|connection| connection.kind == ConnectionKind::ApiKey)
+            .unwrap();
+        assert!(matches!(
+            store.open(pat).unwrap(),
+            ConnectionSecret::ApiKey { key } if key == "legacy-github-pat"
+        ));
     }
 
     #[tokio::test]

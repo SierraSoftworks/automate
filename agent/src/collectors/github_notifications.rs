@@ -10,12 +10,21 @@ use super::{Collector, IncrementalCollector};
 
 pub struct GitHubNotificationsCollector {
     api_url: String,
+    api_key: Option<String>,
 }
 
 impl GitHubNotificationsCollector {
     pub fn new() -> Self {
         Self {
             api_url: "https://api.github.com".into(),
+            api_key: None,
+        }
+    }
+
+    pub fn with_api_key(api_key: impl Into<String>) -> Self {
+        Self {
+            api_url: "https://api.github.com".into(),
+            api_key: Some(api_key.into()),
         }
     }
 
@@ -23,6 +32,7 @@ impl GitHubNotificationsCollector {
     pub fn new_with_url(url: impl ToString) -> Self {
         Self {
             api_url: url.to_string(),
+            api_key: None,
         }
     }
 
@@ -146,7 +156,11 @@ impl GitHubNotificationsCollector {
             .header("X-GitHub-Api-Version", "2022-11-28")
             .header("Accept", "application/vnd.github+json");
 
-        if let Some(api_key) = services.config().connections.github.api_key.as_ref() {
+        if let Some(api_key) =
+            self.api_key
+                .as_ref()
+                .or(services.config().connections.github.api_key.as_ref())
+        {
             request = request.bearer_auth(api_key);
         }
 

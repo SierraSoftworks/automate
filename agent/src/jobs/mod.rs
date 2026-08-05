@@ -28,7 +28,7 @@ pub use github_auto_merge::{
 pub use github_notifications::GitHubNotificationsWorkflow;
 pub use github_notifications_cleanup::GitHubNotificationsCleanupWorkflow;
 pub use github_notifications_refresh::GitHubNotificationsRefreshWorkflow;
-pub use github_releases::GitHubReleasesWorkflow;
+pub use github_releases::{GitHubReleasesConfig, GitHubReleasesWorkflow};
 pub use oauth_reauthorization::{
     OAuth2ReauthorizationRequiredConfig, OAuth2ReauthorizationRequiredWorkflow,
 };

@@ -1,10 +1,3 @@
-[connections.github]
-# A *classic* personal access token, with the `notifications` scope (and `repo`
-# to see private repositories' subjects). This cannot be replaced by the App
-# below: GitHub's notifications API accepts classic tokens only, and the releases
-# workflow reads repositories no installation of yours covers.
-api_key = "${{ env.GITHUB_API_KEY }}"
-
 # A GitHub App, used for management calls (enabling auto-merge, approving pull
 # requests) so those writes are attributed to the App and scoped to whatever
 # repositories each installation grants, rather than to your whole account.
@@ -21,6 +14,8 @@ api_key = "${{ env.GITHUB_API_KEY }}"
 # This claims the integration id `github`, which shares a namespace with the
 # `[oauth2.*]` provider keys — an `[oauth2.github]` provider alongside this one
 # is refused at start-up rather than resolved arbitrarily.
+# GitHub personal access tokens are linked per user from the Connections page;
+# notification and release workflows select one of those connections.
 #
 # Point the App's webhook at https://your-automate-host/webhooks/github and use
 # the same secret there and in webhook_secret below.
@@ -175,12 +170,6 @@ todoist = { project = "Life", section = "Plans" }
 # missed or undelivered events; without it, drop the interval back to "*/15 * * * *".
 cron = "0 * * * *"
 todoist = { project = "Hobbies", section = "Open Source" }
-
-[[workflows.github_releases]]
-repository = "hashicorp/vault"
-cron = "0 */8 * * *"
-filter = "!prerelease && !draft"
-todoist = { project = "Hobbies", section = "Software" }
 
 [[workflows.rss]]
 name = "Citation Needed"

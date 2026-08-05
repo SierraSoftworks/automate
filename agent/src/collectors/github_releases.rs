@@ -29,6 +29,7 @@ pub struct GitHubReleasesWatermark {
 pub struct GitHubReleasesCollector {
     api_url: String,
     repo: String,
+    api_key: Option<String>,
 }
 
 #[allow(dead_code)]
@@ -64,10 +65,11 @@ impl Filterable for GitHubReleaseItem {
 }
 
 impl GitHubReleasesCollector {
-    pub fn new(repo: impl ToString) -> Self {
+    pub fn with_api_key(repo: impl ToString, api_key: impl Into<String>) -> Self {
         Self {
             api_url: "https://api.github.com".into(),
             repo: repo.to_string(),
+            api_key: Some(api_key.into()),
         }
     }
 
@@ -76,6 +78,20 @@ impl GitHubReleasesCollector {
         Self {
             api_url: url.to_string(),
             repo: repo.to_string(),
+            api_key: None,
+        }
+    }
+
+    #[cfg(test)]
+    fn new_with_url_and_api_key(
+        url: impl ToString,
+        repo: impl ToString,
+        api_key: impl Into<String>,
+    ) -> Self {
+        Self {
+            api_url: url.to_string(),
+            repo: repo.to_string(),
+            api_key: Some(api_key.into()),
         }
     }
 }
@@ -123,7 +139,7 @@ impl IncrementalCollector for GitHubReleasesCollector {
             .get(format!("{}/repos/{}/releases", self.api_url, self.repo))
             .header("X-GitHub-Api-Version", "2022-11-28");
 
-        if let Some(api_key) = services.config().connections.github.api_key.as_ref() {
+        if let Some(api_key) = self.api_key.as_ref() {
             request = request.bearer_auth(api_key);
         }
 
@@ -295,6 +311,30 @@ mod tests {
                 .unwrap()
                 .with_timezone(&Utc)
         );
+    }
+
+    #[tokio::test]
+    async fn selected_pat_authenticates_release_requests() {
+        let mock_server = MockServer::start().await;
+        let test_data = crate::testing::get_test_file_contents("github_releases.json");
+
+        Mock::given(method("GET"))
+            .and(path("/repos/example/repo/releases"))
+            .and(header("Authorization", "Bearer selected-github-pat"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(test_data))
+            .expect(1)
+            .mount(&mock_server)
+            .await;
+
+        let collector = GitHubReleasesCollector::new_with_url_and_api_key(
+            mock_server.uri(),
+            "example/repo",
+            "selected-github-pat",
+        );
+        collector
+            .fetch_since(None, &mock_services().await.unwrap())
+            .await
+            .unwrap();
     }
 
     #[tokio::test]

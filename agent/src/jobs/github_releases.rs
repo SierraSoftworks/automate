@@ -10,6 +10,9 @@ use crate::{collectors::GitHubReleasesCollector, filter::Filter, publishers::Tod
 pub struct GitHubReleasesConfig {
     pub repository: String,
 
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub connection: Option<automate_api::ConnectionId>,
+
     #[serde(default)]
     pub filter: Filter,
 
@@ -44,11 +47,10 @@ the burst happens once.
 `SierraSoftworks/automate` for `https://github.com/SierraSoftworks/automate`.
 Not the full URL, and not a display name.
 
-Only repositories the agent can read are usable. A public repository needs
-nothing further; a private one needs a GitHub API token configured on the
-installation as `connections.github.api_key`, and will otherwise fail every run
-with a not-found error, which is what GitHub returns rather than admitting the
-repository exists.
+The selected GitHub personal access token authenticates every poll, avoiding the
+much smaller anonymous API rate limit. It also determines which private
+repositories can be read; GitHub reports an inaccessible private repository as
+not found rather than admitting that it exists.
 
 This is a poll, not a subscription: no webhook is set up on the repository and
 nothing is written to it, so you do not need any access beyond reading.
@@ -92,7 +94,9 @@ impl crate::workflows::ConfigurableWorkflow for GitHubReleasesWorkflow {
     }
 
     fn descriptor() -> automate_api::WorkflowTypeDescriptor {
-        use automate_api::{FieldDescriptor, FieldKind, WorkflowTrigger, WorkflowTypeDescriptor};
+        use automate_api::{
+            ConnectionKind, FieldDescriptor, FieldKind, WorkflowTrigger, WorkflowTypeDescriptor,
+        };
 
         WorkflowTypeDescriptor {
             id: <Self as crate::workflows::ConfigurableWorkflow>::type_id().to_string(),
@@ -111,6 +115,16 @@ impl crate::workflows::ConfigurableWorkflow for GitHubReleasesWorkflow {
                     },
                 )
                 .with_help("The repository to watch, as owner/name.")
+                .required(),
+                FieldDescriptor::new(
+                    crate::config_path!(GitHubReleasesConfig: connection),
+                    "GitHub account",
+                    FieldKind::Connection {
+                        provider: crate::integrations::github_app::GITHUB_PROVIDER.to_string(),
+                        connection_kind: Some(ConnectionKind::ApiKey),
+                    },
+                )
+                .with_help("Which GitHub personal access token is used to poll for releases.")
                 .required(),
                 FieldDescriptor::new(
                     crate::config_path!(GitHubReleasesConfig: filter),
@@ -159,7 +173,19 @@ impl Job for GitHubReleasesWorkflow {
         job: &Self::JobType,
     ) -> Result<(), human_errors::Error> {
         let services = ctx.services();
-        let collector = GitHubReleasesCollector::new(&job.repository);
+        let connection = job.connection.ok_or_else(|| {
+            human_errors::user(
+                "This GitHub Releases workflow has no GitHub account selected.",
+                &["Edit the workflow and select a GitHub personal access token connection."],
+            )
+        })?;
+        let api_key = crate::connections::resolve_api_key(
+            connection,
+            crate::integrations::github_app::GITHUB_PROVIDER,
+            services,
+        )
+        .await?;
+        let collector = GitHubReleasesCollector::with_api_key(&job.repository, api_key);
 
         let items = collector.list(services).await?;
 
@@ -195,5 +221,30 @@ impl Job for GitHubReleasesWorkflow {
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::workflows::ConfigurableWorkflow;
+
+    #[test]
+    fn releases_require_a_github_pat_connection() {
+        let descriptor = GitHubReleasesWorkflow::descriptor();
+        let connection = descriptor
+            .fields
+            .iter()
+            .find(|field| field.name == "connection")
+            .unwrap();
+
+        assert!(connection.required);
+        assert!(matches!(
+            &connection.kind,
+            automate_api::FieldKind::Connection {
+                provider,
+                connection_kind: Some(automate_api::ConnectionKind::ApiKey),
+            } if provider == crate::integrations::github_app::GITHUB_PROVIDER
+        ));
     }
 }

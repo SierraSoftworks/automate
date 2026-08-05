@@ -388,6 +388,7 @@ macro_rules! todoist_target_fields {
             "Todoist account",
             automate_api::FieldKind::Connection {
                 provider: $crate::publishers::TODOIST_PROVIDER.to_string(),
+                connection_kind: Some(automate_api::ConnectionKind::ApiKey),
             },
         )
         .with_help("Which linked account the tasks are created in.")

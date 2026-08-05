@@ -585,6 +585,7 @@ mod tests {
             "rss",
             "calendar",
             "youtube",
+            "github-notifications-cleanup",
             "github-releases",
             "xkcd",
             "ynab-stocks",
@@ -602,11 +603,7 @@ mod tests {
         // records the other workflows leave behind get tidied up. Offering them
         // would invite somebody to configure away their own housekeeping, and
         // there is nothing about them a person would sensibly choose.
-        for internal in [
-            "todoist-cleanup",
-            "github-notifications-cleanup",
-            "github-notifications",
-        ] {
+        for internal in ["todoist-cleanup", "github-notifications"] {
             assert!(
                 !registry().contains_key(internal),
                 "'{internal}' is the installation's own work and should not be offered as a workflow",

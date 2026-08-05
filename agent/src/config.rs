@@ -326,8 +326,11 @@ pub struct WorkflowConfigs {
     pub calendars: Vec<CronJobConfig<CalendarWorkflow>>,
     #[serde(default)]
     pub github_notifications: Vec<CronJobConfig<GitHubNotificationsWorkflow>>,
-    #[serde(default)]
-    pub github_notifications_cleanup: CronJobConfig<GitHubNotificationsCleanupWorkflow>,
+    /// Read only so installations upgrading from the core-scheduled cleanup
+    /// job can move it into a user-owned workflow once.
+    #[serde(default, rename = "github_notifications_cleanup")]
+    pub(crate) legacy_github_notifications_cleanup:
+        CronJobConfig<GitHubNotificationsCleanupWorkflow>,
     #[serde(default)]
     pub github_releases: Vec<CronJobConfig<GitHubReleasesWorkflow>>,
     #[serde(default)]
