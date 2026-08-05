@@ -30,6 +30,51 @@ async function openTodoistConnection(page: import("@playwright/test").Page) {
   return form;
 }
 
+test("credential and account setup methods share one menu", async ({ page }) => {
+  await gotoApp(page, "/admin/connections?demo");
+
+  const toolbar = page.locator(".page-toolbar");
+  const add = toolbar.getByRole("button", { name: "Add Connection" });
+  await expect(add).toHaveCount(1);
+  await expect(toolbar.getByRole("button", { name: "Connect", exact: true })).toHaveCount(0);
+
+  await add.click();
+  await expect(page.locator(".menu-button__section")).toHaveText([
+    "API keys",
+    "Authorized accounts",
+  ]);
+  await expect(page.getByRole("menuitem")).toHaveText([
+    "Todoist",
+    "GitHub",
+    "YNAB",
+    "GitHub",
+    "Spotify",
+  ]);
+
+  await page.getByRole("menuitem", { name: "Spotify" }).click();
+  await expect(toolbar.getByRole("status")).toContainText(
+    "Some connection methods unavailable",
+  );
+});
+
+test("provider and account type appear beside connection names", async ({ page }) => {
+  await gotoApp(page, "/admin/connections?demo");
+
+  const organization = page.locator(".connection").filter({ hasText: "SierraSoftworks" });
+  await expect(organization.locator(".connection__provider")).toHaveText("github/");
+  await expect(organization.locator(".connection__title .connection__name")).toHaveText(
+    "SierraSoftworks",
+  );
+  await expect(organization.locator(".connection__account-type")).toHaveText("Organization");
+  await expect(organization.locator(".connection__meta")).toHaveText(
+    /^app installation · linked /,
+  );
+
+  const personal = page.locator(".connection").filter({ hasText: "Personal" });
+  await expect(personal.locator(".connection__provider")).toHaveText("todoist/");
+  await expect(personal.locator(".connection__account-type")).toHaveCount(0);
+});
+
 test("a service linked with a pasted token appears in the list and can be unlinked again", async ({
   page,
 }) => {

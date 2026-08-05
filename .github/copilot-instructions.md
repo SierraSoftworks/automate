@@ -93,6 +93,18 @@ cargo test
 cargo test --no-fail-fast
 ```
 
+**Required after any UI change (the build order matters):**
+```bash
+cd ui && trunk build
+cd .. && cargo build -p automate
+cd e2e && npm test
+```
+
+The agent embeds `ui/dist` at compile time, so build the UI before the agent.
+Focused Playwright specs are useful while iterating, but they do not replace the
+full E2E suite before completing a UI change. See `e2e/README.md` for setup and
+troubleshooting.
+
 **Run tests with coverage:**
 ```bash
 RUSTFLAGS="-Cinstrument-coverage" cargo test --no-fail-fast
@@ -175,6 +187,7 @@ All code changes must meet the following criteria:
 2. **Testing:**
    - New features must include appropriate tests
    - All tests must pass (`cargo test`)
+   - UI changes must rebuild the UI and agent, then pass the full Playwright suite (`cd e2e && npm test`)
    - Maintain or improve code coverage
 
 3. **Security:**

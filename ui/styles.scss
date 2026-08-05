@@ -599,6 +599,16 @@ pre {
     }
   }
 
+  &__section {
+    display: block;
+    margin: 0.25rem 0.6rem 0.15rem;
+    color: $text-secondary;
+    font-size: 0.68rem;
+    font-weight: 600;
+    line-height: 1.2;
+    text-transform: uppercase;
+  }
+
 }
 
 // Shown in place of ConnectMenu when integrations could not be fetched.
@@ -1300,13 +1310,41 @@ footer {
     gap: 0.15rem;
   }
 
+  &__title {
+    display: flex;
+    align-items: baseline;
+    gap: 0.5rem;
+    min-width: 0;
+  }
+
+  &__identity {
+    display: flex;
+    align-items: baseline;
+    min-width: 0;
+  }
+
+  &__provider {
+    flex: none;
+    color: $text-placeholder;
+    font-size: 0.9375rem;
+    font-weight: 600;
+  }
+
   &__name {
+    min-width: 0;
     font-weight: 600;
     font-size: 0.9375rem;
     color: $text-primary;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+
+  &__account-type {
+    flex: none;
+    color: $text-placeholder;
+    font-size: 0.8125rem;
+    font-weight: 500;
   }
 
   &__meta {

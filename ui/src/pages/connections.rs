@@ -10,7 +10,7 @@ use yew::prelude::*;
 
 use crate::api;
 use crate::components::{
-    Alert, AlertKind, Button, ButtonGroup, ButtonKind, Field, MenuButton, MenuButtonOption,
+    Alert, AlertKind, Button, ButtonGroup, ButtonKind, ConnectMenu, Field, MenuButtonOption,
     PageActions, TextInput,
 };
 use crate::search::{MatchContext, SearchContext};
@@ -93,17 +93,21 @@ pub fn connections() -> Html {
         let page_actions = page_actions.clone();
         let provider_options = provider_options.clone();
         let on_provider = on_provider.clone();
+        let onstarted = on_changed.clone();
         let disabled = connections.is_none() || chosen.is_some();
         use_effect_with(disabled, move |_| {
             if let Some(actions) = &page_actions {
                 actions.set(html! {
                     <div class="page-title__actions">
-                        <MenuButton
+                        <ConnectMenu
                             label="Add Connection"
-                            options={provider_options}
-                            onselect={on_provider}
+                            credential_options={provider_options}
+                            oncredential={on_provider}
+                            onstarted={onstarted}
                             kind={ButtonKind::Primary}
                             {disabled}
+                            small={false}
+                            title="Add a connection"
                         />
                     </div>
                 });
@@ -426,10 +430,16 @@ fn connection_row(props: &ConnectionRowProps) -> Html {
     html! {
         <div class="connection">
             <div class="connection__detail">
-                <span class="connection__name">{ &connection.name }</span>
+                <div class="connection__title">
+                    <span class="connection__identity">
+                        <span class="connection__provider">{ &connection.provider }{ "/" }</span>
+                        <span class="connection__name">{ &connection.name }</span>
+                    </span>
+                    if let Some(account_type) = account_type(&connection) {
+                        <span class="connection__account-type">{ account_type }</span>
+                    }
+                </div>
                 <span class="connection__meta">
-                    { &connection.provider }
-                    { " · " }
                     { kind_label(connection.kind) }
                     { " · linked " }
                     { short_relative(connection.created_at) }
@@ -624,4 +634,12 @@ fn kind_label(kind: ConnectionKind) -> &'static str {
         ConnectionKind::ApiKey => "token",
         ConnectionKind::GitHubApp => "app installation",
     }
+}
+
+fn account_type(connection: &ConnectionSummary) -> Option<&str> {
+    connection
+        .metadata
+        .get("account_type")
+        .and_then(|value| value.as_str())
+        .filter(|value| !value.trim().is_empty())
 }

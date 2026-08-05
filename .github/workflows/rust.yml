@@ -147,11 +147,24 @@ jobs:
       - name: Setup Cache
         uses: Swatinem/rust-cache@v2
 
-      - name: Build UI
+      # E2E specs use `?demo` for deterministic integration fixtures. Demo mode
+      # is deliberately compiled out of release bundles, so preserve a debug
+      # bundle for that job before producing the release artifact below.
+      - name: Build UI for E2E
+        working-directory: ui
+        run: trunk build
+
+      - name: Upload E2E UI artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: ui-dist-e2e
+          path: ui/dist
+
+      - name: Build release UI
         working-directory: ui
         run: trunk build --release
 
-      - name: Upload UI artifacts
+      - name: Upload release UI artifacts
         uses: actions/upload-artifact@v7
         with:
           name: ui-dist
@@ -184,14 +197,13 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y protobuf-compiler
 
-      # The UI is embedded into the agent by `include_dir!` at compile time, so
-      # the bundle has to be in place *before* the agent is built. An agent built
-      # against an empty `ui/dist` compiles happily and then answers `GET /` with
-      # a 500, which the suite's smoke test asserts against.
-      - name: Fetch UI bundle
+      # The UI is embedded into the agent by `include_dir!` at compile time. E2E
+      # uses the debug bundle because several specs rely on deterministic `?demo`
+      # fixtures, which are deliberately absent from production release builds.
+      - name: Fetch E2E UI bundle
         uses: actions/download-artifact@v8
         with:
-          name: ui-dist
+          name: ui-dist-e2e
           path: ui/dist
 
       - name: cargo build
