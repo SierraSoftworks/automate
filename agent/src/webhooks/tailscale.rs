@@ -1,24 +1,39 @@
-use chrono::{DateTime, Utc};
-use hmac::{Hmac, KeyInit, Mac};
-use serde::Deserialize;
-use sha2::Sha256;
+use std::fmt::Display;
+
+use chrono::DateTime;
+use serde::{Deserialize, Serialize};
 
 use crate::{
     prelude::*,
     publishers::{TodoistCreateTask, TodoistCreateTaskPayload, TodoistDueDate},
 };
 
-type HmacSha256 = Hmac<Sha256>;
-
-#[derive(Clone, Deserialize, Default)]
+/// What one person asked us to do with the events their tailnet reports.
+///
+/// There is deliberately no shared secret here, and no signature check.
+/// Tailscale's HMAC used to be the only thing standing between this endpoint
+/// and anybody who knew the installation's hostname, because the address itself
+/// was public knowledge — one `/webhooks/tailscale` for the whole installation.
+/// A workflow now has its own unguessable address which nothing else can be
+/// reached at and which its owner can rotate, so the secret would be a second
+/// thing to configure that proves nothing the address has not already proven.
+#[derive(Clone, Default, Serialize, Deserialize)]
 pub struct TailscaleWebhookConfig {
-    pub secret: String,
+    /// What to call this workflow, so it can be told apart from the others in a
+    /// list of them.
+    pub name: String,
 
     #[serde(default)]
     pub filter: crate::filter::Filter,
 
     #[serde(default = "default_todoist_config")]
     pub todoist: crate::publishers::TodoistTarget,
+}
+
+impl Display for TailscaleWebhookConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "tailscale/{}", self.name)
+    }
 }
 
 fn default_todoist_config() -> crate::publishers::TodoistTarget {
@@ -32,114 +47,67 @@ fn default_todoist_config() -> crate::publishers::TodoistTarget {
 #[derive(Clone)]
 pub struct TailscaleWebhook;
 
-impl TailscaleWebhook {
-    fn parse_signature(
-        header: &str,
-    ) -> Result<(chrono::DateTime<Utc>, Vec<u8>), human_errors::Error> {
-        let mut timestamp = None;
-        let mut signature = None;
+crate::register_job!(TailscaleWebhook);
+crate::register_workflow_type!(TailscaleWebhook);
 
-        for (key, value) in header.split(',').filter_map(|s| s.split_once('=')) {
-            match key {
-                "t" => timestamp = Some(value),
-                "v1" => signature = Some(value),
-                _ => {} // Ignore unknown fields
-            }
-        }
+impl crate::workflows::ConfigurableWorkflow for TailscaleWebhook {
+    type ConfigType = TailscaleWebhookConfig;
 
-        match (timestamp, signature) {
-            (Some(timestamp), Some(signature)) => {
-                let timestamp = timestamp.parse().ok()
-                    .and_then(|ts| chrono::DateTime::from_timestamp(ts, 0))
-                    .ok_or_else(|| human_errors::user(
-                        "The timestamp in the Tailscale-Webhook-Signature header is invalid.",
-                        &[
-                            "Ensure that you are only sending Tailscale webhooks to this endpoint.",
-                            "Check that the webhook is configured correctly at https://login.tailscale.com/admin/settings/webhooks"
-                        ]
-                    ))?;
-
-                let signature = hex::decode(signature).or_user_err(&[
-                    "The signature in the Tailscale-Webhook-Signature header is not valid hex.",
-                    "Ensure that you are only sending Tailscale webhooks to this endpoint.",
-                    "Check that the webhook is configured correctly at https://login.tailscale.com/admin/settings/webhooks"
-                ])?;
-
-                Ok((timestamp, signature))
-            }
-            _ => Err(human_errors::user(
-                "The X-Tailscale-Webhook-Signature header did not contain a valid signature.",
-                &[
-                    "Ensure that you are only sending Tailscale webhooks to this endpoint.",
-                    "Check that the webhook is configured correctly at https://login.tailscale.com/admin/settings/webhooks",
-                ],
-            )),
-        }
+    fn type_id() -> &'static str {
+        "tailscale"
     }
 
-    /// Verifies the Tailscale webhook signature.
-    ///
-    /// According to https://tailscale.com/kb/1213/webhooks#verifying-an-event-signature,
-    /// Tailscale signs webhooks using HMAC-SHA256 with the webhook secret, and includes
-    /// the signature in the Tailscale-Webhook-Signature header in the format:
-    /// `t=<timestamp>,v1=<hex_signature>`
-    ///
-    /// The `now` parameter is the point in time against which the signature
-    /// timestamp is validated. This should be the time at which the request was
-    /// originally received (rather than the current time) so that retries of a
-    /// previously received request continue to validate successfully.
-    fn verify_signature(
-        secret: &str,
-        body: &str,
-        signature_header: &str,
-        now: DateTime<Utc>,
-    ) -> Result<(), human_errors::Error> {
-        let (timestamp, expected_signature) = Self::parse_signature(signature_header)?;
+    fn describe(config: &Self::ConfigType) -> String {
+        config.name.clone()
+    }
 
-        if (timestamp - now).abs() > chrono::Duration::minutes(5) {
-            return Err(human_errors::user(
-                format!(
-                    "The Tailscale webhook signature timestamp is too old or too far in the future (got {})",
-                    timestamp
+    fn descriptor() -> automate_api::WorkflowTypeDescriptor {
+        use automate_api::{FieldDescriptor, FieldKind, WorkflowTrigger, WorkflowTypeDescriptor};
+
+        WorkflowTypeDescriptor {
+            id: Self::type_id().to_string(),
+            name: "Tailscale".to_string(),
+            description: "Files a task when your tailnet reports something that needs a person."
+                .to_string(),
+            trigger: WorkflowTrigger::Webhook {
+                source: "tailscale".to_string(),
+            },
+            fields: [
+                FieldDescriptor::new(
+                    crate::config_path!(TailscaleWebhookConfig: name),
+                    "Name",
+                    FieldKind::Text {
+                        placeholder: Some("Tailnet alerts".into()),
+                    },
+                )
+                .with_help(
+                    "Used to label this workflow, so you can tell it apart from your others.",
+                )
+                .required(),
+                FieldDescriptor::new(
+                    crate::config_path!(TailscaleWebhookConfig: filter),
+                    "Filter",
+                    FieldKind::Filter {
+                        fields: vec!["type".into(), "tailnet".into(), "message".into()],
+                    },
+                )
+                .with_help(
+                    "Only file the events matching this, such as type == \"nodeNeedsApproval\". Leave it empty to file every event this webhook is subscribed to.",
                 ),
-                &[
-                    "Ensure that the system clock on this server is accurate.",
-                    "Check that the webhook is configured correctly at https://login.tailscale.com/admin/settings/webhooks",
-                ],
-            ));
+            ]
+            .into_iter()
+            .chain(crate::todoist_target_fields!(
+                TailscaleWebhookConfig,
+                project = Some("Life"),
+                section = Some("Tasks & Chores")
+            ))
+            .collect(),
         }
-
-        // Create the string to sign: <timestamp>.<body>
-        let string_to_sign = format!("{}.{}", timestamp.timestamp(), body);
-
-        // Create HMAC-SHA256 instance with the secret
-        let mut mac = HmacSha256::new_from_slice(secret.as_bytes())
-            .wrap_user_err(
-                "Failed to create HMAC instance with the provided secret.",
-                &[
-                    "Ensure that you have provided a valid webhooks.tailscale.secret in your configuration.",
-                    "Ensure that the configured webhooks.tailscale.secret matches that on https://login.tailscale.com/admin/settings/webhooks"
-                ]
-            )?;
-
-        // Compute the HMAC of the string to sign
-        mac.update(string_to_sign.as_bytes());
-
-        // Verify the signature
-        mac.verify_slice(&expected_signature)
-            .wrap_user_err(
-                "Webhook signature verification failed (signatures did not match).".to_string(),
-                &["Ensure that the configured webhooks.tailscale.secret matches that on https://login.tailscale.com/admin/settings/webhooks"]
-            )?;
-
-        Ok(())
     }
 }
 
-crate::register_job!(TailscaleWebhook);
-
 impl Job for TailscaleWebhook {
-    type JobType = super::WebhookEvent;
+    type JobType = crate::webhooks::WebhookDelivery;
 
     fn partition() -> &'static str {
         "webhooks/tailscale"
@@ -153,53 +121,18 @@ impl Job for TailscaleWebhook {
     ) -> Result<(), human_errors::Error> {
         let services = ctx.services();
 
-        // Validate the Tailscale webhook signature header
-        // https://tailscale.com/kb/1213/webhooks#verifying-an-event-signature
-        let secret = &services.config().webhooks.tailscale.secret;
-
-        if !secret.is_empty() {
-            // HTTP headers are case-insensitive, so we need to search for the header with case-insensitive comparison
-            let signature = job
-                .headers
-                .iter()
-                .find(|(key, _)| key.eq_ignore_ascii_case("tailscale-webhook-signature"))
-                .map(|(_, value)| value.as_str());
-
-            if let Some(signature) = signature {
-                // Validate the signature against the time the request was
-                // originally received (the message's scheduled time) so that
-                // retries of a previously received webhook continue to validate.
-                if let Err(err) =
-                    Self::verify_signature(secret, &job.body, signature, ctx.scheduled_at())
-                {
-                    warn!(
-                        "Failed to verify Tailscale webhook signature, rejecting request: {}",
-                        err
-                    );
-                    return Ok(());
-                }
-            } else {
-                warn!(
-                    "Received Tailscale webhook without signature, but secret is configured; rejecting request."
-                );
-                return Ok(());
-            }
-        } else {
-            debug!("No Tailscale webhook secret configured; skipping signature verification.");
-        }
+        // Read now rather than carried in the delivery, so that an edit made
+        // between the delivery arriving and this running is the one that applies.
+        let Some(config) = job.config::<TailscaleWebhookConfig>(services).await? else {
+            return Ok(());
+        };
 
         // Tailscale delivers webhook events as a JSON array, even when only a
         // single event is included. https://tailscale.com/kb/1213/webhooks
-        let events: Vec<TailscaleAlertEventPayload> = job.json()?;
+        let events: Vec<TailscaleAlertEventPayload> = job.event.json()?;
 
         for event in events {
-            if !services
-                .config()
-                .webhooks
-                .tailscale
-                .filter
-                .matches(&event)?
-            {
+            if !config.filter.matches(&event)? {
                 info!(
                     "Tailscale event '{}' did not match filter; ignoring.",
                     event._type
@@ -207,8 +140,8 @@ impl Job for TailscaleWebhook {
                 continue;
             }
 
-            let pretty_payload =
-                serde_json::to_string_pretty(&event.data).unwrap_or_else(|_| job.body.clone());
+            let pretty_payload = serde_json::to_string_pretty(&event.data)
+                .unwrap_or_else(|_| job.event.body.clone());
 
             TodoistCreateTask::dispatch(
                 TodoistCreateTaskPayload {
@@ -241,7 +174,7 @@ impl Job for TailscaleWebhook {
 
                         _ => 3,
                     }),
-                    config: services.config().webhooks.tailscale.todoist.clone(),
+                    config: config.todoist.clone(),
                     ..Default::default()
                 },
                 None,
@@ -279,189 +212,213 @@ impl Filterable for TailscaleAlertEventPayload {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::collections::HashMap;
 
-    /// Helper function to generate a valid signature for testing
-    /// Returns the signature in Tailscale format: t=<timestamp>,v1=<hex_signature>
-    fn generate_signature(secret: &str, timestamp: &str, body: &str) -> String {
-        let string_to_sign = format!("{}.{}", timestamp, body);
-        let mut mac = HmacSha256::new_from_slice(secret.as_bytes()).unwrap();
-        mac.update(string_to_sign.as_bytes());
-        let result = mac.finalize();
-        let hex_sig = hex::encode(result.into_bytes());
-        format!("t={},v1={}", timestamp, hex_sig)
+    use chrono::Utc;
+
+    use crate::{
+        webhooks::{WebhookDelivery, WebhookEvent},
+        workflow_store::{WorkflowDraft, WorkflowStore},
+    };
+
+    use super::*;
+
+    /// A delivery as Tailscale sends it: an array, even for a single event.
+    const POLICY_UPDATE: &str = r#"[{"timestamp":"2026-06-19T21:12:52.923385657Z","version":1,"type":"policyUpdate","tailnet":"example.org.github","message":"Tailnet policy file updated","data":{"url":"https://login.tailscale.com/admin/acls"}}]"#;
+
+    /// A configuration that files every event the tailnet reports.
+    fn config() -> serde_json::Value {
+        serde_json::json!({ "name": "Tailnet alerts" })
     }
 
-    #[test]
-    fn test_verify_signature_valid() {
-        let secret = "test_secret_key";
-        let timestamp = Utc::now().timestamp().to_string();
-        let body = r#"{"version":1,"timestamp":"2024-01-01T00:00:00Z","type":"test","tailnet":"example.com","message":"Test message","data":{}}"#;
-        let signature = generate_signature(secret, &timestamp, body);
-
-        let result = TailscaleWebhook::verify_signature(secret, body, &signature, Utc::now());
-        result.expect("Valid signature should verify successfully");
+    async fn store(
+        services: &(impl Services + Send + Sync + 'static),
+        config: serde_json::Value,
+    ) -> automate_api::WorkflowId {
+        WorkflowStore::new(services)
+            .with_index(services)
+            .create(WorkflowDraft {
+                type_id: "tailscale".into(),
+                config,
+                schedule: None,
+                enabled: true,
+            })
+            .await
+            .expect("store the workflow")
+            .id
     }
 
-    #[test]
-    fn test_verify_signature_valid_on_retry() {
-        // Simulates a retry: the signature timestamp is well outside the
-        // five-minute window relative to the current time, but validation is
-        // performed against the time the request was originally received, so it
-        // should still succeed.
-        let secret = "test_secret_key";
-        let received_at = Utc::now() - chrono::Duration::hours(6);
-        let timestamp = received_at.timestamp().to_string();
-        let body = r#"{"version":1,"timestamp":"2024-01-01T00:00:00Z","type":"test","tailnet":"example.com","message":"Test message","data":{}}"#;
-        let signature = generate_signature(secret, &timestamp, body);
+    fn delivery(workflow: automate_api::WorkflowId, body: &str) -> WebhookDelivery {
+        WebhookDelivery {
+            workflow,
+            event: WebhookEvent {
+                body: body.to_string(),
+                query: String::new(),
+                headers: HashMap::new(),
+            },
+        }
+    }
 
-        // Validating against the current time should fail (too old).
-        let result = TailscaleWebhook::verify_signature(secret, body, &signature, Utc::now());
+    /// Runs one delivery the way the consumer would.
+    async fn run(
+        services: &(impl Services + Send + Sync + Clone + 'static),
+        delivery: &WebhookDelivery,
+    ) -> Result<(), human_errors::Error> {
+        TailscaleWebhook
+            .handle(
+                JobContext::new(services.clone(), Utc::now(), None, None),
+                delivery,
+            )
+            .await
+    }
+
+    /// The tasks this workflow asked to have created.
+    async fn filed(
+        services: &(impl Services + Send + Sync + 'static),
+    ) -> Vec<crate::db::PeekedMessage<serde_json::Value>> {
+        services
+            .queue()
+            .peek("todoist/create-task", 10)
+            .await
+            .expect("peek the todoist queue")
+    }
+
+    #[tokio::test]
+    async fn an_event_files_a_task_carrying_tailscales_own_wording() {
+        let services = crate::services::ServicesContainer::new_mock()
+            .await
+            .unwrap();
+        let workflow = store(&services, config()).await;
+
+        run(&services, &delivery(workflow, POLICY_UPDATE))
+            .await
+            .unwrap();
+
+        let filed = filed(&services).await;
+        assert_eq!(filed.len(), 1);
+        assert_eq!(
+            filed[0].payload["title"],
+            "[**Tailscale**](https://login.tailscale.com/admin): Tailnet policy file updated",
+        );
         assert!(
-            result.is_err(),
-            "Signature should be rejected when validated against the current time"
+            filed[0].payload["description"]
+                .as_str()
+                .unwrap()
+                .contains("https://login.tailscale.com/admin/acls"),
+            "the event's own payload should be quoted into the task, so it can be triaged without going to look",
+        );
+    }
+
+    #[tokio::test]
+    async fn a_node_waiting_for_approval_outranks_a_policy_change() {
+        // Somebody is blocked until a node is approved, whereas a policy update
+        // is a note to self, and a task list that cannot tell them apart is a
+        // task list nobody reads top-down.
+        let services = crate::services::ServicesContainer::new_mock()
+            .await
+            .unwrap();
+        let workflow = store(&services, config()).await;
+
+        let needs_approval = POLICY_UPDATE.replace("policyUpdate", "nodeNeedsApproval");
+        run(&services, &delivery(workflow, &needs_approval))
+            .await
+            .unwrap();
+
+        assert_eq!(filed(&services).await[0].payload["priority"], 4);
+    }
+
+    #[tokio::test]
+    async fn an_event_the_filter_rejects_files_nothing() {
+        let services = crate::services::ServicesContainer::new_mock()
+            .await
+            .unwrap();
+        let workflow = store(
+            &services,
+            serde_json::json!({
+                "name": "Approvals only",
+                "filter": r#"type == "nodeNeedsApproval""#,
+            }),
+        )
+        .await;
+
+        run(&services, &delivery(workflow, POLICY_UPDATE))
+            .await
+            .unwrap();
+
+        assert!(filed(&services).await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn every_event_in_one_delivery_gets_its_own_task() {
+        // Tailscale batches, so a delivery that only produced one task would
+        // quietly drop everything after the first.
+        let services = crate::services::ServicesContainer::new_mock()
+            .await
+            .unwrap();
+        let workflow = store(&services, config()).await;
+
+        let batch = format!(
+            "[{},{}]",
+            &POLICY_UPDATE[1..POLICY_UPDATE.len() - 1],
+            &POLICY_UPDATE[1..POLICY_UPDATE.len() - 1].replace("policyUpdate", "nodeCreated"),
         );
 
-        // Validating against the original receipt time should succeed.
-        let result = TailscaleWebhook::verify_signature(secret, body, &signature, received_at);
-        result.expect("Signature should verify against the original receipt time on retry");
+        run(&services, &delivery(workflow, &batch)).await.unwrap();
+
+        assert_eq!(filed(&services).await.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn a_delivery_for_a_paused_workflow_files_nothing() {
+        // Pausing exists so somebody can silence a chatty tailnet without losing
+        // their configuration, which only works if a paused workflow is quiet.
+        let services = crate::services::ServicesContainer::new_mock()
+            .await
+            .unwrap();
+        let workflow = store(&services, config()).await;
+
+        WorkflowStore::new(&services)
+            .with_index(&services)
+            .update(
+                workflow,
+                WorkflowDraft {
+                    type_id: "tailscale".into(),
+                    config: config(),
+                    schedule: None,
+                    enabled: false,
+                },
+            )
+            .await
+            .unwrap();
+
+        run(&services, &delivery(workflow, POLICY_UPDATE))
+            .await
+            .unwrap();
+
+        assert!(filed(&services).await.is_empty());
     }
 
     #[test]
-    fn test_verify_signature_invalid() {
-        let secret = "test_secret_key";
-        let body = r#"{"version":1,"timestamp":"2024-01-01T00:00:00Z","type":"test","tailnet":"example.com","message":"Test message","data":{}}"#;
-        let wrong_signature =
-            "t=1663781880,v1=0000000000000000000000000000000000000000000000000000000000000000";
+    fn a_stored_configuration_names_the_workflow_it_describes() {
+        let workflow = crate::workflows::lookup("tailscale").expect("the type is registered");
 
-        let result = TailscaleWebhook::verify_signature(secret, body, wrong_signature, Utc::now());
-        assert!(
-            result.is_err(),
-            "Invalid signature should fail verification"
+        assert_eq!(
+            workflow
+                .describe(&serde_json::json!({ "name": "Tailnet alerts" }))
+                .unwrap(),
+            "Tailnet alerts",
         );
-    }
-
-    #[test]
-    fn test_verify_signature_wrong_secret() {
-        let secret = "test_secret_key";
-        let wrong_secret = "wrong_secret_key";
-        let timestamp = Utc::now().timestamp().to_string();
-        let body = r#"{"version":1,"timestamp":"2024-01-01T00:00:00Z","type":"test","tailnet":"example.com","message":"Test message","data":{}}"#;
-        let signature = generate_signature(wrong_secret, &timestamp, body);
-
-        let result = TailscaleWebhook::verify_signature(secret, body, &signature, Utc::now());
-        assert!(
-            result.is_err(),
-            "Signature with wrong secret should fail verification"
-        );
-    }
-
-    #[test]
-    fn test_verify_signature_tampered_body() {
-        let secret = "test_secret_key";
-        let timestamp = Utc::now().timestamp().to_string();
-        let original_body = r#"{"version":1,"timestamp":"2024-01-01T00:00:00Z","type":"test","tailnet":"example.com","message":"Test message","data":{}}"#;
-        let tampered_body = r#"{"version":1,"timestamp":"2024-01-01T00:00:00Z","type":"test","tailnet":"example.com","message":"Tampered message","data":{}}"#;
-        let signature = generate_signature(secret, &timestamp, original_body);
-
-        let result =
-            TailscaleWebhook::verify_signature(secret, tampered_body, &signature, Utc::now());
-        assert!(result.is_err(), "Tampered body should fail verification");
-    }
-
-    #[test]
-    fn test_verify_signature_invalid_format() {
-        let secret = "test_secret_key";
-        let body = r#"{"version":1,"timestamp":"2024-01-01T00:00:00Z","type":"test","tailnet":"example.com","message":"Test message","data":{}}"#;
-        let invalid_format = "not_a_valid_format";
-
-        let result = TailscaleWebhook::verify_signature(secret, body, invalid_format, Utc::now());
-        assert!(result.is_err(), "Invalid format should fail");
-    }
-
-    #[test]
-    fn test_verify_signature_missing_timestamp() {
-        let secret = "test_secret_key";
-        let body = r#"{"version":1,"timestamp":"2024-01-01T00:00:00Z","type":"test","tailnet":"example.com","message":"Test message","data":{}}"#;
-        let missing_timestamp =
-            "v1=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
-
-        let result =
-            TailscaleWebhook::verify_signature(secret, body, missing_timestamp, Utc::now());
-        assert!(result.is_err(), "Missing timestamp should fail");
-    }
-
-    #[test]
-    fn test_verify_signature_missing_signature() {
-        let secret = "test_secret_key";
-        let body = r#"{"version":1,"timestamp":"2024-01-01T00:00:00Z","type":"test","tailnet":"example.com","message":"Test message","data":{}}"#;
-        let missing_signature = "t=1663781880";
-
-        let result =
-            TailscaleWebhook::verify_signature(secret, body, missing_signature, Utc::now());
-        assert!(result.is_err(), "Missing signature should fail");
-    }
-
-    #[test]
-    fn test_verify_signature_empty_body() {
-        let secret = "test_secret_key";
-        let timestamp = Utc::now().timestamp().to_string();
-        let body = "";
-        let signature = generate_signature(secret, &timestamp, body);
-
-        let result = TailscaleWebhook::verify_signature(secret, body, &signature, Utc::now());
-        result.expect("Empty body with valid signature should verify successfully");
     }
 
     #[test]
     fn test_parse_event_array() {
         // Tailscale delivers events as a JSON array, even for a single event.
-        let body = r#"[{"timestamp":"2026-06-19T21:12:52.923385657Z","version":1,"type":"policyUpdate","tailnet":"example.org.github","message":"Tailnet policy file updated","data":{"url":"https://login.tailscale.com/admin/acls"}}]"#;
-
         let events: Vec<TailscaleAlertEventPayload> =
-            serde_json::from_str(body).expect("array payload should parse");
+            serde_json::from_str(POLICY_UPDATE).expect("array payload should parse");
 
         assert_eq!(events.len(), 1);
         assert_eq!(events[0]._type, "policyUpdate");
         assert_eq!(events[0].tailnet, "example.org.github");
         assert_eq!(events[0].message, "Tailnet policy file updated");
-    }
-
-    #[test]
-    fn test_header_lookup_case_insensitive() {
-        // Test that header lookup works with different case variations
-        let body = r#"{"version":1,"timestamp":"2024-01-01T00:00:00Z","type":"test","tailnet":"example.com","message":"Test","data":{}}"#;
-        let signature = generate_signature("secret", "1663781880", body);
-
-        // Test with lowercase
-        let mut headers = HashMap::new();
-        headers.insert("tailscale-webhook-signature".to_string(), signature.clone());
-
-        let found = headers
-            .iter()
-            .find(|(key, _)| key.eq_ignore_ascii_case("tailscale-webhook-signature"))
-            .map(|(_, value)| value.as_str());
-        assert!(found.is_some(), "Should find lowercase header");
-
-        // Test with uppercase
-        let mut headers = HashMap::new();
-        headers.insert("TAILSCALE-WEBHOOK-SIGNATURE".to_string(), signature.clone());
-
-        let found = headers
-            .iter()
-            .find(|(key, _)| key.eq_ignore_ascii_case("tailscale-webhook-signature"))
-            .map(|(_, value)| value.as_str());
-        assert!(found.is_some(), "Should find uppercase header");
-
-        // Test with mixed case
-        let mut headers = HashMap::new();
-        headers.insert("Tailscale-Webhook-Signature".to_string(), signature.clone());
-
-        let found = headers
-            .iter()
-            .find(|(key, _)| key.eq_ignore_ascii_case("tailscale-webhook-signature"))
-            .map(|(_, value)| value.as_str());
-        assert!(found.is_some(), "Should find mixed case header");
     }
 }

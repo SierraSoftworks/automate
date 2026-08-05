@@ -21,7 +21,24 @@ pub fn subject_key(repository: &str, number: u64) -> String {
     format!("github/attention/{repository}#{number}")
 }
 
-#[derive(Clone, Deserialize)]
+/// What the GitHub webhook hands this job.
+///
+/// The settings travel with the event rather than being read from the
+/// installation's configuration, because they now belong to the workflow the
+/// delivery arrived for — this job serves whichever one dispatched it.
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+pub struct GitHubAttentionTask {
+    pub config: GitHubAttentionConfig,
+    pub event: GitHubAttentionEvent,
+}
+
+impl std::fmt::Display for GitHubAttentionTask {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "github/attention")
+    }
+}
+
+#[derive(Clone, Serialize, Deserialize)]
 pub struct GitHubAttentionConfig {
     /// Selects the comments and reviews worth raising a task for. Defaults to
     /// everything except Dependabot's own commentary; add yourself so that your
@@ -142,7 +159,7 @@ impl GitHubAttentionWorkflow {
 crate::register_job!(GitHubAttentionWorkflow);
 
 impl Job for GitHubAttentionWorkflow {
-    type JobType = GitHubAttentionEvent;
+    type JobType = GitHubAttentionTask;
 
     fn partition() -> &'static str {
         "github/attention"
@@ -155,12 +172,8 @@ impl Job for GitHubAttentionWorkflow {
         job: &Self::JobType,
     ) -> Result<(), human_errors::Error> {
         let services = ctx.services();
-        let config = services.config();
-
-        let Some(attention) = config.webhooks.github.attention.as_ref() else {
-            debug!("Attention handling is not configured; ignoring {job}.");
-            return Ok(());
-        };
+        let attention = &job.config;
+        let job = &job.event;
 
         let filter = match job.kind {
             GitHubAttentionKind::Comment => &attention.comments,
@@ -209,7 +222,6 @@ impl Job for GitHubAttentionWorkflow {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::webhooks::GitHubWebhookConfig;
     use rstest::rstest;
 
     fn comment(author: &str) -> GitHubAttentionEvent {
@@ -233,18 +245,17 @@ mod tests {
         }
     }
 
+    /// Pairs an event with the settings the workflow it arrived for holds.
+    fn task(event: GitHubAttentionEvent, config: GitHubAttentionConfig) -> GitHubAttentionTask {
+        GitHubAttentionTask { config, event }
+    }
+
     async fn services_with(
-        attention: GitHubAttentionConfig,
+        _attention: GitHubAttentionConfig,
     ) -> crate::services::ServicesContainer<crate::db::TenantDb> {
-        crate::services::ServicesContainer::new_custom_mock(move |config, _| {
-            config.webhooks.github = GitHubWebhookConfig {
-                secret: "secret".to_string(),
-                auto_merge: None,
-                attention: Some(attention),
-            };
-        })
-        .await
-        .expect("build mock services")
+        crate::services::ServicesContainer::new_mock()
+            .await
+            .expect("build mock services")
     }
 
     async fn upserts<S: Services>(services: &S) -> Vec<String> {
@@ -286,13 +297,14 @@ mod tests {
 
     #[tokio::test]
     async fn every_comment_on_a_thread_collapses_onto_one_task() {
-        let services = services_with(GitHubAttentionConfig::default()).await;
+        let config = GitHubAttentionConfig::default();
+        let services = services_with(config.clone()).await;
 
         for author in ["notheotherben", "someone-else"] {
             GitHubAttentionWorkflow
                 .handle(
                     JobContext::new(services.clone(), chrono::Utc::now(), None, None),
-                    &comment(author),
+                    &task(comment(author), config.clone()),
                 )
                 .await
                 .expect("the comment should raise a task");
@@ -306,12 +318,13 @@ mod tests {
 
     #[tokio::test]
     async fn filtered_out_comments_raise_nothing() {
-        let services = services_with(GitHubAttentionConfig::default()).await;
+        let config = GitHubAttentionConfig::default();
+        let services = services_with(config.clone()).await;
 
         GitHubAttentionWorkflow
             .handle(
                 JobContext::new(services.clone(), chrono::Utc::now(), None, None),
-                &comment("dependabot[bot]"),
+                &task(comment("dependabot[bot]"), config.clone()),
             )
             .await
             .expect("a filtered comment should be ignored");
@@ -321,7 +334,8 @@ mod tests {
 
     #[tokio::test]
     async fn resolved_alerts_complete_their_task() {
-        let services = services_with(GitHubAttentionConfig::default()).await;
+        let config = GitHubAttentionConfig::default();
+        let services = services_with(config.clone()).await;
 
         let mut event = comment("dependabot[bot]");
         event.kind = GitHubAttentionKind::SecurityAlert;
@@ -333,7 +347,7 @@ mod tests {
         GitHubAttentionWorkflow
             .handle(
                 JobContext::new(services.clone(), chrono::Utc::now(), None, None),
-                &event,
+                &task(event, config.clone()),
             )
             .await
             .expect("a resolved alert should complete its task");

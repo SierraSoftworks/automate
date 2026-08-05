@@ -1,7 +1,7 @@
 use std::fmt::Display;
 
 use chrono::{DateTime, Utc};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::{
     filter::FilterValue,
@@ -11,13 +11,22 @@ use crate::{
         TodoistCompleteTask, TodoistCompleteTaskPayload, TodoistUpsertTask,
         TodoistUpsertTaskPayload,
     },
+    webhooks::WebhookDelivery,
 };
 
-#[derive(Clone, Deserialize, Default)]
+/// What one person asked us to do with their Grafana alerts.
+///
+/// There is deliberately no shared secret here. Grafana's contact point offered
+/// a bearer token because the endpoint it posted to was the same for everybody;
+/// a workflow now has its own unguessable URL that its owner can rotate, so a
+/// token would be a second credential saying the same thing as the first — and
+/// two ways to authorise the same delivery is one more than anybody needs to get
+/// right.
+#[derive(Clone, Serialize, Deserialize, Default)]
 pub struct GrafanaWebhookConfig {
-    /// Optional authorization header value for webhook authentication
-    #[serde(default)]
-    pub secret: Option<String>,
+    /// What to call this workflow, so that somebody with alerts from two
+    /// Grafana instances can tell which of them filed a task.
+    pub name: String,
 
     /// Filter to apply to incoming alerts
     #[serde(default)]
@@ -25,6 +34,12 @@ pub struct GrafanaWebhookConfig {
 
     #[serde(default = "default_todoist_config")]
     pub todoist: TodoistTarget,
+}
+
+impl Display for GrafanaWebhookConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "grafana/{}", self.name)
+    }
 }
 
 fn default_todoist_config() -> crate::publishers::TodoistTarget {
@@ -38,9 +53,77 @@ fn default_todoist_config() -> crate::publishers::TodoistTarget {
 pub struct GrafanaWebhook;
 
 crate::register_job!(GrafanaWebhook);
+crate::register_workflow_type!(GrafanaWebhook);
+
+impl crate::workflows::ConfigurableWorkflow for GrafanaWebhook {
+    type ConfigType = GrafanaWebhookConfig;
+
+    fn type_id() -> &'static str {
+        "grafana"
+    }
+
+    fn describe(config: &Self::ConfigType) -> String {
+        config.name.clone()
+    }
+
+    fn descriptor() -> automate_api::WorkflowTypeDescriptor {
+        use automate_api::{FieldDescriptor, FieldKind, WorkflowTrigger, WorkflowTypeDescriptor};
+
+        WorkflowTypeDescriptor {
+            id: Self::type_id().to_string(),
+            name: "Grafana".to_string(),
+            description:
+                "Files a task when a Grafana alert starts firing, and completes it when the alert resolves."
+                    .to_string(),
+            trigger: WorkflowTrigger::Webhook {
+                // Must name the same partition this job consumes from, or a
+                // delivery would be queued somewhere nothing is reading.
+                source: "grafana".to_string(),
+            },
+            fields: [
+                FieldDescriptor::new(
+                    crate::config_path!(GrafanaWebhookConfig: name),
+                    "Name",
+                    FieldKind::Text {
+                        placeholder: Some("Production dashboards".into()),
+                    },
+                )
+                .with_help(
+                    "Used to label this workflow, so you can tell it apart from your others.",
+                )
+                .required(),
+                FieldDescriptor::new(
+                    crate::config_path!(GrafanaWebhookConfig: filter),
+                    "Filter",
+                    FieldKind::Filter {
+                        fields: vec![
+                            "receiver".into(),
+                            "status".into(),
+                            "org_id".into(),
+                            "title".into(),
+                            "state".into(),
+                            "message".into(),
+                            "alerts.status".into(),
+                        ],
+                    },
+                )
+                .with_help(
+                    "Only file alerts matching this, such as state == \"alerting\". Leave it empty to file every alert.",
+                ),
+            ]
+            .into_iter()
+            .chain(crate::todoist_target_fields!(
+                GrafanaWebhookConfig,
+                project = Some("Life"),
+                section = Some("Tasks & Chores")
+            ))
+            .collect(),
+        }
+    }
+}
 
 impl Job for GrafanaWebhook {
-    type JobType = super::WebhookEvent;
+    type JobType = WebhookDelivery;
 
     fn partition() -> &'static str {
         "webhooks/grafana"
@@ -54,40 +137,16 @@ impl Job for GrafanaWebhook {
     ) -> Result<(), human_errors::Error> {
         let services = ctx.services();
 
-        // Validate the authorization header if a secret is configured
-        if let Some(expected_secret) = &services.config().webhooks.grafana.secret {
-            if !expected_secret.is_empty() {
-                // HTTP headers are case-insensitive, so we need to search for the header with case-insensitive comparison
-                let auth_header = job
-                    .headers
-                    .iter()
-                    .find(|(key, _)| key.eq_ignore_ascii_case("authorization"))
-                    .map(|(_, value)| value.as_str());
+        // Read now rather than carried in the payload, so that an edit made
+        // between the delivery arriving and this running is the one that applies.
+        let Some(config) = job.config::<GrafanaWebhookConfig>(services).await? else {
+            return Ok(());
+        };
 
-                if let Some(auth_header) = auth_header {
-                    if auth_header != expected_secret {
-                        warn!(
-                            "Received Grafana webhook with invalid authorization header; rejecting request."
-                        );
-                        return Ok(());
-                    }
-                } else {
-                    warn!(
-                        "Received Grafana webhook without authorization header, but secret is configured; rejecting request."
-                    );
-                    return Ok(());
-                }
-            } else {
-                debug!(
-                    "No Grafana webhook secret configured; skipping authorization verification."
-                );
-            }
-        }
-
-        let event: GrafanaAlertPayload = job.json()?;
+        let event: GrafanaAlertPayload = job.event.json()?;
 
         // Apply filter to the entire alert payload
-        if !services.config().webhooks.grafana.filter.matches(&event)? {
+        if !config.filter.matches(&event)? {
             info!(
                 "Grafana alert '{}' did not match filter; ignoring.",
                 event.title
@@ -165,7 +224,7 @@ impl Job for GrafanaWebhook {
                                 crate::publishers::TodoistDueDate::DateTime(ctx.scheduled_at())
                             }),
                         priority: Some(priority),
-                        config: services.config().webhooks.grafana.todoist.clone(),
+                        config: config.todoist.clone(),
                         ..Default::default()
                     },
                     Some(
@@ -191,7 +250,7 @@ impl Job for GrafanaWebhook {
                 TodoistCompleteTask::dispatch(
                     TodoistCompleteTaskPayload {
                         unique_key,
-                        config: services.config().webhooks.grafana.todoist.clone(),
+                        config: config.todoist.clone(),
                     },
                     None,
                     services,
@@ -322,123 +381,211 @@ pub struct GrafanaAlert {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::webhooks::WebhookEvent;
     use std::collections::HashMap;
 
-    #[tokio::test]
-    async fn test_grafana_webhook_firing() {
-        let services = crate::testing::mock_services().await.unwrap();
-        let webhook = GrafanaWebhook;
+    use super::*;
+    use crate::webhooks::WebhookEvent;
+    use crate::workflow_store::{WorkflowDraft, WorkflowStore};
 
-        let body = r#"{
-            "receiver": "my-webhook",
-            "status": "firing",
-            "orgId": 1,
-            "title": "[FIRING:1] High CPU usage",
-            "state": "alerting",
-            "message": "CPU usage is above 90%",
-            "externalURL": "http://localhost:3000",
-            "ruleUrl": "http://localhost:3000/alerting/rule/1",
-            "alerts": [
-                {
-                    "status": "firing",
-                    "labels": {
-                        "severity": "critical",
-                        "instance": "localhost:9090"
-                    },
-                    "annotations": {
-                        "summary": "High CPU usage detected"
-                    },
-                    "startsAt": "2025-12-11T22:05:00Z",
-                    "endsAt": null,
-                    "generatorURL": "http://localhost:3000/d/xyz?viewPanel=2",
-                    "values": {
-                        "cpu_usage": 95
-                    }
+    const FIRING_PAYLOAD: &str = r#"{
+        "receiver": "my-webhook",
+        "status": "firing",
+        "orgId": 1,
+        "title": "[FIRING:1] High CPU usage",
+        "state": "alerting",
+        "message": "CPU usage is above 90%",
+        "externalURL": "http://localhost:3000",
+        "ruleUrl": "http://localhost:3000/alerting/rule/1",
+        "alerts": [
+            {
+                "status": "firing",
+                "labels": {
+                    "severity": "critical",
+                    "instance": "localhost:9090"
+                },
+                "annotations": {
+                    "summary": "High CPU usage detected"
+                },
+                "startsAt": "2025-12-11T22:05:00Z",
+                "endsAt": null,
+                "generatorURL": "http://localhost:3000/d/xyz?viewPanel=2",
+                "values": {
+                    "cpu_usage": 95
                 }
-            ]
-        }"#;
+            }
+        ]
+    }"#;
 
-        let event = WebhookEvent {
-            body: body.to_string(),
-            query: String::new(),
-            headers: HashMap::new(),
-        };
+    const RESOLVED_PAYLOAD: &str = r#"{
+        "receiver": "my-webhook",
+        "status": "resolved",
+        "orgId": 1,
+        "title": "[RESOLVED] High CPU usage",
+        "state": "ok",
+        "message": "CPU usage has returned to normal",
+        "externalURL": "http://localhost:3000",
+        "ruleUrl": "http://localhost:3000/alerting/rule/1",
+        "alerts": [
+            {
+                "status": "resolved",
+                "labels": {
+                    "severity": "critical",
+                    "instance": "localhost:9090"
+                },
+                "annotations": {
+                    "summary": "High CPU usage detected"
+                },
+                "startsAt": "2025-12-11T22:05:00Z",
+                "endsAt": "2025-12-11T22:15:00Z",
+                "generatorURL": "http://localhost:3000/d/xyz?viewPanel=2",
+                "values": {
+                    "cpu_usage": 60
+                }
+            }
+        ]
+    }"#;
 
-        let result = webhook
-            .handle(JobContext::new(services, Utc::now(), None, None), &event)
-            .await;
-        assert!(result.is_ok(), "Webhook should handle firing alert");
+    async fn store(
+        services: &(impl Services + Send + Sync + 'static),
+        config: serde_json::Value,
+    ) -> automate_api::WorkflowId {
+        WorkflowStore::new(services)
+            .with_index(services)
+            .create(WorkflowDraft {
+                type_id: "grafana".into(),
+                config,
+                schedule: None,
+                enabled: true,
+            })
+            .await
+            .expect("store the workflow")
+            .id
+    }
+
+    fn delivery(workflow: automate_api::WorkflowId, body: impl Into<String>) -> WebhookDelivery {
+        WebhookDelivery {
+            workflow,
+            event: WebhookEvent {
+                body: body.into(),
+                query: String::new(),
+                headers: HashMap::new(),
+            },
+        }
+    }
+
+    async fn run(
+        services: &(impl Services + Send + Sync + Clone + 'static),
+        delivery: &WebhookDelivery,
+    ) -> Result<(), human_errors::Error> {
+        GrafanaWebhook
+            .handle(
+                JobContext::new(services.clone(), Utc::now(), None, None),
+                delivery,
+            )
+            .await
+    }
+
+    async fn queued(
+        services: &(impl Services + Send + Sync + 'static),
+        partition: &'static str,
+    ) -> Vec<crate::db::PeekedMessage<serde_json::Value>> {
+        services
+            .queue()
+            .peek(partition, 10)
+            .await
+            .expect("peek the todoist queue")
     }
 
     #[tokio::test]
-    async fn test_grafana_webhook_resolved() {
-        let services = crate::testing::mock_services().await.unwrap();
-        let webhook = GrafanaWebhook;
+    async fn a_firing_alert_opens_a_task_for_it() {
+        let services = crate::services::ServicesContainer::new_mock()
+            .await
+            .unwrap();
+        let workflow = store(&services, serde_json::json!({ "name": "Production" })).await;
 
-        let body = r#"{
-            "receiver": "my-webhook",
-            "status": "resolved",
-            "orgId": 1,
-            "title": "[RESOLVED] High CPU usage",
-            "state": "ok",
-            "message": "CPU usage has returned to normal",
-            "externalURL": "http://localhost:3000",
-            "ruleUrl": "http://localhost:3000/alerting/rule/1",
-            "alerts": [
-                {
-                    "status": "resolved",
-                    "labels": {
-                        "severity": "critical",
-                        "instance": "localhost:9090"
-                    },
-                    "annotations": {
-                        "summary": "High CPU usage detected"
-                    },
-                    "startsAt": "2025-12-11T22:05:00Z",
-                    "endsAt": "2025-12-11T22:15:00Z",
-                    "generatorURL": "http://localhost:3000/d/xyz?viewPanel=2",
-                    "values": {
-                        "cpu_usage": 60
-                    }
-                }
-            ]
-        }"#;
+        run(&services, &delivery(workflow, FIRING_PAYLOAD))
+            .await
+            .expect("Webhook should handle firing alert");
 
-        let event = WebhookEvent {
-            body: body.to_string(),
-            query: String::new(),
-            headers: HashMap::new(),
-        };
-
-        let result = webhook
-            .handle(JobContext::new(services, Utc::now(), None, None), &event)
-            .await;
-        assert!(result.is_ok(), "Webhook should handle resolved alert");
+        assert_eq!(queued(&services, "todoist/upsert-task").await.len(), 1);
     }
 
     #[tokio::test]
-    async fn test_grafana_webhook_invalid_json() {
-        let services = crate::testing::mock_services().await.unwrap();
-        let webhook = GrafanaWebhook;
+    async fn a_resolved_alert_completes_the_task_it_filed() {
+        let services = crate::services::ServicesContainer::new_mock()
+            .await
+            .unwrap();
+        let workflow = store(&services, serde_json::json!({ "name": "Production" })).await;
 
-        let body = r#"{"invalid json"#;
+        run(&services, &delivery(workflow, RESOLVED_PAYLOAD))
+            .await
+            .expect("Webhook should handle resolved alert");
 
-        let event = WebhookEvent {
-            body: body.to_string(),
-            query: String::new(),
-            headers: HashMap::new(),
-        };
+        assert_eq!(queued(&services, "todoist/complete-task").await.len(), 1);
+    }
 
-        let result = webhook
-            .handle(JobContext::new(services, Utc::now(), None, None), &event)
-            .await;
+    #[tokio::test]
+    async fn a_body_that_is_not_grafanas_is_refused() {
+        let services = crate::services::ServicesContainer::new_mock()
+            .await
+            .unwrap();
+        let workflow = store(&services, serde_json::json!({ "name": "Production" })).await;
+
+        let result = run(&services, &delivery(workflow, r#"{"invalid json"#)).await;
+
         assert!(result.is_err(), "Webhook should reject invalid JSON");
     }
 
     #[tokio::test]
-    async fn test_grafana_alert_filterable() {
+    async fn an_alert_the_workflows_filter_rejects_files_nothing() {
+        // The filter now belongs to the workflow rather than the installation,
+        // so this is also what proves the handler reads the stored record.
+        let services = crate::services::ServicesContainer::new_mock()
+            .await
+            .unwrap();
+        let workflow = store(
+            &services,
+            serde_json::json!({
+                "name": "Production",
+                "filter": "receiver == \"someone-elses-webhook\"",
+            }),
+        )
+        .await;
+
+        run(&services, &delivery(workflow, FIRING_PAYLOAD))
+            .await
+            .unwrap();
+
+        assert!(
+            queued(&services, "todoist/upsert-task").await.is_empty(),
+            "an alert the owner asked to ignore should not have filed anything",
+        );
+    }
+
+    #[tokio::test]
+    async fn a_delivery_for_a_workflow_that_is_gone_stops_there() {
+        // Deliveries queue behind one another, so a workflow can be deleted
+        // while one of its own is still waiting to run.
+        let services = crate::services::ServicesContainer::new_mock()
+            .await
+            .unwrap();
+        let workflow = store(&services, serde_json::json!({ "name": "Production" })).await;
+
+        WorkflowStore::new(&services)
+            .with_index(&services)
+            .delete(workflow)
+            .await
+            .unwrap();
+
+        run(&services, &delivery(workflow, FIRING_PAYLOAD))
+            .await
+            .expect("a deleted workflow should not fail the delivery");
+
+        assert!(queued(&services, "todoist/upsert-task").await.is_empty());
+    }
+
+    #[test]
+    fn an_alert_exposes_the_fields_the_filter_editor_offers() {
         let alert = GrafanaAlertPayload {
             receiver: "test-receiver".to_string(),
             status: GrafanaAlertStatus::Firing,
@@ -477,45 +624,15 @@ mod tests {
     }
 
     #[test]
-    fn test_grafana_webhook_header_case_insensitive() {
-        // Test that header lookup works with different case variations
-        let headers_lowercase = {
-            let mut h = HashMap::new();
-            h.insert("authorization".to_string(), "my-token".to_string());
-            h
-        };
+    fn deliveries_are_queued_where_this_workflow_reads_them() {
+        // The trigger decides where a configuration is stored and the job
+        // decides where deliveries are queued. A mismatch between the two is a
+        // workflow that saves happily and never runs.
+        use crate::workflows::ConfigurableWorkflow;
 
-        let found = headers_lowercase
-            .iter()
-            .find(|(key, _)| key.eq_ignore_ascii_case("authorization"))
-            .map(|(_, value)| value.as_str());
-        assert!(found.is_some(), "Should find lowercase header");
-        assert_eq!(found.unwrap(), "my-token");
-
-        // Test with uppercase
-        let headers_uppercase = {
-            let mut h = HashMap::new();
-            h.insert("AUTHORIZATION".to_string(), "my-token".to_string());
-            h
-        };
-
-        let found = headers_uppercase
-            .iter()
-            .find(|(key, _)| key.eq_ignore_ascii_case("authorization"))
-            .map(|(_, value)| value.as_str());
-        assert!(found.is_some(), "Should find uppercase header");
-
-        // Test with mixed case
-        let headers_mixed = {
-            let mut h = HashMap::new();
-            h.insert("Authorization".to_string(), "my-token".to_string());
-            h
-        };
-
-        let found = headers_mixed
-            .iter()
-            .find(|(key, _)| key.eq_ignore_ascii_case("authorization"))
-            .map(|(_, value)| value.as_str());
-        assert!(found.is_some(), "Should find mixed case header");
+        assert_eq!(
+            GrafanaWebhook::descriptor().trigger.partition(),
+            <GrafanaWebhook as Job>::partition(),
+        );
     }
 }

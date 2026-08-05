@@ -4,7 +4,24 @@ use crate::publishers::{TodoistUpsertTask, TodoistUpsertTaskPayload};
 use crate::services::{AutoMergeOutcome, GitHubAppClient, GitHubClient};
 use crate::webhooks::GitHubPullRequestEvent;
 
-#[derive(Clone, Deserialize)]
+/// What the GitHub webhook hands this job.
+///
+/// The settings travel with the event rather than being read from the
+/// installation's configuration, because they belong to the workflow the
+/// delivery arrived for.
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+pub struct GitHubAutoMergeTask {
+    pub config: GitHubAutoMergeConfig,
+    pub event: GitHubPullRequestEvent,
+}
+
+impl std::fmt::Display for GitHubAutoMergeTask {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "github/auto-merge")
+    }
+}
+
+#[derive(Clone, Serialize, Deserialize)]
 pub struct GitHubAutoMergeConfig {
     /// Selects the pull requests which should have auto-merge enabled. Defaults
     /// to newly opened Dependabot pull requests.
@@ -116,7 +133,7 @@ impl GitHubAutoMergeWorkflow {
 crate::register_job!(GitHubAutoMergeWorkflow);
 
 impl Job for GitHubAutoMergeWorkflow {
-    type JobType = GitHubPullRequestEvent;
+    type JobType = GitHubAutoMergeTask;
 
     fn partition() -> &'static str {
         "github/auto-merge"
@@ -129,14 +146,8 @@ impl Job for GitHubAutoMergeWorkflow {
         job: &Self::JobType,
     ) -> Result<(), human_errors::Error> {
         let services = ctx.services();
-        let config = services.config();
-
-        // The configuration may have changed between the webhook being received
-        // and this job running, so re-check rather than assume.
-        let Some(auto_merge) = config.webhooks.github.auto_merge.as_ref() else {
-            debug!("Auto-merge is not configured; ignoring {job}.");
-            return Ok(());
-        };
+        let auto_merge = &job.config;
+        let job = &job.event;
 
         if !auto_merge.filter.matches(job)? {
             info!("Pull request {job} did not match the auto-merge filter; ignoring.");
@@ -183,7 +194,6 @@ impl Job for GitHubAutoMergeWorkflow {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::webhooks::GitHubWebhookConfig;
 
     fn event(action: &str, author: &str) -> GitHubPullRequestEvent {
         serde_json::from_value(serde_json::json!({
@@ -265,20 +275,17 @@ mod tests {
     async fn unmatched_pull_requests_are_ignored() {
         // No GitHub API key is configured, so a call to GitHub would fail; the
         // job completing successfully proves the filter short-circuited first.
-        let services = crate::services::ServicesContainer::new_custom_mock(|config, _| {
-            config.webhooks.github = GitHubWebhookConfig {
-                secret: "secret".to_string(),
-                auto_merge: Some(GitHubAutoMergeConfig::default()),
-                attention: None,
-            };
-        })
-        .await
-        .expect("build mock services");
+        let services = crate::services::ServicesContainer::new_mock()
+            .await
+            .expect("build mock services");
 
         GitHubAutoMergeWorkflow
             .handle(
                 JobContext::new(services.clone(), chrono::Utc::now(), None, None),
-                &event("opened", "notheotherben"),
+                &GitHubAutoMergeTask {
+                    config: GitHubAutoMergeConfig::default(),
+                    event: event("opened", "notheotherben"),
+                },
             )
             .await
             .expect("an unmatched pull request should be ignored without erroring");

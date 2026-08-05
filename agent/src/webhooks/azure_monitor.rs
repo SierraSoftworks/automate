@@ -1,4 +1,4 @@
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::{
     filter::FilterValue,
@@ -8,15 +8,31 @@ use crate::{
         TodoistCompleteTask, TodoistCompleteTaskPayload, TodoistUpsertTask,
         TodoistUpsertTaskPayload,
     },
+    webhooks::WebhookDelivery,
 };
 
-#[derive(Clone, Deserialize, Default)]
+/// What one person asked us to do with their Azure Monitor alerts.
+///
+/// There is deliberately no shared secret here. Each workflow is reached at its
+/// own unguessable URL which its owner can rotate, so a secret would be a second
+/// thing to configure that says exactly what the address already says.
+#[derive(Clone, Serialize, Deserialize, Default)]
 pub struct AzureMonitorWebhookConfig {
+    /// What to call this workflow, so that somebody watching two different
+    /// action groups can tell which of them filed a task.
+    pub name: String,
+
     #[serde(default)]
     pub filter: Filter,
 
     #[serde(default = "default_todoist_config")]
     pub todoist: TodoistTarget,
+}
+
+impl std::fmt::Display for AzureMonitorWebhookConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "azure-monitor/{}", self.name)
+    }
 }
 
 fn default_todoist_config() -> crate::publishers::TodoistTarget {
@@ -30,9 +46,76 @@ fn default_todoist_config() -> crate::publishers::TodoistTarget {
 pub struct AzureMonitorWebhook;
 
 crate::register_job!(AzureMonitorWebhook);
+crate::register_workflow_type!(AzureMonitorWebhook);
+
+impl crate::workflows::ConfigurableWorkflow for AzureMonitorWebhook {
+    type ConfigType = AzureMonitorWebhookConfig;
+
+    fn type_id() -> &'static str {
+        "azure-monitor"
+    }
+
+    fn describe(config: &Self::ConfigType) -> String {
+        config.name.clone()
+    }
+
+    fn descriptor() -> automate_api::WorkflowTypeDescriptor {
+        use automate_api::{FieldDescriptor, FieldKind, WorkflowTrigger, WorkflowTypeDescriptor};
+
+        WorkflowTypeDescriptor {
+            id: Self::type_id().to_string(),
+            name: "Azure Monitor".to_string(),
+            description:
+                "Files a task when an Azure Monitor alert fires, and completes it when the alert resolves."
+                    .to_string(),
+            trigger: WorkflowTrigger::Webhook {
+                // Must name the same partition this job consumes from, or a
+                // delivery would be queued somewhere nothing is reading.
+                source: "azure-monitor".to_string(),
+            },
+            fields: [
+                FieldDescriptor::new(
+                    crate::config_path!(AzureMonitorWebhookConfig: name),
+                    "Name",
+                    FieldKind::Text {
+                        placeholder: Some("Production alerts".into()),
+                    },
+                )
+                .with_help(
+                    "Used to label this workflow, so you can tell it apart from your others.",
+                )
+                .required(),
+                FieldDescriptor::new(
+                    crate::config_path!(AzureMonitorWebhookConfig: filter),
+                    "Filter",
+                    FieldKind::Filter {
+                        fields: vec![
+                            "alert_id".into(),
+                            "alert_rule".into(),
+                            "severity".into(),
+                            "monitor_condition".into(),
+                            "monitor_service".into(),
+                            "alert_target_ids".into(),
+                        ],
+                    },
+                )
+                .with_help(
+                    "Only file alerts matching this, such as severity <= 1. Severity is the number from Sev0 to Sev4, so a smaller one is more urgent. Leave it empty to file every alert.",
+                ),
+            ]
+            .into_iter()
+            .chain(crate::todoist_target_fields!(
+                AzureMonitorWebhookConfig,
+                project = Some("Life"),
+                section = Some("Tasks & Chores")
+            ))
+            .collect(),
+        }
+    }
+}
 
 impl Job for AzureMonitorWebhook {
-    type JobType = super::WebhookEvent;
+    type JobType = WebhookDelivery;
 
     fn partition() -> &'static str {
         "webhooks/azure-monitor"
@@ -46,17 +129,16 @@ impl Job for AzureMonitorWebhook {
     ) -> Result<(), human_errors::Error> {
         let services = ctx.services();
 
-        let event: AzureMonitorAlertEventPayload = job.json()?;
+        // Read now rather than carried in the payload, so that an edit made
+        // between the delivery arriving and this running is the one that applies.
+        let Some(config) = job.config::<AzureMonitorWebhookConfig>(services).await? else {
+            return Ok(());
+        };
+
+        let event: AzureMonitorAlertEventPayload = job.event.json()?;
 
         match event.data.essentials.monitor_condition {
-            CommonAlertSchemaMonitorCondition::Fired
-                if services
-                    .config()
-                    .webhooks
-                    .azure_monitor
-                    .filter
-                    .matches(&event)? =>
-            {
+            CommonAlertSchemaMonitorCondition::Fired if config.filter.matches(&event)? => {
                 TodoistUpsertTask::dispatch(
                     TodoistUpsertTaskPayload {
                         unique_key: event.data.essentials.alert_id.clone(),
@@ -69,7 +151,7 @@ impl Job for AzureMonitorWebhook {
                         description: event.data.essentials.description.clone(),
                         due: crate::publishers::TodoistDueDate::DateTime(event.data.essentials.fired_date_time),
                         priority: Some(event.data.essentials.severity.priority()),
-                        config: services.config().webhooks.azure_monitor.todoist.clone(),
+                        config: config.todoist.clone(),
                         ..Default::default()
                     }, None, services).await?;
 
@@ -80,7 +162,7 @@ impl Job for AzureMonitorWebhook {
                     #[allow(clippy::needless_update)]
                     TodoistCompleteTaskPayload {
                         unique_key: event.data.essentials.alert_id,
-                        config: services.config().webhooks.azure_monitor.todoist.clone(),
+                        config: config.todoist.clone(),
                         ..Default::default()
                     },
                     None,
@@ -223,14 +305,76 @@ impl<'a> From<&CommonAlertSchemaMonitorCondition> for FilterValue<'a> {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
     use super::*;
     use crate::webhooks::WebhookEvent;
-    use std::collections::HashMap;
+    use crate::workflow_store::{WorkflowDraft, WorkflowStore};
 
     const RESOLVED_PAYLOAD: &str = r#"{"schemaId":"azureMonitorCommonAlertSchema","data":{"essentials":{"alertId":"/subscriptions/00000000-0000-0000-0000-000000000000/providers/Microsoft.AlertsManagement/alerts/11111111-1111-1111-1111-111111111111","alertRule":"vm availability - example-vm","targetResourceType":"microsoft.compute/virtualmachines","alertRuleID":"/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/example-rg/providers/microsoft.insights/metricAlerts/vm availability - example-vm","severity":"Sev3","signalType":"Metric","monitorCondition":"Resolved","targetResourceGroup":"example-rg","monitoringService":"Platform","alertTargetIDs":["/subscriptions/00000000-0000-0000-0000-000000000000/resourcegroups/example-rg/providers/microsoft.compute/virtualmachines/example-vm"],"configurationItems":["example-vm"],"originAlertId":"00000000-0000-0000-0000-000000000000_example-rg_microsoft.insights_metricAlerts_vm availability - example-vm_81493074","firedDateTime":"2026-06-12T01:13:01.9491785Z","resolvedDateTime":"2026-06-12T01:13:01.9491785Z","description":"","essentialsVersion":"1.0","alertContextVersion":"1.0","investigationLink":"https://portal.azure.com/"},"alertContext":{"properties":null,"conditionType":"MultipleResourceMultipleMetricCriteria","condition":{"windowSize":"PT5M","allOf":[{"metricName":"VmAvailabilityMetric","metricNamespace":"Microsoft.Compute/virtualMachines","operator":"LessThan","threshold":"1","timeAggregation":"Average","dimensions":[],"metricValue":1.0,"webTestName":null}],"staticThresholdFailingPeriods":{"numberOfEvaluationPeriods":0,"minFailingPeriodsToAlert":0},"windowStartTime":"2026-06-12T01:05:49.957Z","windowEndTime":"2026-06-12T01:10:49.957Z"}},"customProperties":null}}"#;
 
+    /// The same alert while it is still firing, so the two differ only in the
+    /// one field the handler branches on.
+    fn firing_payload() -> String {
+        RESOLVED_PAYLOAD.replace(
+            r#""monitorCondition":"Resolved""#,
+            r#""monitorCondition":"Fired""#,
+        )
+    }
+
+    async fn store(
+        services: &(impl Services + Send + Sync + 'static),
+        config: serde_json::Value,
+    ) -> automate_api::WorkflowId {
+        WorkflowStore::new(services)
+            .with_index(services)
+            .create(WorkflowDraft {
+                type_id: "azure-monitor".into(),
+                config,
+                schedule: None,
+                enabled: true,
+            })
+            .await
+            .expect("store the workflow")
+            .id
+    }
+
+    fn delivery(workflow: automate_api::WorkflowId, body: impl Into<String>) -> WebhookDelivery {
+        WebhookDelivery {
+            workflow,
+            event: WebhookEvent {
+                body: body.into(),
+                query: String::new(),
+                headers: HashMap::new(),
+            },
+        }
+    }
+
+    async fn run(
+        services: &(impl Services + Send + Sync + Clone + 'static),
+        delivery: &WebhookDelivery,
+    ) -> Result<(), human_errors::Error> {
+        AzureMonitorWebhook
+            .handle(
+                JobContext::new(services.clone(), chrono::Utc::now(), None, None),
+                delivery,
+            )
+            .await
+    }
+
+    async fn queued(
+        services: &(impl Services + Send + Sync + 'static),
+        partition: &'static str,
+    ) -> Vec<crate::db::PeekedMessage<serde_json::Value>> {
+        services
+            .queue()
+            .peek(partition, 10)
+            .await
+            .expect("peek the todoist queue")
+    }
+
     #[test]
-    fn test_deserialize_common_alert_schema() {
+    fn a_common_alert_schema_delivery_is_read_as_azure_sends_it() {
         let event: AzureMonitorAlertEventPayload =
             serde_json::from_str(RESOLVED_PAYLOAD).expect("payload should deserialize");
 
@@ -247,22 +391,81 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_azure_monitor_webhook_resolved() {
-        let services = crate::testing::mock_services().await.unwrap();
-        let webhook = AzureMonitorWebhook;
+    async fn a_resolved_alert_completes_the_task_it_filed() {
+        let services = crate::services::ServicesContainer::new_mock()
+            .await
+            .unwrap();
+        let workflow = store(&services, serde_json::json!({ "name": "Platform" })).await;
 
-        let event = WebhookEvent {
-            body: RESOLVED_PAYLOAD.to_string(),
-            query: String::new(),
-            headers: HashMap::new(),
-        };
+        run(&services, &delivery(workflow, RESOLVED_PAYLOAD))
+            .await
+            .expect("Webhook should handle resolved alert");
 
-        let result = webhook
-            .handle(
-                JobContext::new(services, chrono::Utc::now(), None, None),
-                &event,
-            )
-            .await;
-        assert!(result.is_ok(), "Webhook should handle resolved alert");
+        assert_eq!(
+            queued(&services, "todoist/complete-task").await.len(),
+            1,
+            "an alert that has stopped firing should close the task it opened",
+        );
+    }
+
+    #[tokio::test]
+    async fn an_alert_the_workflows_filter_rejects_files_nothing() {
+        // The filter now belongs to the workflow rather than the installation,
+        // so this is also what proves the handler reads the stored record.
+        let services = crate::services::ServicesContainer::new_mock()
+            .await
+            .unwrap();
+        let workflow = store(
+            &services,
+            serde_json::json!({
+                "name": "Platform",
+                "filter": "monitor_service == \"ServiceHealth\"",
+            }),
+        )
+        .await;
+
+        run(&services, &delivery(workflow, firing_payload()))
+            .await
+            .unwrap();
+
+        assert!(
+            queued(&services, "todoist/upsert-task").await.is_empty(),
+            "an alert the owner asked to ignore should not have filed anything",
+        );
+    }
+
+    #[tokio::test]
+    async fn a_delivery_for_a_workflow_that_is_gone_stops_there() {
+        // Deliveries queue behind one another, so a workflow can be deleted
+        // while one of its own is still waiting to run.
+        let services = crate::services::ServicesContainer::new_mock()
+            .await
+            .unwrap();
+        let workflow = store(&services, serde_json::json!({ "name": "Platform" })).await;
+
+        WorkflowStore::new(&services)
+            .with_index(&services)
+            .delete(workflow)
+            .await
+            .unwrap();
+
+        run(&services, &delivery(workflow, RESOLVED_PAYLOAD))
+            .await
+            .expect("a deleted workflow should not fail the delivery");
+
+        assert!(queued(&services, "todoist/complete-task").await.is_empty());
+    }
+
+    #[test]
+    fn deliveries_are_queued_where_this_workflow_reads_them() {
+        // The trigger decides where a configuration is stored and the job
+        // decides where deliveries are queued. A mismatch between the two is a
+        // workflow that saves happily and never runs.
+        use crate::workflows::ConfigurableWorkflow;
+
+        assert_eq!(
+            AzureMonitorWebhook::descriptor().trigger.partition(),
+            <AzureMonitorWebhook as Job>::partition(),
+        );
     }
 }

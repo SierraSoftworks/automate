@@ -1,19 +1,31 @@
-use hmac::{Hmac, KeyInit, Mac};
 use serde::{Deserialize, Serialize};
-use sha2::Sha512;
 
 use crate::prelude::*;
 use crate::publishers::TodoistTarget;
+use crate::webhooks::WebhookDelivery;
 
-type HmacSha512 = Hmac<Sha512>;
-
+/// What one person asked us to do with their Terraform Cloud notifications.
+///
+/// There is deliberately no signing secret here. HMAC signing existed because
+/// the endpoint Terraform posted to was the same for everybody, so the signature
+/// was the only thing distinguishing a real notification from anybody who knew
+/// the URL; a workflow now has its own unguessable URL that its owner can
+/// rotate, and that answers the same question without a secret to keep in step
+/// across two systems.
 #[derive(Clone, Serialize, Deserialize, Default)]
 pub struct TerraformWebhookConfig {
-    #[serde(default)]
-    pub secret: Option<String>,
+    /// What to call this workflow, so that somebody watching two organisations
+    /// can tell which of them filed a task.
+    pub name: String,
 
     #[serde(default = "default_todoist_config")]
     pub todoist: TodoistTarget,
+}
+
+impl std::fmt::Display for TerraformWebhookConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "terraform/{}", self.name)
+    }
 }
 
 fn default_todoist_config() -> TodoistTarget {
@@ -27,9 +39,54 @@ fn default_todoist_config() -> TodoistTarget {
 pub struct TerraformWebhook;
 
 crate::register_job!(TerraformWebhook);
+crate::register_workflow_type!(TerraformWebhook);
+
+impl crate::workflows::ConfigurableWorkflow for TerraformWebhook {
+    type ConfigType = TerraformWebhookConfig;
+
+    fn type_id() -> &'static str {
+        "terraform"
+    }
+
+    fn describe(config: &Self::ConfigType) -> String {
+        config.name.clone()
+    }
+
+    fn descriptor() -> automate_api::WorkflowTypeDescriptor {
+        use automate_api::{FieldDescriptor, FieldKind, WorkflowTrigger, WorkflowTypeDescriptor};
+
+        WorkflowTypeDescriptor {
+            id: Self::type_id().to_string(),
+            name: "Terraform Cloud".to_string(),
+            description: "Files a task for each notification a Terraform Cloud workspace sends."
+                .to_string(),
+            trigger: WorkflowTrigger::Webhook {
+                // Must name the same partition this job consumes from, or a
+                // delivery would be queued somewhere nothing is reading.
+                source: "terraform".to_string(),
+            },
+            fields: [FieldDescriptor::new(
+                crate::config_path!(TerraformWebhookConfig: name),
+                "Name",
+                FieldKind::Text {
+                    placeholder: Some("Infrastructure".into()),
+                },
+            )
+            .with_help("Used to label this workflow, so you can tell it apart from your others.")
+            .required()]
+            .into_iter()
+            .chain(crate::todoist_target_fields!(
+                TerraformWebhookConfig,
+                project = Some("Hobbies"),
+                section = Some("Open Source")
+            ))
+            .collect(),
+        }
+    }
+}
 
 impl Job for TerraformWebhook {
-    type JobType = WebhookEvent;
+    type JobType = WebhookDelivery;
 
     fn partition() -> &'static str {
         "webhooks/terraform"
@@ -42,33 +99,14 @@ impl Job for TerraformWebhook {
         job: &Self::JobType,
     ) -> Result<(), human_errors::Error> {
         let services = ctx.services();
-        let config = services.config().webhooks.terraform.clone();
 
-        if let Some(secret) = config.secret.as_ref() {
-            let expected_hash = job.headers.get("X-TFE-Notification-Signature")
-                .ok_or_else(|| human_errors::user("Missing X-TFE-Notification-Signature header in Terraform webhook", &[
-                    "Make sure you are only sending Terraform Cloud webhook events to this endpoint."
-                ]))?;
+        // Read now rather than carried in the payload, so that an edit made
+        // between the delivery arriving and this running is the one that applies.
+        let Some(config) = job.config::<TerraformWebhookConfig>(services).await? else {
+            return Ok(());
+        };
 
-            let expected_tag = hex::decode(expected_hash).wrap_user_err(
-                "Invalid X-TFE-Notification-Signature header format in Terraform webhook",
-                &["Make sure the sender of the webhook is sending a valid HMAC SHA-512 signature."],
-            )?;
-
-            let mut mac = HmacSha512::new_from_slice(secret.as_bytes())
-                .or_user_err(&[
-                    "Make sure that you have provided a valid webhooks.terraform.secret in your config file."
-                ])?;
-
-            mac.update(job.body.as_bytes());
-            mac.verify_slice(expected_tag.as_slice())
-                .wrap_user_err("The Terraform webhook's signature did not match the content of the webhook payload.",
-                &[
-                    "Make sure the sender of the webhook is sending the correct signature using the configured secret."
-                ])?;
-        }
-
-        let payload: NotificationPayload = job.json()?;
+        let payload: NotificationPayload = job.event.json()?;
 
         match &payload {
             NotificationPayload::Standard {
@@ -237,59 +275,117 @@ pub struct NotificationV1 {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
     use super::*;
+    use crate::webhooks::WebhookEvent;
+    use crate::workflow_store::{WorkflowDraft, WorkflowStore};
+
+    const RUN_NOTIFICATION: &str = r#"
+    {
+        "payload_version": 1,
+        "notification_configuration_id": "nc_123456",
+        "run_url": "https://app.terraform.io/app/org/workspaces/ws/runs/run_123456",
+        "run_id": "run_123456",
+        "run_message": "Apply complete!",
+        "run_created_at": "2024-01-01T12:00:00Z",
+        "run_created_by": "example_user",
+        "workspace_id": "ws_123456",
+        "workspace_name": "example_workspace",
+        "organization_name": "example_org",
+        "notifications": [
+            {
+                "message": "Run completed successfully.",
+                "trigger": "run:completed",
+                "run_status": "completed",
+                "run_updated_at": "2024-01-01T12:30:00Z",
+                "run_updated_by": "example_user"
+            }
+        ]
+    }"#;
+
+    const WORKSPACE_NOTIFICATION: &str = r#"
+    {
+        "payload_version": 2,
+        "notification_configuration_id": "nc_654321",
+        "notification_configuration_url": "https://app.terraform.io/app/org/workspaces/ws/notifications/nc_654321",
+        "trigger_scope": "assessment",
+        "trigger": "assessment:drifted",
+        "message": "Drift detected in workspace.",
+        "details": {}
+    }"#;
+
+    async fn store(
+        services: &(impl Services + Send + Sync + 'static),
+        config: serde_json::Value,
+    ) -> automate_api::WorkflowId {
+        WorkflowStore::new(services)
+            .with_index(services)
+            .create(WorkflowDraft {
+                type_id: "terraform".into(),
+                config,
+                schedule: None,
+                enabled: true,
+            })
+            .await
+            .expect("store the workflow")
+            .id
+    }
+
+    fn delivery(workflow: automate_api::WorkflowId, body: impl Into<String>) -> WebhookDelivery {
+        WebhookDelivery {
+            workflow,
+            event: WebhookEvent {
+                body: body.into(),
+                query: String::new(),
+                headers: HashMap::new(),
+            },
+        }
+    }
+
+    async fn run(
+        services: &(impl Services + Send + Sync + Clone + 'static),
+        delivery: &WebhookDelivery,
+    ) -> Result<(), human_errors::Error> {
+        TerraformWebhook
+            .handle(
+                JobContext::new(services.clone(), chrono::Utc::now(), None, None),
+                delivery,
+            )
+            .await
+    }
+
+    async fn filed(
+        services: &(impl Services + Send + Sync + 'static),
+    ) -> Vec<crate::db::PeekedMessage<serde_json::Value>> {
+        services
+            .queue()
+            .peek("todoist/create-task", 10)
+            .await
+            .expect("peek the todoist queue")
+    }
 
     #[test]
-    fn test_deserialization_v1() {
-        let payload_v1 = r#"
-        {
-            "payload_version": 1,
-            "notification_configuration_id": "nc_123456",
-            "run_url": "https://app.terraform.io/app/org/workspaces/ws/runs/run_123456",
-            "run_id": "run_123456",
-            "run_message": "Apply complete!",
-            "run_created_at": "2024-01-01T12:00:00Z",
-            "run_created_by": "example_user",
-            "workspace_id": "ws_123456",
-            "workspace_name": "example_workspace",
-            "organization_name": "example_org",
-            "notifications": [
-                {
-                    "message": "Run completed successfully.",
-                    "trigger": "run:completed",
-                    "run_status": "completed",
-                    "run_updated_at": "2024-01-01T12:30:00Z",
-                    "run_updated_by": "example_user"
-                }
-            ]
-        }"#;
-
-        let deserialized_v1: NotificationPayload = serde_json::from_str(payload_v1).unwrap();
+    fn a_run_notification_is_read_as_terraform_sends_it() {
+        let deserialized: NotificationPayload = serde_json::from_str(RUN_NOTIFICATION).unwrap();
         assert!(
-            matches!(deserialized_v1, NotificationPayload::Standard { run_id, .. } if run_id == "run_123456")
+            matches!(deserialized, NotificationPayload::Standard { run_id, .. } if run_id == "run_123456")
         );
     }
 
     #[test]
-    fn test_deserialization_v2() {
-        let payload_v2 = r#"
-        {
-            "payload_version": 2,
-            "notification_configuration_id": "nc_654321",
-            "notification_configuration_url": "https://app.terraform.io/app/org/workspaces/ws/notifications/nc_654321",
-            "trigger_scope": "assessment",
-            "trigger": "assessment:drifted",
-            "message": "Drift detected in workspace.",
-            "details": {}
-        }"#;
-        let deserialized_v2: NotificationPayload = serde_json::from_str(payload_v2).unwrap();
+    fn a_workspace_notification_is_read_as_terraform_sends_it() {
+        let deserialized: NotificationPayload =
+            serde_json::from_str(WORKSPACE_NOTIFICATION).unwrap();
         assert!(
-            matches!(deserialized_v2, NotificationPayload::Workplace { notification_configuration_id, .. } if notification_configuration_id == "nc_654321")
+            matches!(deserialized, NotificationPayload::Workplace { notification_configuration_id, .. } if notification_configuration_id == "nc_654321")
         );
     }
 
     #[test]
-    fn test_deserialization_sampled() {
+    fn a_notification_from_a_run_nobody_updated_is_still_read() {
+        // `run_updated_by` is null for anything a bot started, which is most of
+        // them, so a payload sampled from the wire is worth keeping around.
         let payload = r#"{
             "payload_version":1,
             "notification_configuration_id":"nc-a9UxE3zM5k6YSNK3",
@@ -314,6 +410,83 @@ mod tests {
         let deserialized: NotificationPayload = serde_json::from_str(payload).unwrap();
         assert!(
             matches!(deserialized, NotificationPayload::Standard { run_id, .. } if run_id == "run-xboqtF5JxofL6a6A")
+        );
+    }
+
+    #[tokio::test]
+    async fn a_run_notification_files_a_task_naming_the_workspace_it_came_from() {
+        let services = crate::services::ServicesContainer::new_mock()
+            .await
+            .unwrap();
+        let workflow = store(&services, serde_json::json!({ "name": "Infrastructure" })).await;
+
+        run(&services, &delivery(workflow, RUN_NOTIFICATION))
+            .await
+            .unwrap();
+
+        let filed = filed(&services).await;
+        assert_eq!(filed.len(), 1);
+        assert_eq!(
+            filed[0].payload["title"],
+            "[**terraform:example_org/example_workspace**](https://app.terraform.io/app/org/workspaces/ws/runs/run_123456): Apply complete!",
+        );
+    }
+
+    #[tokio::test]
+    async fn a_workspace_notification_files_a_task_carrying_its_details() {
+        let services = crate::services::ServicesContainer::new_mock()
+            .await
+            .unwrap();
+        let workflow = store(&services, serde_json::json!({ "name": "Infrastructure" })).await;
+
+        run(&services, &delivery(workflow, WORKSPACE_NOTIFICATION))
+            .await
+            .unwrap();
+
+        let filed = filed(&services).await;
+        assert_eq!(filed.len(), 1);
+        assert_eq!(
+            filed[0].payload["title"],
+            "**Terraform Cloud**: Drift detected in workspace.",
+        );
+        assert_eq!(
+            filed[0].payload["priority"], 4,
+            "drift is something somebody has to go and look at",
+        );
+    }
+
+    #[tokio::test]
+    async fn a_delivery_for_a_workflow_that_is_gone_stops_there() {
+        // Deliveries queue behind one another, so a workflow can be deleted
+        // while one of its own is still waiting to run.
+        let services = crate::services::ServicesContainer::new_mock()
+            .await
+            .unwrap();
+        let workflow = store(&services, serde_json::json!({ "name": "Infrastructure" })).await;
+
+        WorkflowStore::new(&services)
+            .with_index(&services)
+            .delete(workflow)
+            .await
+            .unwrap();
+
+        run(&services, &delivery(workflow, RUN_NOTIFICATION))
+            .await
+            .expect("a deleted workflow should not fail the delivery");
+
+        assert!(filed(&services).await.is_empty());
+    }
+
+    #[test]
+    fn deliveries_are_queued_where_this_workflow_reads_them() {
+        // The trigger decides where a configuration is stored and the job
+        // decides where deliveries are queued. A mismatch between the two is a
+        // workflow that saves happily and never runs.
+        use crate::workflows::ConfigurableWorkflow;
+
+        assert_eq!(
+            TerraformWebhook::descriptor().trigger.partition(),
+            <TerraformWebhook as Job>::partition(),
         );
     }
 }

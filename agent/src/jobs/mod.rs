@@ -17,8 +17,10 @@ mod youtube;
 
 pub use calendar::CalendarWorkflow;
 pub use cron::{CRON_PARTITION, CronJob, CronJobConfig, CronJobTask};
-pub use github_attention::{GitHubAttentionConfig, GitHubAttentionWorkflow, subject_key};
-pub use github_auto_merge::{GitHubAutoMergeConfig, GitHubAutoMergeWorkflow};
+pub use github_attention::{
+    GitHubAttentionConfig, GitHubAttentionTask, GitHubAttentionWorkflow, subject_key,
+};
+pub use github_auto_merge::{GitHubAutoMergeConfig, GitHubAutoMergeTask, GitHubAutoMergeWorkflow};
 pub use github_notifications::GitHubNotificationsWorkflow;
 pub use github_notifications_cleanup::GitHubNotificationsCleanupWorkflow;
 pub use github_notifications_refresh::GitHubNotificationsRefreshWorkflow;

@@ -6,7 +6,6 @@ use serde::Deserialize;
 use crate::jobs::*;
 use crate::prelude::*;
 use crate::web::*;
-use crate::webhooks::*;
 
 #[derive(Clone, Deserialize, Default)]
 pub struct Config {
@@ -16,8 +15,6 @@ pub struct Config {
     pub oauth2: HashMap<String, OAuth2Config>,
     #[serde(default)]
     pub web: WebConfig,
-    #[serde(default)]
-    pub webhooks: WebhookConfigs,
     #[serde(default)]
     pub workflows: WorkflowConfigs,
 }
@@ -321,33 +318,6 @@ fn default_database_path() -> String {
 
 fn default_admin_acl() -> Filter {
     Filter::new("false").expect("the literal `false` filter is always valid")
-}
-
-#[derive(Clone, Deserialize, Default)]
-pub struct WebhookConfigs {
-    #[serde(default)]
-    pub azure_monitor: AzureMonitorWebhookConfig,
-
-    #[serde(default)]
-    pub github: GitHubWebhookConfig,
-
-    #[serde(default)]
-    pub grafana: GrafanaWebhookConfig,
-
-    #[serde(default)]
-    pub grey: GreyWebhookConfig,
-
-    #[serde(default)]
-    pub honeycomb: HoneycombWebhookConfig,
-
-    #[serde(default)]
-    pub sentry: SentryWebhookConfig,
-
-    #[serde(default)]
-    pub tailscale: TailscaleWebhookConfig,
-
-    #[serde(default)]
-    pub terraform: TerraformWebhookConfig,
 }
 
 #[derive(Clone, Deserialize, Default)]

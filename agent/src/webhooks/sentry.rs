@@ -1,26 +1,39 @@
 use std::fmt::Display;
 
-use hmac::{Hmac, KeyInit, Mac};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use sha2::Sha256;
 
 use crate::{
     prelude::*,
     publishers::{TodoistCreateTask, TodoistCreateTaskPayload, TodoistDueDate},
 };
 
-type HmacSha256 = Hmac<Sha256>;
-
-#[derive(Clone, Deserialize, Default)]
+/// What one person asked us to do with the deliveries Sentry sends them.
+///
+/// There is deliberately no shared secret here, and no signature check.
+/// Sentry's HMAC used to be the only thing standing between this endpoint and
+/// anybody who knew the installation's hostname, because the address itself was
+/// public knowledge — one `/webhooks/sentry` for the whole installation. A
+/// workflow now has its own unguessable address which nothing else can be
+/// reached at and which its owner can rotate, so the secret would be a second
+/// thing to configure that proves nothing the address has not already proven.
+#[derive(Clone, Default, Serialize, Deserialize)]
 pub struct SentryWebhookConfig {
-    pub secret: String,
+    /// What to call this workflow, so it can be told apart from the others in a
+    /// list of them.
+    pub name: String,
 
     #[serde(default)]
     pub filter: crate::filter::Filter,
 
     #[serde(default = "default_todoist_config")]
     pub todoist: crate::publishers::TodoistTarget,
+}
+
+impl Display for SentryWebhookConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "sentry/{}", self.name)
+    }
 }
 
 fn default_todoist_config() -> crate::publishers::TodoistTarget {
@@ -34,52 +47,79 @@ fn default_todoist_config() -> crate::publishers::TodoistTarget {
 #[derive(Clone)]
 pub struct SentryAlertsWebhook;
 
-impl SentryAlertsWebhook {
-    /// Verifies the Sentry webhook signature.
-    ///
-    /// According to https://docs.sentry.io/organization/integrations/integration-platform/webhooks/,
-    /// Sentry signs webhooks using HMAC-SHA256 with the client secret, and includes
-    /// the signature in the Sentry-Hook-Signature header.
-    fn verify_signature(
-        secret: &str,
-        body: &str,
-        signature: &str,
-    ) -> Result<(), human_errors::Error> {
-        // Create HMAC-SHA256 instance with the secret
-        let mut mac = HmacSha256::new_from_slice(secret.as_bytes()).wrap_user_err(
-            "Failed to create HMAC instance with the provided secret.",
-            &[
-                "Ensure that you have provided a valid webhooks.sentry.secret in your configuration.",
-                "Ensure that the configured webhooks.sentry.secret matches the client secret in your Sentry integration settings.",
-            ],
-        )?;
+crate::register_job!(SentryAlertsWebhook);
+crate::register_workflow_type!(SentryAlertsWebhook);
 
-        // Compute the HMAC of the body
-        mac.update(body.as_bytes());
+impl crate::workflows::ConfigurableWorkflow for SentryAlertsWebhook {
+    type ConfigType = SentryWebhookConfig;
 
-        // Decode the expected signature from hex
-        let expected_signature = hex::decode(signature).or_user_err(&[
-            "The signature in the Sentry-Hook-Signature header is not valid hex.",
-            "Ensure that you are only sending Sentry webhooks to this endpoint.",
-        ])?;
+    fn type_id() -> &'static str {
+        "sentry"
+    }
 
-        // Verify the signature
-        mac.verify_slice(&expected_signature).wrap_user_err(
-            "Webhook signature verification failed (signatures did not match).".to_string(),
-            &[
-                "Ensure that the configured webhooks.sentry.secret matches the client secret in your Sentry integration settings.",
-                "Check that you have configured the webhook correctly in Sentry.",
-            ],
-        )?;
+    fn describe(config: &Self::ConfigType) -> String {
+        config.name.clone()
+    }
 
-        Ok(())
+    fn descriptor() -> automate_api::WorkflowTypeDescriptor {
+        use automate_api::{FieldDescriptor, FieldKind, WorkflowTrigger, WorkflowTypeDescriptor};
+
+        WorkflowTypeDescriptor {
+            id: Self::type_id().to_string(),
+            name: "Sentry".to_string(),
+            description: "Files a task when Sentry reports a new issue or fires an alert."
+                .to_string(),
+            trigger: WorkflowTrigger::Webhook {
+                source: "sentry".to_string(),
+            },
+            fields: [
+                FieldDescriptor::new(
+                    crate::config_path!(SentryWebhookConfig: name),
+                    "Name",
+                    FieldKind::Text {
+                        placeholder: Some("Production errors".into()),
+                    },
+                )
+                .with_help(
+                    "Used to label this workflow, so you can tell it apart from your others.",
+                )
+                .required(),
+                FieldDescriptor::new(
+                    crate::config_path!(SentryWebhookConfig: filter),
+                    "Filter",
+                    FieldKind::Filter {
+                        // The names both delivery shapes answer to; an issue
+                        // alert has no `action` or platform of its own, so a
+                        // filter naming those only ever matches the integration
+                        // payload.
+                        fields: vec![
+                            "action".into(),
+                            "issue_id".into(),
+                            "issue_title".into(),
+                            "issue_type".into(),
+                            "issue_level".into(),
+                            "project_name".into(),
+                            "project_platform".into(),
+                        ],
+                    },
+                )
+                .with_help(
+                    "Only file the issues matching this, such as issue_level in [\"fatal\", \"error\"]. Leave it empty to file every issue Sentry sends.",
+                ),
+            ]
+            .into_iter()
+            .chain(crate::todoist_target_fields!(
+                SentryWebhookConfig,
+                project = Some("Life"),
+                section = Some("Tasks & Chores")
+            ))
+            .collect(),
+        }
     }
 }
 
-crate::register_job!(SentryAlertsWebhook);
-
 impl Job for SentryAlertsWebhook {
-    type JobType = super::WebhookEvent;
+    type JobType = crate::webhooks::WebhookDelivery;
 
     fn partition() -> &'static str {
         "webhooks/sentry"
@@ -93,31 +133,13 @@ impl Job for SentryAlertsWebhook {
     ) -> Result<(), human_errors::Error> {
         let services = ctx.services();
 
-        // Validate the Sentry webhook signature header
-        // https://docs.sentry.io/organization/integrations/integration-platform/webhooks/
-        let secret = &services.config().webhooks.sentry.secret;
+        // Read now rather than carried in the delivery, so that an edit made
+        // between the delivery arriving and this running is the one that applies.
+        let Some(config) = job.config::<SentryWebhookConfig>(services).await? else {
+            return Ok(());
+        };
 
-        if !secret.is_empty() {
-            // HTTP headers are case-insensitive, so we need to search for the header with case-insensitive comparison
-            let signature = job
-                .headers
-                .iter()
-                .find(|(key, _)| key.eq_ignore_ascii_case("sentry-hook-signature"))
-                .map(|(_, value)| value.as_str());
-
-            if let Some(signature) = signature {
-                Self::verify_signature(secret, &job.body, signature)?;
-            } else {
-                warn!(
-                    "Received Sentry webhook without signature, but secret is configured; rejecting request."
-                );
-                return Ok(());
-            }
-        } else {
-            debug!("No Sentry webhook secret configured; skipping signature verification.");
-        }
-
-        let notification: SentryNotification = job.json()?;
+        let notification: SentryNotification = job.event.json()?;
 
         match notification {
             SentryNotification::Integration(integration) => {
@@ -127,13 +149,7 @@ impl Job for SentryAlertsWebhook {
                     return Ok(());
                 }
 
-                if !services
-                    .config()
-                    .webhooks
-                    .sentry
-                    .filter
-                    .matches(&integration)?
-                {
+                if !config.filter.matches(&integration)? {
                     info!(
                         "Sentry issue '{}' did not match filter; ignoring.",
                         integration.data.issue.title
@@ -149,7 +165,7 @@ impl Job for SentryAlertsWebhook {
                         description: Some(issue.culprit.clone()),
                         due: TodoistDueDate::DateTime(ctx.scheduled_at()),
                         priority: Some(issue.level.to_priority()),
-                        config: services.config().webhooks.sentry.todoist.clone(),
+                        config: config.todoist.clone(),
                         ..Default::default()
                     },
                     None,
@@ -158,7 +174,7 @@ impl Job for SentryAlertsWebhook {
                 .await?;
             }
             SentryNotification::Alert(alert) => {
-                if !services.config().webhooks.sentry.filter.matches(&alert)? {
+                if !config.filter.matches(&alert)? {
                     info!(
                         "Sentry alert '{}' did not match filter; ignoring.",
                         alert.title()
@@ -177,7 +193,7 @@ impl Job for SentryAlertsWebhook {
                         description: Some(alert.culprit.clone()),
                         due: TodoistDueDate::DateTime(ctx.scheduled_at()),
                         priority: Some(alert.level.to_priority()),
-                        config: services.config().webhooks.sentry.todoist.clone(),
+                        config: config.todoist.clone(),
                         ..Default::default()
                     },
                     None,
@@ -376,115 +392,205 @@ struct SentryProject {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::collections::HashMap;
 
-    /// Helper function to generate a valid signature for testing
-    fn generate_signature(secret: &str, body: &str) -> String {
-        let mut mac = HmacSha256::new_from_slice(secret.as_bytes()).unwrap();
-        mac.update(body.as_bytes());
-        let result = mac.finalize();
-        hex::encode(result.into_bytes())
+    use chrono::Utc;
+
+    use crate::{
+        webhooks::{WebhookDelivery, WebhookEvent},
+        workflow_store::{WorkflowDraft, WorkflowStore},
+    };
+
+    use super::*;
+
+    /// An Integration Platform delivery: a newly created issue.
+    const ISSUE: &str = r#"{"action":"created","actor":{"type":"application","id":"sentry","name":"Sentry"},"data":{"issue":{"id":"123","url":"https://sentry.io/api/0/issues/123/","web_url":"https://sentry.io/issues/123/","project_url":"https://sentry.io/projects/my-project/","title":"Test Error","type":"error","level":"error","shortId":"TEST-1","culprit":"test.js","project":{"id":"1","name":"Test Project","platform":"javascript","slug":"test-project"}}}}"#;
+
+    /// An issue alert delivery, which is a different shape entirely.
+    const ALERT: &str = r#"{"id":"7470688687","project":"git-tool","project_name":"git-tool","project_slug":"git-tool","logger":"root","level":"error","culprit":"main in main","message":"","url":"https://sierra-softworks.sentry.io/issues/7470688687/","triggering_rules":["Send a notification"],"event":{"title":"Test Error: something went wrong","metadata":{"type":"Test Error","value":"something went wrong"}}}"#;
+
+    /// A configuration that files every issue Sentry sends.
+    fn config() -> serde_json::Value {
+        serde_json::json!({ "name": "Production errors" })
     }
 
-    #[test]
-    fn test_verify_signature_valid() {
-        let secret = "test_secret_key";
-        let body = r#"{"action":"created","actor":{"type":"application","id":"sentry","name":"Sentry"},"data":{"issue":{"id":"123","url":"https://sentry.io/api/0/issues/123/","web_url":"https://sentry.io/issues/123/","project_url":"https://sentry.io/projects/my-project/","title":"Test Error","type":"error","level":"error","shortId":"TEST-1","culprit":"test.js","project":{"id":"1","name":"Test Project","platform":"javascript","slug":"test-project"}}}}"#;
-        let signature = generate_signature(secret, body);
-
-        let result = SentryAlertsWebhook::verify_signature(secret, body, &signature);
-        result.expect("Valid signature should verify successfully");
+    async fn store(
+        services: &(impl Services + Send + Sync + 'static),
+        config: serde_json::Value,
+    ) -> automate_api::WorkflowId {
+        WorkflowStore::new(services)
+            .with_index(services)
+            .create(WorkflowDraft {
+                type_id: "sentry".into(),
+                config,
+                schedule: None,
+                enabled: true,
+            })
+            .await
+            .expect("store the workflow")
+            .id
     }
 
-    #[test]
-    fn test_verify_signature_invalid() {
-        let secret = "test_secret_key";
-        let body = r#"{"action":"created","actor":{"type":"application","id":"sentry","name":"Sentry"},"data":{"issue":{"id":"123","url":"https://sentry.io/api/0/issues/123/","web_url":"https://sentry.io/issues/123/","project_url":"https://sentry.io/projects/my-project/","title":"Test Error","type":"error","level":"error","shortId":"TEST-1","culprit":"test.js","project":{"id":"1","name":"Test Project","platform":"javascript","slug":"test-project"}}}}"#;
-        let wrong_signature = "0000000000000000000000000000000000000000000000000000000000000000";
+    fn delivery(workflow: automate_api::WorkflowId, body: &str) -> WebhookDelivery {
+        WebhookDelivery {
+            workflow,
+            event: WebhookEvent {
+                body: body.to_string(),
+                query: String::new(),
+                headers: HashMap::new(),
+            },
+        }
+    }
 
-        let result = SentryAlertsWebhook::verify_signature(secret, body, wrong_signature);
-        assert!(
-            result.is_err(),
-            "Invalid signature should fail verification"
+    /// Runs one delivery the way the consumer would.
+    async fn run(
+        services: &(impl Services + Send + Sync + Clone + 'static),
+        delivery: &WebhookDelivery,
+    ) -> Result<(), human_errors::Error> {
+        SentryAlertsWebhook
+            .handle(
+                JobContext::new(services.clone(), Utc::now(), None, None),
+                delivery,
+            )
+            .await
+    }
+
+    /// The tasks this workflow asked to have created.
+    async fn filed(
+        services: &(impl Services + Send + Sync + 'static),
+    ) -> Vec<crate::db::PeekedMessage<serde_json::Value>> {
+        services
+            .queue()
+            .peek("todoist/create-task", 10)
+            .await
+            .expect("peek the todoist queue")
+    }
+
+    #[tokio::test]
+    async fn a_newly_created_issue_files_a_task_linking_back_to_sentry() {
+        let services = crate::services::ServicesContainer::new_mock()
+            .await
+            .unwrap();
+        let workflow = store(&services, config()).await;
+
+        run(&services, &delivery(workflow, ISSUE)).await.unwrap();
+
+        let filed = filed(&services).await;
+        assert_eq!(filed.len(), 1);
+        assert_eq!(
+            filed[0].payload["title"],
+            "[TEST-1](https://sentry.io/issues/123/): Test Error",
+        );
+        assert_eq!(
+            filed[0].payload["priority"], 3,
+            "an error-level issue is worth interrupting somebody for",
         );
     }
 
-    #[test]
-    fn test_verify_signature_wrong_secret() {
-        let secret = "test_secret_key";
-        let wrong_secret = "wrong_secret_key";
-        let body = r#"{"action":"created","actor":{"type":"application","id":"sentry","name":"Sentry"},"data":{"issue":{"id":"123","url":"https://sentry.io/api/0/issues/123/","web_url":"https://sentry.io/issues/123/","project_url":"https://sentry.io/projects/my-project/","title":"Test Error","type":"error","level":"error","shortId":"TEST-1","culprit":"test.js","project":{"id":"1","name":"Test Project","platform":"javascript","slug":"test-project"}}}}"#;
-        let signature = generate_signature(wrong_secret, body);
+    #[tokio::test]
+    async fn an_issue_alert_files_a_task_even_though_its_payload_is_a_different_shape() {
+        // Sentry sends two entirely different documents depending on how the
+        // webhook was set up, and somebody who configured the other one should
+        // not be left wondering why nothing happens.
+        let services = crate::services::ServicesContainer::new_mock()
+            .await
+            .unwrap();
+        let workflow = store(&services, config()).await;
 
-        let result = SentryAlertsWebhook::verify_signature(secret, body, &signature);
+        run(&services, &delivery(workflow, ALERT)).await.unwrap();
+
+        let filed = filed(&services).await;
+        assert_eq!(filed.len(), 1);
         assert!(
-            result.is_err(),
-            "Signature with wrong secret should fail verification"
+            filed[0].payload["title"]
+                .as_str()
+                .unwrap()
+                .contains("Test Error: something went wrong"),
         );
     }
 
-    #[test]
-    fn test_verify_signature_tampered_body() {
-        let secret = "test_secret_key";
-        let original_body = r#"{"action":"created","actor":{"type":"application","id":"sentry","name":"Sentry"},"data":{"issue":{"id":"123","url":"https://sentry.io/api/0/issues/123/","web_url":"https://sentry.io/issues/123/","project_url":"https://sentry.io/projects/my-project/","title":"Test Error","type":"error","level":"error","shortId":"TEST-1","culprit":"test.js","project":{"id":"1","name":"Test Project","platform":"javascript","slug":"test-project"}}}}"#;
-        let tampered_body = r#"{"action":"created","actor":{"type":"application","id":"sentry","name":"Sentry"},"data":{"issue":{"id":"123","url":"https://sentry.io/api/0/issues/123/","web_url":"https://sentry.io/issues/123/","project_url":"https://sentry.io/projects/my-project/","title":"Tampered Error","type":"error","level":"error","shortId":"TEST-1","culprit":"test.js","project":{"id":"1","name":"Test Project","platform":"javascript","slug":"test-project"}}}}"#;
-        let signature = generate_signature(secret, original_body);
+    #[tokio::test]
+    async fn an_issue_that_was_only_updated_files_nothing() {
+        // Sentry re-notifies as an issue changes, and a task per update would
+        // bury the one that said the error was new.
+        let services = crate::services::ServicesContainer::new_mock()
+            .await
+            .unwrap();
+        let workflow = store(&services, config()).await;
 
-        let result = SentryAlertsWebhook::verify_signature(secret, tampered_body, &signature);
-        assert!(result.is_err(), "Tampered body should fail verification");
+        let resolved = ISSUE.replace(r#""action":"created""#, r#""action":"resolved""#);
+        run(&services, &delivery(workflow, &resolved))
+            .await
+            .unwrap();
+
+        assert!(filed(&services).await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn an_issue_the_filter_rejects_files_nothing() {
+        let services = crate::services::ServicesContainer::new_mock()
+            .await
+            .unwrap();
+        let workflow = store(
+            &services,
+            serde_json::json!({
+                "name": "Fatal only",
+                "filter": r#"issue_level == "fatal""#,
+            }),
+        )
+        .await;
+
+        run(&services, &delivery(workflow, ISSUE)).await.unwrap();
+
+        assert!(
+            filed(&services).await.is_empty(),
+            "an error-level issue should not pass a fatal-only filter",
+        );
+    }
+
+    #[tokio::test]
+    async fn a_delivery_for_a_paused_workflow_files_nothing() {
+        // Pausing exists so somebody can silence a noisy project without losing
+        // their configuration, which only works if a paused workflow is quiet.
+        let services = crate::services::ServicesContainer::new_mock()
+            .await
+            .unwrap();
+        let workflow = store(&services, config()).await;
+
+        WorkflowStore::new(&services)
+            .with_index(&services)
+            .update(
+                workflow,
+                WorkflowDraft {
+                    type_id: "sentry".into(),
+                    config: config(),
+                    schedule: None,
+                    enabled: false,
+                },
+            )
+            .await
+            .unwrap();
+
+        run(&services, &delivery(workflow, ISSUE)).await.unwrap();
+
+        assert!(filed(&services).await.is_empty());
     }
 
     #[test]
-    fn test_verify_signature_empty_body() {
-        let secret = "test_secret_key";
-        let body = "";
-        let signature = generate_signature(secret, body);
+    fn a_stored_configuration_names_the_workflow_it_describes() {
+        let workflow = crate::workflows::lookup("sentry").expect("the type is registered");
 
-        let result = SentryAlertsWebhook::verify_signature(secret, body, &signature);
-        result.expect("Empty body with valid signature should verify successfully");
-    }
-
-    #[test]
-    fn test_header_lookup_case_insensitive() {
-        // Test that header lookup works with different case variations
-        let signature = "abcdef0123456789";
-
-        // Test with lowercase
-        let mut headers = HashMap::new();
-        headers.insert("sentry-hook-signature".to_string(), signature.to_string());
-
-        let found = headers
-            .iter()
-            .find(|(key, _)| key.eq_ignore_ascii_case("sentry-hook-signature"))
-            .map(|(_, value)| value.as_str());
-        assert!(found.is_some(), "Should find lowercase header");
-
-        // Test with uppercase
-        let mut headers = HashMap::new();
-        headers.insert("SENTRY-HOOK-SIGNATURE".to_string(), signature.to_string());
-
-        let found = headers
-            .iter()
-            .find(|(key, _)| key.eq_ignore_ascii_case("sentry-hook-signature"))
-            .map(|(_, value)| value.as_str());
-        assert!(found.is_some(), "Should find uppercase header");
-
-        // Test with mixed case
-        let mut headers = HashMap::new();
-        headers.insert("Sentry-Hook-Signature".to_string(), signature.to_string());
-
-        let found = headers
-            .iter()
-            .find(|(key, _)| key.eq_ignore_ascii_case("sentry-hook-signature"))
-            .map(|(_, value)| value.as_str());
-        assert!(found.is_some(), "Should find mixed case header");
+        assert_eq!(
+            workflow
+                .describe(&serde_json::json!({ "name": "Production errors" }))
+                .unwrap(),
+            "Production errors",
+        );
     }
 
     #[test]
     fn test_parse_integration_webhook() {
-        let body = r#"{"action":"created","actor":{"type":"application","id":"sentry","name":"Sentry"},"data":{"issue":{"id":"123","url":"https://sentry.io/api/0/issues/123/","web_url":"https://sentry.io/issues/123/","project_url":"https://sentry.io/projects/my-project/","title":"Test Error","type":"error","level":"error","shortId":"TEST-1","culprit":"test.js","project":{"id":"1","name":"Test Project","platform":"javascript","slug":"test-project"}}}}"#;
-        let notification: SentryNotification = serde_json::from_str(body).unwrap();
+        let notification: SentryNotification = serde_json::from_str(ISSUE).unwrap();
         assert!(
             matches!(notification, SentryNotification::Integration(_)),
             "Should parse as Integration webhook"
@@ -493,8 +599,7 @@ mod tests {
 
     #[test]
     fn test_parse_alert_webhook() {
-        let body = r#"{"id":"7470688687","project":"git-tool","project_name":"git-tool","project_slug":"git-tool","logger":"root","level":"error","culprit":"main in main","message":"","url":"https://sierra-softworks.sentry.io/issues/7470688687/","triggering_rules":["Send a notification"],"event":{"title":"Test Error: something went wrong","metadata":{"type":"Test Error","value":"something went wrong"}}}"#;
-        let notification: SentryNotification = serde_json::from_str(body).unwrap();
+        let notification: SentryNotification = serde_json::from_str(ALERT).unwrap();
         assert!(
             matches!(notification, SentryNotification::Alert(_)),
             "Should parse as Alert webhook"
