@@ -11,6 +11,7 @@ pub struct TodoistUpsertTaskPayload {
     pub description: Option<String>,
     pub priority: Option<i32>,
     pub due: TodoistDueDate,
+    #[serde(default, with = "crate::serde_duration::minutes_option")]
     pub duration: Option<chrono::Duration>,
     pub config: crate::publishers::TodoistTarget,
 }

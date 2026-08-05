@@ -68,42 +68,6 @@ fn format_duration(duration: chrono::Duration) -> String {
     parts.join(" ")
 }
 
-/// Durations as a whole number of minutes.
-///
-/// [`chrono::Duration`] serializes as a `(seconds, nanos)` pair, which is a
-/// perfectly good wire format and an impossible thing to put in front of a
-/// person. Every one of these values is an answer to "how long should we wait",
-/// which everybody answers in minutes, so that is what is stored and what the
-/// form collects.
-mod minutes {
-    use serde::{Deserialize, Deserializer, Serializer, de::Error};
-
-    pub fn serialize<S: Serializer>(
-        value: &chrono::Duration,
-        serializer: S,
-    ) -> Result<S::Ok, S::Error> {
-        serializer.serialize_i64(value.num_minutes())
-    }
-
-    pub fn deserialize<'de, D: Deserializer<'de>>(
-        deserializer: D,
-    ) -> Result<chrono::Duration, D::Error> {
-        let minutes = i64::deserialize(deserializer)?;
-
-        if minutes < 0 {
-            return Err(D::Error::custom(
-                "A waiting period cannot be negative; give a number of minutes to wait, or zero to act straight away.",
-            ));
-        }
-
-        chrono::Duration::try_minutes(minutes).ok_or_else(|| {
-            D::Error::custom(
-                "That is longer than we could ever wait; give a smaller number of minutes.",
-            )
-        })
-    }
-}
-
 /// What one person asked us to do with the state changes their Grey reports.
 ///
 /// There is deliberately no shared secret here, and no signature check. Grey's
@@ -124,15 +88,24 @@ pub struct GreyWebhookConfig {
     pub dashboard_url: Option<String>,
 
     /// The amount of time to wait for a monitor to settle before surfacing the alert.
-    #[serde(default = "default_alert_delay", with = "minutes")]
+    #[serde(
+        default = "default_alert_delay",
+        with = "crate::serde_duration::minutes"
+    )]
     pub alert_delay: chrono::Duration,
 
     /// The amount of time to wait after a monitor recovers before confirming the recovery.
-    #[serde(default = "default_recovery_delay", with = "minutes")]
+    #[serde(
+        default = "default_recovery_delay",
+        with = "crate::serde_duration::minutes"
+    )]
     pub recovery_delay: chrono::Duration,
 
     /// The minimum amount of impact required for a monitor's failure to stay in Todoist for later review.
-    #[serde(default = "default_noise_duration", with = "minutes")]
+    #[serde(
+        default = "default_noise_duration",
+        with = "crate::serde_duration::minutes"
+    )]
     pub noise_duration: chrono::Duration,
 
     /// Filter applied to incoming events. The same fields Grey exposes to its own webhook filters

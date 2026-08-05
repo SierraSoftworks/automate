@@ -10,6 +10,7 @@ mod jobs;
 mod parsers;
 mod prelude;
 mod publishers;
+mod serde_duration;
 mod services;
 mod users;
 mod web;
