@@ -3,6 +3,8 @@ use std::sync::LazyLock;
 
 use crate::config::GitHubAppConfig;
 
+pub mod oidc;
+
 pub fn get_test_file_path<P: AsRef<str>>(name: P) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("tests")
@@ -41,6 +43,14 @@ pub async fn mock_services() -> Result<impl crate::services::Services, human_err
 ///
 /// 2048 bits because that is what GitHub issues, so this signs exactly as the
 /// real thing does.
+///
+/// # Why the OIDC tests borrow it
+///
+/// [`oidc::unadvertised_key`] hands this out as "a key the identity provider
+/// does not advertise". It is a real RSA key the installation genuinely holds,
+/// which makes it the honest way to ask whether holding one of the agent's own
+/// keys lets somebody mint a sign-in — and it costs nothing, where a third
+/// generated key would cost another key generation in every test process.
 static GITHUB_APP_PRIVATE_KEY: LazyLock<String> = LazyLock::new(|| {
     use rsa::RsaPrivateKey;
     use rsa::pkcs1::{EncodeRsaPrivateKey, LineEnding};

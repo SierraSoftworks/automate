@@ -323,6 +323,15 @@ fn verify_token(
     validation.validate_exp = true;
     validation.validate_nbf = true;
 
+    // Insisted on rather than merely checked when present. `jsonwebtoken`
+    // compares `aud` and `iss` only against a token that carries them, and its
+    // default requires nothing but `exp` — so a token with the audience simply
+    // left out was accepted where one naming the wrong audience was refused.
+    // That difference is only harmless while the provider issues tokens for
+    // nothing but us; a provider shared with another application, omitting `aud`
+    // for some of its tokens, is an ordinary thing to point this at.
+    validation.set_required_spec_claims(&["exp", "aud", "iss"]);
+
     let data = jsonwebtoken::decode::<serde_json::Map<String, serde_json::Value>>(
         token,
         &decoding_key,
@@ -519,6 +528,8 @@ pub fn filterable_claims(
 mod tests {
     use super::*;
     use actix_web::http::header::{HeaderMap, HeaderValue};
+
+    use crate::testing::oidc::{KEY_ID, TestIdentityProvider, unadvertised_key};
 
     fn headers(pairs: &[(&str, &str)]) -> HeaderMap {
         let mut map = HeaderMap::new();
@@ -856,5 +867,208 @@ mod tests {
         // Verification can't succeed against an empty JWKS, but the refetch must
         // have been attempted (asserted via the mock's expected hit count).
         assert!(result.is_err());
+    }
+
+    // Everything below drives [`validate_token`] against a real identity
+    // provider, which is the only way any of it can be reached: until there was
+    // something able to mint a token the agent would accept, every path through
+    // here that ends in "yes" was unreachable, and the ones that end in "no"
+    // could only be reached with tokens too malformed to get as far as a
+    // signature check. See [`crate::testing::oidc`] for why the provider is real
+    // rather than a `#[cfg(test)]` shortcut in this file.
+
+    /// An agent configured to trust `provider`, held as the middleware holds it.
+    ///
+    /// The services are scoped to the installation's own account because that is
+    /// where the middleware puts the discovery and JWKS caches.
+    async fn agent_trusting(
+        provider: &TestIdentityProvider,
+    ) -> (crate::services::AppServices, OidcConfig) {
+        let context = provider.context().await;
+        let config = context.config();
+        let oidc = config
+            .web
+            .oidc()
+            .cloned()
+            .expect("the context should trust the provider it was built from");
+
+        (context.tenant(TenantId::local()), oidc)
+    }
+
+    #[tokio::test]
+    async fn a_token_the_provider_signed_is_accepted_and_its_claims_come_back_intact() {
+        // The positive control the refusals below rest on. Without it every one
+        // of them would also be satisfied by a validator that refused
+        // everything, which is not the property anybody wants.
+        let provider = TestIdentityProvider::start().await;
+        let (services, oidc) = agent_trusting(&provider).await;
+
+        let claims = validate_token(&services, &oidc, &provider.sign_in_as("alice"))
+            .await
+            .expect("a token this provider signed should be accepted");
+
+        assert_eq!(claims["preferred_username"], "alice");
+        assert_eq!(claims["sub"], "subject-id-for-alice");
+        assert_eq!(claims["email"], "alice@example.com");
+    }
+
+    #[tokio::test]
+    async fn a_token_signed_by_a_key_the_provider_does_not_advertise_is_refused() {
+        // The forgery that matters. The JWKS is public, so the `kid` naming a
+        // legitimate key is not a secret and an attacker will reuse it — what
+        // they cannot do is produce a signature that verifies against the
+        // matching public half. Everything else about this token is correct:
+        // right issuer, right audience, in date, naming a key the provider does
+        // publish.
+        let provider = TestIdentityProvider::start().await;
+        let (services, oidc) = agent_trusting(&provider).await;
+
+        let forged = provider.issue_signed_by(
+            &unadvertised_key(),
+            Some(KEY_ID),
+            provider.claims_for("alice"),
+        );
+
+        assert!(
+            validate_token(&services, &oidc, &forged).await.is_err(),
+            "a token signed by anybody other than the provider must not sign somebody in",
+        );
+    }
+
+    #[tokio::test]
+    async fn a_token_naming_a_signing_key_the_provider_never_published_is_refused() {
+        // The complement of the test above: this signature really is the
+        // provider's, and only the `kid` is wrong. It has to be refused anyway,
+        // because the `kid` is how the agent decides which public key to check
+        // against — accepting a token whose key it cannot name would mean
+        // accepting one it never actually verified.
+        let provider = TestIdentityProvider::start().await;
+        let (services, oidc) = agent_trusting(&provider).await;
+
+        let mislabelled = provider.issue_with_kid(
+            // Signed by the provider itself; only the label is a lie.
+            Some("a-key-nobody-has-heard-of"),
+            provider.claims_for("alice"),
+        );
+
+        assert!(
+            validate_token(&services, &oidc, &mislabelled)
+                .await
+                .is_err(),
+            "a token naming an unpublished key must be refused",
+        );
+    }
+
+    #[tokio::test]
+    async fn an_expired_token_is_refused() {
+        // Sessions ending is the whole point of `exp`. An agent that ignored it
+        // would turn every ID token it ever saw into a permanent credential, and
+        // the only remedy left would be rotating the provider's signing key.
+        let provider = TestIdentityProvider::start().await;
+        let (services, oidc) = agent_trusting(&provider).await;
+
+        let mut claims = provider.claims_for("alice");
+        // Well beyond the 60 seconds of clock-skew leeway `jsonwebtoken` allows
+        // by default, so this is testing expiry rather than the size of that
+        // window.
+        claims["exp"] = serde_json::json!(chrono::Utc::now().timestamp() - 3600);
+
+        assert!(
+            validate_token(&services, &oidc, &provider.issue(claims))
+                .await
+                .is_err(),
+            "an expired session must not still let somebody in",
+        );
+    }
+
+    #[tokio::test]
+    async fn a_token_minted_for_another_audience_is_refused() {
+        // The same provider may issue tokens to several applications. A token
+        // the user obtained for a different one is genuinely signed, in date and
+        // genuinely theirs — but it was never presented to them as a credential
+        // for this agent, and treating it as one would let any other client of
+        // the same provider sign people in here.
+        let provider = TestIdentityProvider::start().await;
+        let (services, oidc) = agent_trusting(&provider).await;
+
+        let mut claims = provider.claims_for("alice");
+        claims["aud"] = serde_json::json!("some-other-application");
+
+        assert!(
+            validate_token(&services, &oidc, &provider.issue(claims))
+                .await
+                .is_err(),
+            "a token addressed to another application must not be accepted here",
+        );
+    }
+
+    #[tokio::test]
+    async fn a_token_that_simply_leaves_out_its_audience_is_refused_too() {
+        // `jsonwebtoken` compares `aud` and `iss` only against a token that
+        // carries them, so omitting one entirely used to be accepted where
+        // naming the wrong one was refused. Harmless only while the provider
+        // issues tokens for nobody but us, which is not something to depend on.
+        let provider = TestIdentityProvider::start().await;
+        let (services, oidc) = agent_trusting(&provider).await;
+
+        let mut claims = provider.claims_for("alice");
+        let stripped = claims.as_object_mut().unwrap();
+        stripped.remove("aud");
+        stripped.remove("iss");
+
+        let token = provider.issue(claims);
+
+        assert!(
+            validate_token(&services, &oidc, &token).await.is_err(),
+            "a token that names no audience is not one we were meant to be given",
+        );
+    }
+
+    #[tokio::test]
+    async fn the_signing_keys_are_fetched_once_and_an_unknown_key_forces_exactly_one_refetch() {
+        // Both halves matter and they pull against each other. Fetching the JWKS
+        // on every request would put the identity provider in the path of every
+        // API call the browser makes; never refetching would mean a key rotation
+        // locked everybody out for the 24 hours the cache lives. The compromise
+        // is a long cache with a refetch triggered by an unrecognised `kid`, and
+        // that only works if the refetch happens once — a token naming a key
+        // that will never exist must not become a request to the provider every
+        // time it is presented.
+        let provider = TestIdentityProvider::start().await;
+        let (services, oidc) = agent_trusting(&provider).await;
+
+        validate_token(&services, &oidc, &provider.sign_in_as("alice"))
+            .await
+            .expect("the first sign-in should be accepted");
+        assert_eq!(provider.jwks_fetches().await, 1);
+        assert_eq!(provider.discovery_fetches().await, 1);
+
+        validate_token(&services, &oidc, &provider.sign_in_as("alice"))
+            .await
+            .expect("the second sign-in should be accepted");
+        assert_eq!(
+            provider.jwks_fetches().await,
+            1,
+            "a second sign-in should be served from the cached key set",
+        );
+
+        let rotated = provider.issue_with_kid(
+            Some("a-key-nobody-has-heard-of"),
+            provider.claims_for("alice"),
+        );
+        assert!(validate_token(&services, &oidc, &rotated).await.is_err());
+        assert_eq!(
+            provider.jwks_fetches().await,
+            2,
+            "an unrecognised key should send the agent back to the provider exactly once",
+        );
+
+        // And the refetched key set is cached in turn, so the next ordinary
+        // sign-in does not go back out to the provider either.
+        validate_token(&services, &oidc, &provider.sign_in_as("alice"))
+            .await
+            .expect("a sign-in after the refetch should be accepted");
+        assert_eq!(provider.jwks_fetches().await, 2);
+        assert_eq!(provider.discovery_fetches().await, 1);
     }
 }
