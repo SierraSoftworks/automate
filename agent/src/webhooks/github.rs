@@ -599,6 +599,10 @@ impl Job for GitHubWebhook {
             GitHubAutoMergeWorkflow::dispatch(
                 crate::jobs::GitHubAutoMergeTask {
                     config: config.auto_merge.clone(),
+                    // Which installation this workflow serves, so the job mints
+                    // its token from what its owner chose rather than from what
+                    // the delivery claims to be.
+                    connection: config.connection,
                     event: pull_request,
                 },
                 delivery.clone(),
@@ -1220,6 +1224,43 @@ mod tests {
         (services, workflow)
     }
 
+    /// Mock services holding one GitHub workflow which serves `connection`, and
+    /// that workflow's id.
+    ///
+    /// Separate from [`services_with`] because only the tests about which
+    /// installation a workflow serves care about the field, and threading it
+    /// through every other call would say nothing.
+    async fn services_serving(
+        connection: Option<automate_api::ConnectionId>,
+    ) -> (
+        crate::services::ServicesContainer<crate::db::TenantDb>,
+        automate_api::WorkflowId,
+    ) {
+        let services = crate::services::ServicesContainer::new_mock()
+            .await
+            .expect("build mock services");
+
+        let workflow = WorkflowStore::new(&services)
+            .with_index(&services)
+            .create(WorkflowDraft {
+                type_id: "github".into(),
+                config: serde_json::json!({
+                    "name": "SierraSoftworks",
+                    "connection": connection,
+                    "secret": "secret",
+                    "auto_merge": on(),
+                    "attention": off(),
+                }),
+                schedule: None,
+                enabled: true,
+            })
+            .await
+            .expect("store the workflow")
+            .id;
+
+        (services, workflow)
+    }
+
     /// Runs one delivery the way the consumer would.
     async fn run(
         services: &crate::services::ServicesContainer<crate::db::TenantDb>,
@@ -1637,6 +1678,54 @@ mod tests {
             crate::jobs::DEFAULT_AUTO_MERGE_FILTER,
             "the workflow's own filter should reach the job, not the default it would have had",
         );
+    }
+
+    #[tokio::test]
+    async fn the_workflow_tells_the_job_which_installation_it_serves() {
+        // The connection is what says which installation this workflow handles
+        // deliveries for, and the job is where that gets checked and the token
+        // minted from it — so it has to travel with the dispatch. Until it did,
+        // the field was stored, asked for on the form, and read by nothing.
+        let connection = automate_api::ConnectionId::from_entropy(0xC0FFEE);
+        let (services, workflow) = services_serving(Some(connection)).await;
+        let job = event(
+            workflow,
+            &[
+                ("X-GitHub-Event", "pull_request"),
+                ("X-Hub-Signature-256", &sign("secret", BODY)),
+            ],
+        );
+
+        run(&services, &job)
+            .await
+            .expect("a signed pull_request delivery should be dispatched");
+
+        let tasks = auto_merge_tasks(&services).await;
+        assert_eq!(tasks.len(), 1);
+        assert_eq!(tasks[0].connection, Some(connection));
+    }
+
+    #[tokio::test]
+    async fn a_workflow_naming_no_installation_dispatches_without_one() {
+        // A workflow stored before the field existed still has to work, and the
+        // job's fallback to the delivery's own claim can only happen if the
+        // absence reaches it rather than being turned into some default.
+        let (services, workflow) = services_serving(None).await;
+        let job = event(
+            workflow,
+            &[
+                ("X-GitHub-Event", "pull_request"),
+                ("X-Hub-Signature-256", &sign("secret", BODY)),
+            ],
+        );
+
+        run(&services, &job)
+            .await
+            .expect("a signed pull_request delivery should be dispatched");
+
+        let tasks = auto_merge_tasks(&services).await;
+        assert_eq!(tasks.len(), 1);
+        assert_eq!(tasks[0].connection, None);
     }
 
     #[tokio::test]
