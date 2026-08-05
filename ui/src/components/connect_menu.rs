@@ -1,5 +1,5 @@
-//! The Connect menu: a themed dropdown shown beside the page's Refresh control
-//! that lists the integrations configured on the agent. Selecting one starts a
+//! A connection menu which combines locally handled credential choices with
+//! integrations configured on the agent. Selecting an integration starts a
 //! bearer-authenticated request that mints a provider authorization URL, which
 //! is opened in a popup (the provider redirects back to the agent's
 //! server-rendered callback, which records the resulting connection). The main
@@ -9,8 +9,19 @@ use automate_api::IntegrationInfo;
 use wasm_bindgen_futures::spawn_local;
 use yew::prelude::*;
 
-use super::menu_button::{MenuButton, MenuButtonOption};
+use super::{form::ButtonKind, menu_button::MenuButton, menu_button::MenuButtonOption};
 use crate::api;
+
+const CREDENTIAL_PREFIX: &str = "credential:";
+const SETUP_PREFIX: &str = "setup:";
+
+fn default_label() -> AttrValue {
+    "Connect".into()
+}
+
+fn default_title() -> Option<AttrValue> {
+    Some("Connect an integration".into())
+}
 
 /// A link/plug glyph shown on the trigger, echoing the "connect" action.
 fn connect_icon() -> Html {
@@ -25,15 +36,35 @@ fn connect_icon() -> Html {
 
 /// Emitted when a setup popup has been opened, so the surrounding page can
 /// refresh whatever it shows about connections once the user comes back.
-#[derive(Properties, PartialEq, Default)]
+#[derive(Properties, PartialEq)]
 pub struct ConnectMenuProps {
     #[prop_or_default]
     pub onstarted: Callback<()>,
+
+    #[prop_or_default]
+    pub credential_options: Vec<MenuButtonOption>,
+
+    #[prop_or_default]
+    pub oncredential: Callback<String>,
+
+    #[prop_or_else(default_label)]
+    pub label: AttrValue,
+
+    #[prop_or_default]
+    pub kind: ButtonKind,
+
+    #[prop_or_default]
+    pub disabled: bool,
+
+    #[prop_or(true)]
+    pub small: bool,
+
+    #[prop_or_else(default_title)]
+    pub title: Option<AttrValue>,
 }
 
-/// A compact toolbar control that reveals a themed dropdown of the configured
-/// integrations. Renders nothing when none are configured, so it never leaves an
-/// empty button in the toolbar.
+/// A toolbar control that reveals credential choices supplied by its parent and
+/// guided setup integrations fetched from the agent.
 #[function_component(ConnectMenu)]
 pub fn connect_menu(props: &ConnectMenuProps) -> Html {
     let integrations = use_state(Vec::<IntegrationInfo>::new);
@@ -56,29 +87,54 @@ pub fn connect_menu(props: &ConnectMenuProps) -> Html {
         });
     }
 
-    if let Some(message) = (*error).clone() {
-        return html! {
-            <span class="connect-menu__error" role="status" title={message.clone()}>
-                { "Connect unavailable" }
-            </span>
+    let has_credentials = !props.credential_options.is_empty();
+    let mut options: Vec<MenuButtonOption> = props
+        .credential_options
+        .iter()
+        .map(|option| {
+            MenuButtonOption::new(
+                format!("{CREDENTIAL_PREFIX}{}", option.value),
+                option.label.clone(),
+            )
+            .in_section("API keys")
+        })
+        .collect();
+    options.extend(integrations.iter().map(|integration| {
+        let option = MenuButtonOption::new(
+            format!("{SETUP_PREFIX}{}", integration.id),
+            integration.name.clone(),
+        );
+        if has_credentials {
+            option.in_section("Authorized accounts")
+        } else {
+            option
+        }
+    }));
+
+    if options.is_empty() {
+        return match (*error).clone() {
+            Some(message) => html! {
+                <span class="connect-menu__error" role="status" title={message}>
+                    { "Connect unavailable" }
+                </span>
+            },
+            None => html! {},
         };
     }
-
-    // Nothing configured: render nothing rather than an empty control in the
-    // toolbar.
-    if integrations.is_empty() {
-        return html! {};
-    }
-
-    let options: Vec<MenuButtonOption> = integrations
-        .iter()
-        .map(|integration| MenuButtonOption::new(integration.id.clone(), integration.name.clone()))
-        .collect();
 
     let onselect = {
         let error = error.clone();
         let onstarted = props.onstarted.clone();
-        Callback::from(move |id: String| {
+        let oncredential = props.oncredential.clone();
+        Callback::from(move |value: String| {
+            if let Some(value) = value.strip_prefix(CREDENTIAL_PREFIX) {
+                oncredential.emit(value.to_string());
+                return;
+            }
+
+            let Some(id) = value.strip_prefix(SETUP_PREFIX).map(str::to_string) else {
+                return;
+            };
             let error = error.clone();
             let onstarted = onstarted.clone();
             spawn_local(async move {
@@ -99,15 +155,28 @@ pub fn connect_menu(props: &ConnectMenuProps) -> Html {
         })
     };
 
+    let error_status = (*error).clone().map(|message| {
+        html! {
+            <span class="connect-menu__error" role="status" title={message}>
+                { "Some connection methods unavailable" }
+            </span>
+        }
+    });
+
     html! {
-        <MenuButton
-            label="Connect"
-            {options}
-            {onselect}
-            small=true
-            title="Connect an integration"
-        >
-            <span class="menu-button__icon" aria-hidden="true">{ connect_icon() }</span>
-        </MenuButton>
+        <>
+            <MenuButton
+                label={props.label.clone()}
+                {options}
+                {onselect}
+                kind={props.kind}
+                disabled={props.disabled}
+                small={props.small}
+                title={props.title.clone()}
+            >
+                <span class="menu-button__icon" aria-hidden="true">{ connect_icon() }</span>
+            </MenuButton>
+            { error_status }
+        </>
     }
 }

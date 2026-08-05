@@ -8,6 +8,7 @@ use super::form::ButtonKind;
 pub struct MenuButtonOption {
     pub value: AttrValue,
     pub label: AttrValue,
+    pub section: Option<AttrValue>,
 }
 
 impl MenuButtonOption {
@@ -15,7 +16,13 @@ impl MenuButtonOption {
         Self {
             value: value.into(),
             label: label.into(),
+            section: None,
         }
+    }
+
+    pub fn in_section(mut self, section: impl Into<AttrValue>) -> Self {
+        self.section = Some(section.into());
+        self
     }
 }
 
@@ -69,7 +76,11 @@ pub fn menu_button(props: &MenuButtonProps) -> Html {
             <>
                 <div class="menu-button__backdrop" onclick={close} />
                 <ul class="menu-button__list" role="menu">
-                    { for props.options.iter().map(|option| {
+                    { for props.options.iter().scan(None::<AttrValue>, |current_section, option| {
+                        let section = option.section.clone().filter(|section| {
+                            current_section.as_ref() != Some(section)
+                        });
+                        *current_section = option.section.clone();
                         let value = option.value.to_string();
                         let open = open.clone();
                         let onselect = props.onselect.clone();
@@ -78,13 +89,16 @@ pub fn menu_button(props: &MenuButtonProps) -> Html {
                             onselect.emit(value.clone());
                         });
 
-                        html! {
+                        Some(html! {
                             <li key={option.value.to_string()} role="none">
+                                if let Some(section) = section {
+                                    <span class="menu-button__section">{ section }</span>
+                                }
                                 <button class="menu-button__item" role="menuitem" {onclick}>
                                     { option.label.clone() }
                                 </button>
                             </li>
-                        }
+                        })
                     }) }
                 </ul>
             </>

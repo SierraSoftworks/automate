@@ -12,8 +12,7 @@ use yew::prelude::*;
 use crate::api::{self, ApiError};
 use crate::app::AuthHandle;
 use crate::components::{
-    Alert, AlertKind, BrowserPartition, ConnectMenu, ConnectionsPanel, PageActions,
-    PartitionBrowser, RefreshButton,
+    Alert, AlertKind, BrowserPartition, PageActions, PartitionBrowser, RefreshButton,
 };
 use crate::search::{SearchVocabulary, VocabularyContext};
 
@@ -160,37 +159,22 @@ pub fn admin() -> Html {
         })
     };
 
-    // Bumped whenever a setup popup is opened or the page is refreshed, so the
-    // connections panel re-reads once the user comes back from the provider.
-    let connections_reload = use_state(|| 0u32);
-
-    // Publish the toolbar actions into the page title row: a Connect dropdown for
-    // wiring up integrations, and a refresh button that re-fetches both stores in
-    // place. They are cleared when the page unmounts.
+    // Publish the refresh action into the page title row. It is cleared when the
+    // page unmounts.
     let page_actions = use_context::<PageActions>();
     {
         let page_actions = page_actions.clone();
         let refresh = refresh.clone();
-        let connections_reload = connections_reload.clone();
         let loading = matches!(&*kv_state, Load::Loading) || matches!(&*queue_state, Load::Loading);
         let busy = *refreshing || loading;
         use_effect_with(busy, move |&busy| {
             if let Some(actions) = &page_actions {
                 let onclick = {
                     let refresh = refresh.clone();
-                    let connections_reload = connections_reload.clone();
-                    Callback::from(move |_: MouseEvent| {
-                        connections_reload.set(*connections_reload + 1);
-                        refresh.emit(());
-                    })
-                };
-                let onstarted = {
-                    let connections_reload = connections_reload.clone();
-                    Callback::from(move |_: ()| connections_reload.set(*connections_reload + 1))
+                    Callback::from(move |_: MouseEvent| refresh.emit(()))
                 };
                 actions.set(html! {
                     <div class="page-title__actions">
-                        <ConnectMenu {onstarted} />
                         <RefreshButton {onclick} {busy} />
                     </div>
                 });
@@ -320,7 +304,6 @@ pub fn admin() -> Html {
     html! {
         <>
             { banner }
-            <ConnectionsPanel reload={*connections_reload} />
             <PartitionBrowser
                 partitions={partitions}
                 empty="No partitions found in the key-value store or job queues."

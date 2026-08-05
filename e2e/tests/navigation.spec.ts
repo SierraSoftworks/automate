@@ -58,6 +58,25 @@ test("following a nav link changes the page without a reload", async ({ page }) 
   await expect(page.locator("input[type=search]")).toHaveValue("");
 });
 
+test("connection management lives on the Connections page", async ({ page }) => {
+  await gotoApp(page, "/admin?demo");
+
+  const dataToolbar = page.locator(".page-toolbar");
+  await expect(page.locator("section.connections")).toHaveCount(0);
+  await expect(dataToolbar.getByRole("button", { name: "Connect", exact: true })).toHaveCount(0);
+  await expect(dataToolbar.getByRole("button", { name: "Refresh" })).toBeVisible();
+
+  await gotoApp(page, "/admin/connections?demo");
+
+  const connectionsToolbar = page.locator(".page-toolbar");
+  await expect(
+    connectionsToolbar.getByRole("button", { name: "Add Connection" }),
+  ).toHaveCount(1);
+  await expect(
+    connectionsToolbar.getByRole("button", { name: "Connect", exact: true }),
+  ).toHaveCount(0);
+});
+
 for (const { path, title, action } of [
   { path: "/admin/workflows", title: "Workflows", action: "Add Workflow" },
   { path: "/admin/connections", title: "Connections", action: "Add Connection" },
