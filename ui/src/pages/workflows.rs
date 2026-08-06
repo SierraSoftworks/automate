@@ -11,7 +11,8 @@
 use std::rc::Rc;
 
 use automate_api::{
-    ConnectionSummary, FieldKind, Workflow, WorkflowTrigger, WorkflowTypeDescriptor,
+    AuditCategory, AuditOutcome, AuditRecord, ConnectionSummary, FieldKind, Workflow,
+    WorkflowTrigger, WorkflowTypeDescriptor,
 };
 use gloo_timers::callback::Timeout;
 use yew::prelude::*;
@@ -20,7 +21,8 @@ use crate::api;
 use crate::components::dynamic_form::{set_at, value_at};
 use crate::components::{
     Alert, AlertKind, Button, ButtonKind, Documentation, DynamicForm, FetchedOptions, Field,
-    MenuButton, MenuButtonOption, PageActions, Switch, TextInput, WebhookAddress,
+    MenuButton, MenuButtonOption, PageActions, StatusPill, StatusTone, Switch, TextInput,
+    WebhookAddress,
 };
 use crate::search::{MatchContext, SearchContext};
 
@@ -44,21 +46,45 @@ fn announce(notice: &UseStateHandle<Option<String>>, message: String) {
     Timeout::new(4_000, move || notice.set(None)).forget();
 }
 
+/// How a workflow's last run turned out.
+///
+/// Only runs count. A workflow's settings being changed says nothing about
+/// whether it works, and a delivery being accepted says only that it arrived —
+/// the run it started is what either worked or did not.
+///
+/// A skipped run is passed over rather than reported: it means the workflow
+/// looked and found nothing to do, which is the healthy state of most of them
+/// and would otherwise hide the failure before it.
+fn last_run(entries: &[AuditRecord], workflow: &Workflow) -> Option<AuditRecord> {
+    let id = workflow.id.to_string();
+
+    entries
+        .iter()
+        .find(|entry| {
+            entry.category == AuditCategory::WorkflowRun
+                && entry.subject.as_deref() == Some(id.as_str())
+                && matches!(entry.outcome, AuditOutcome::Success | AuditOutcome::Failure)
+        })
+        .cloned()
+}
+
 #[function_component(Workflows)]
 pub fn workflows() -> Html {
     let workflows = use_state(Vec::<Workflow>::new);
     let types = use_state(Vec::<WorkflowTypeDescriptor>::new);
     let connections = use_state(Vec::<ConnectionSummary>::new);
+    let history = use_state(Vec::<AuditRecord>::new);
     let error = use_state(|| None::<String>);
     let loading = use_state(|| true);
     let reload = use_state(|| 0u32);
     let chosen = use_state(|| None::<String>);
 
     {
-        let (workflows, types, connections, error, loading) = (
+        let (workflows, types, connections, history, error, loading) = (
             workflows.clone(),
             types.clone(),
             connections.clone(),
+            history.clone(),
             error.clone(),
             loading.clone(),
         );
@@ -91,6 +117,12 @@ pub fn workflows() -> Html {
                 }
                 if let Ok(found) = api::list_service_connections().await {
                     connections.set(found);
+                }
+                // Likewise the history: without it a row simply says nothing
+                // about how it has been getting on, which is where this page
+                // was before there was a log to ask.
+                if let Ok(found) = api::list_audit(None, None).await {
+                    history.set(found);
                 }
 
                 loading.set(false);
@@ -171,9 +203,7 @@ pub fn workflows() -> Html {
             let text = format!("{} {} {}", workflow.name, workflow.type_id, workflow.config)
                 .to_lowercase();
             filter.matches(&MatchContext {
-                partition: "workflows",
-                key: &workflow.name,
-                kind: &workflow.type_id,
+                fields: &[("name", &workflow.name), ("kind", &workflow.type_id)],
                 text: &text,
             })
         })
@@ -198,6 +228,7 @@ pub fn workflows() -> Html {
                         workflow={workflow.clone()}
                         descriptor={types.iter().find(|t| t.id == workflow.type_id).cloned()}
                         connections={(*connections).clone()}
+                        last_run={last_run(&history, workflow)}
                         on_changed={on_changed.clone()}
                     />
                 }) }
@@ -236,6 +267,9 @@ struct WorkflowRowProps {
     /// what an upgrade that removed one looks like from here.
     descriptor: Option<WorkflowTypeDescriptor>,
     connections: Vec<ConnectionSummary>,
+    /// The most recent run that either worked or did not, where there has been
+    /// one. Absent for a workflow that has not run since the log began.
+    last_run: Option<AuditRecord>,
     on_changed: Callback<()>,
 }
 
@@ -521,6 +555,18 @@ fn workflow_row(props: &WorkflowRowProps) -> Html {
                         }
                     </span>
                 </div>
+
+                if let Some(run) = &props.last_run {
+                    <StatusPill
+                        tone={StatusTone::of_outcome(run.outcome)}
+                        label={if run.outcome == AuditOutcome::Success { "Working" } else { "Failing" }}
+                        title={run.message.clone().unwrap_or_else(|| format!(
+                            "Its last run {} {}.",
+                            crate::util::short_relative(run.occurred_at),
+                            if run.outcome == AuditOutcome::Success { "worked" } else { "failed" },
+                        ))}
+                    />
+                }
 
                 // Editing is what a row is usually clicked for, so it stays a
                 // button; the rest sit behind the chevron, which keeps the

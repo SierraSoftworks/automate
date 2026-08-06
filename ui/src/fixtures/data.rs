@@ -8,9 +8,10 @@
 //! is the thing built for it.
 
 use automate_api::{
-    AdminUser, Connection, ConnectionId, ConnectionKind, ConnectionStatus, ConnectionSummary,
-    FieldDescriptor, FieldKind, IntegrationInfo, KeyValueEntry, OptionItem, QueueMessage,
-    QueueStatus, Workflow, WorkflowId, WorkflowTrigger, WorkflowTypeDescriptor,
+    AdminUser, AuditCategory, AuditOutcome, AuditRecord, Connection, ConnectionId, ConnectionKind,
+    ConnectionStatus, ConnectionSummary, FieldDescriptor, FieldKind, IntegrationInfo,
+    KeyValueEntry, OptionItem, QueueMessage, QueueStatus, TenantId, Workflow, WorkflowId,
+    WorkflowTrigger, WorkflowTypeDescriptor,
 };
 use chrono::{Duration, Utc};
 use serde_json::json;
@@ -474,6 +475,140 @@ pub fn workflows() -> Vec<Workflow> {
             last_run: Some(now - Duration::minutes(20)),
             next_run: None,
         },
+    ]
+}
+
+/// A history covering every outcome and most categories, so the activity page
+/// shows each shape it can draw: a workflow that keeps failing, one that is
+/// working, a delivery that was refused, and the changes somebody made by hand.
+pub fn audit() -> Vec<AuditRecord> {
+    let now = Utc::now();
+    let tenant = TenantId::new("demo").expect("the demo tenant name is valid");
+
+    // Newest first, as the agent returns them, and with descending ids so that
+    // paging behaves the way it does against a real log.
+    let mut id = 40;
+    let mut entry = |occurred_at,
+                     category,
+                     action: &str,
+                     outcome,
+                     subject: Option<String>,
+                     message: Option<&str>,
+                     detail| {
+        id -= 1;
+        AuditRecord {
+            id,
+            tenant: tenant.clone(),
+            occurred_at,
+            category,
+            action: action.to_string(),
+            outcome,
+            subject,
+            actor: None,
+            message: message.map(ToString::to_string),
+            detail,
+        }
+    };
+
+    let rss = WorkflowId::from_entropy(1).to_string();
+    let notifications = WorkflowId::from_entropy(2).to_string();
+    let webhook = WorkflowId::from_entropy(3).to_string();
+
+    vec![
+        entry(
+            now - Duration::minutes(12),
+            AuditCategory::WorkflowRun,
+            "ran",
+            AuditOutcome::Failure,
+            Some(rss.clone()),
+            Some(
+                "The feed at https://blog.sierrasoftworks.com/feed.xml did not respond within 30 seconds.",
+            ),
+            Some(json!({ "attempt": 3, "status": 504 })),
+        ),
+        entry(
+            now - Duration::minutes(20),
+            AuditCategory::WebhookDelivery,
+            "received",
+            AuditOutcome::Success,
+            Some(webhook.clone()),
+            Some("Accepted a delivery for 'github_webhook'."),
+            None,
+        ),
+        entry(
+            now - Duration::hours(1),
+            AuditCategory::WorkflowRun,
+            "ran",
+            AuditOutcome::Success,
+            Some(webhook.clone()),
+            None,
+            None,
+        ),
+        entry(
+            now - Duration::hours(3),
+            AuditCategory::WebhookDelivery,
+            "received",
+            AuditOutcome::Denied,
+            Some(webhook),
+            Some("Refused a delivery whose address did not match this workflow."),
+            None,
+        ),
+        entry(
+            now - Duration::hours(6),
+            AuditCategory::WorkflowRun,
+            "ran",
+            AuditOutcome::Failure,
+            Some(rss.clone()),
+            Some(
+                "The feed at https://blog.sierrasoftworks.com/feed.xml did not respond within 30 seconds.",
+            ),
+            None,
+        ),
+        entry(
+            now - Duration::days(1),
+            AuditCategory::WorkflowConfig,
+            "paused",
+            AuditOutcome::Success,
+            Some(notifications),
+            Some("Paused this workflow."),
+            None,
+        ),
+        entry(
+            now - Duration::days(3),
+            AuditCategory::WorkflowConfig,
+            "updated",
+            AuditOutcome::Success,
+            Some(rss),
+            Some("Changed this workflow's settings."),
+            None,
+        ),
+        entry(
+            now - Duration::days(3),
+            AuditCategory::Connection,
+            "replaced-key",
+            AuditOutcome::Success,
+            Some(ConnectionId::from_entropy(4).to_string()),
+            Some("Replaced the API key for 'Budget'."),
+            None,
+        ),
+        entry(
+            now - Duration::days(5),
+            AuditCategory::Authentication,
+            "signed-in",
+            AuditOutcome::Success,
+            Some("demo@example.com".to_string()),
+            None,
+            None,
+        ),
+        entry(
+            now - Duration::days(9),
+            AuditCategory::WorkflowRun,
+            "ran",
+            AuditOutcome::Skipped,
+            Some(WorkflowId::from_entropy(1).to_string()),
+            Some("Nothing in the feed had changed since the last run."),
+            None,
+        ),
     ]
 }
 

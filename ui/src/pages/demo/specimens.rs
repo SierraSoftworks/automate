@@ -16,7 +16,8 @@ use crate::components::{
     Alert, AlertKind, BrowserEntry, BrowserPartition, Button, ButtonGroup, ButtonKind, ConnectMenu,
     ConnectionsPanel, DbEntity, Documentation, DynamicForm, EntityMetadata, Field, FilterInput,
     JsonHighlight, MenuButton, MenuButtonOption, NumberInput, PageTitle, PartitionBrowser,
-    RefreshButton, SecretInput, Select, SelectOption, Switch, TextArea, TextInput, WebhookAddress,
+    RefreshButton, SecretInput, Select, SelectOption, StatusPill, StatusTone, Switch, TextArea,
+    TextInput, WebhookAddress,
 };
 use crate::fixtures;
 
@@ -60,6 +61,12 @@ pub const CONTROLS: &[Control] = &[
         name: "Field",
         blurb: "The label, help text and error that wrap every control.",
         view: || html! { <Fields /> },
+    },
+    Control {
+        slug: "status-pill",
+        name: "Status pill",
+        blurb: "How something is doing, in the two words a row has space for.",
+        view: || html! { <StatusPills /> },
     },
     Control {
         slug: "text-input",
@@ -170,6 +177,36 @@ fn bind(state: &UseStateHandle<String>) -> Callback<String> {
 /// outside a page.
 fn inert<T: 'static>() -> Callback<T> {
     Callback::from(|_| ())
+}
+
+#[function_component(StatusPills)]
+fn status_pills() -> Html {
+    html! {
+        <>
+            <Specimen
+                label="Tones"
+                note="A pill is only worth drawing where the answer is not the expected one; \
+                      a list where every row says OK hides the row that does not."
+            >
+                <StatusPill tone={StatusTone::Ok} label="Working" />
+                <StatusPill tone={StatusTone::Warning} label="Needs reconnecting" />
+                <StatusPill tone={StatusTone::Error} label="Failing" />
+                <StatusPill tone={StatusTone::Neutral} label="Skipped" />
+            </Specimen>
+
+            <Specimen
+                label="With an explanation"
+                note="Two words cannot say why something failed, so the reason is on hover."
+            >
+                <StatusPill
+                    tone={StatusTone::Error}
+                    label="Failing"
+                    title="The feed at https://blog.sierrasoftworks.com/feed.xml did not \
+                           respond within 30 seconds."
+                />
+            </Specimen>
+        </>
+    }
 }
 
 #[function_component(Alerts)]

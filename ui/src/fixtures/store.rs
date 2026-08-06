@@ -14,9 +14,9 @@
 use std::cell::RefCell;
 
 use automate_api::{
-    AdminUser, Connection, ConnectionId, ConnectionKind, ConnectionStatus, ConnectionSummary,
-    FieldKind, IntegrationInfo, KeyValueEntry, OptionItem, QueueMessage, QueueStatus, Workflow,
-    WorkflowId, WorkflowTrigger, WorkflowTypeDescriptor,
+    AdminUser, AuditRecord, Connection, ConnectionId, ConnectionKind, ConnectionStatus,
+    ConnectionSummary, FieldKind, IntegrationInfo, KeyValueEntry, OptionItem, QueueMessage,
+    QueueStatus, Workflow, WorkflowId, WorkflowTrigger, WorkflowTypeDescriptor,
 };
 use chrono::Utc;
 
@@ -170,6 +170,26 @@ pub fn workflow_types() -> Vec<WorkflowTypeDescriptor> {
 
 pub fn workflows() -> Vec<Workflow> {
     with(|state| state.workflows.clone())
+}
+
+/// The audit log, narrowed the way the agent narrows it.
+///
+/// The filtering is repeated here rather than left to the page because the page
+/// does not do it: it asks for what it wants and expects the answer to already
+/// be that. A demo store that returned everything would let a page ship with a
+/// filter it never actually applies.
+pub fn audit(subject: Option<&str>, before: Option<i64>) -> Vec<AuditRecord> {
+    data::audit()
+        .into_iter()
+        .filter(|entry| match subject {
+            Some(subject) => entry.subject.as_deref() == Some(subject),
+            None => true,
+        })
+        .filter(|entry| match before {
+            Some(before) => entry.id < before,
+            None => true,
+        })
+        .collect()
 }
 
 pub fn create_workflow(

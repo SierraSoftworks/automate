@@ -151,7 +151,7 @@ test("a connection that needs reauthorization offers the reconnect workflow", as
 
   const row = page.locator(".connection").filter({ hasText: "Spotify" });
   const reconnect = row.getByRole("button", { name: "Reconnect", exact: true });
-  await expect(row.locator("span.connection__status--warning")).toHaveText("Needs reconnecting");
+  await expect(row.locator("span.status-pill--warning")).toHaveText("Needs reconnecting");
   await expect(row.getByRole("button", { name: "Needs reconnecting" })).toHaveCount(0);
   await expect(row.getByRole("button", { name: "Edit" })).toHaveCount(0);
 

@@ -28,6 +28,12 @@ const pages = [
     subtitle: "The things Automate watches for you, and what it does when they change.",
     nav: "Workflows",
   },
+  {
+    path: "/admin/activity",
+    title: "Activity",
+    subtitle: "What Automate has been doing for you, and anything that did not work.",
+    nav: "Activity",
+  },
 ];
 
 for (const { path, title, subtitle, nav } of pages) {

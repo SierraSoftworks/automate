@@ -1,5 +1,6 @@
 //! Top-level routed pages.
 
+mod activity;
 mod admin;
 mod auth_callback;
 mod connections;
@@ -13,6 +14,7 @@ mod protected;
 mod queue;
 mod workflows;
 
+pub use activity::Activity;
 pub use admin::Admin;
 pub use auth_callback::AuthCallback;
 pub use connections::Connections;

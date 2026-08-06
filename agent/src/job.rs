@@ -272,6 +272,34 @@ macro_rules! register_job {
     };
 }
 
+/// The workflow a queued message belongs to, where it belongs to one.
+///
+/// The two ways a workflow gets run label their messages differently: a
+/// schedule — and the button that brings a run forward — keys its message by
+/// the workflow, while a webhook delivery names it in the payload. Both are read
+/// here so that a run's outcome lands on the workflow however it was started.
+///
+/// Anything else is the installation's own housekeeping, which nobody
+/// configured and which has no workflow to be recorded against.
+fn workflow_of(item: &QueueMessage<serde_json::Value>) -> Option<automate_api::WorkflowId> {
+    // A message on the cron partition is the schedule rather than the run: it
+    // re-arms itself and enqueues the real work, so recording it here would put
+    // two entries in the log for every run, one of which never touched the
+    // workflow's configuration.
+    if item.partition == crate::jobs::CRON_PARTITION {
+        return None;
+    }
+
+    item.idempotency_key
+        .as_deref()
+        .and_then(|key| key.parse().ok())
+        .or_else(|| {
+            item.payload
+                .get("workflow")
+                .and_then(|value| serde_json::from_value(value.clone()).ok())
+        })
+}
+
 /// The single queue consumer responsible for processing every registered job.
 ///
 /// It dequeues messages from any partition, looks up the matching handler in
@@ -483,6 +511,9 @@ impl JobHost {
         )
         .with_key(item.idempotency_key.clone());
 
+        // Resolved before the message is consumed by `complete`.
+        let workflow = workflow_of(&item);
+
         match handler
             .handle(ctx, &item.payload)
             .instrument(span.clone())
@@ -490,6 +521,10 @@ impl JobHost {
         {
             Ok(()) => {
                 info!("Job '{name}' completed successfully (traceparent: {traceparent}).");
+                if let Some(workflow) = workflow {
+                    Self::audit_run(&services, workflow, crate::db::AuditOutcome::Success, None)
+                        .await;
+                }
                 if let Err(err) = queue.complete(name.to_string(), item).await {
                     error!(error = %err, "Failed to mark job '{name}' as completed (traceparent: {traceparent}): {err}");
                     session.record_human_error(&err);
@@ -505,8 +540,45 @@ impl JobHost {
                 // trace, including an OpenTelemetry `exception` event.
                 Self::record_job_failure(&span, &err);
 
+                if let Some(workflow) = workflow {
+                    Self::audit_run(
+                        &services,
+                        workflow,
+                        crate::db::AuditOutcome::Failure,
+                        Some(err.to_string()),
+                    )
+                    .await;
+                }
+
                 error!(error = %err, "An error occurred while processing job '{name}' (traceparent: {traceparent}): {err}");
             }
+        }
+    }
+
+    /// Notes what became of a run against the workflow it belongs to.
+    ///
+    /// A run happens long after the page that asked for it has gone, so this is
+    /// the only account of it its owner can reach; without it, a workflow that
+    /// has been failing for a week looks exactly like one that has been working.
+    async fn audit_run(
+        services: &AppServices,
+        workflow: automate_api::WorkflowId,
+        outcome: crate::db::AuditOutcome,
+        message: Option<String>,
+    ) {
+        use crate::db::{AuditCategory, AuditEntry, AuditStore};
+
+        let mut entry =
+            AuditEntry::new(AuditCategory::WorkflowRun, "ran", outcome).subject(workflow);
+
+        if let Some(message) = message {
+            entry = entry.message(message);
+        }
+
+        if let Err(err) = services.audit().record(entry).await {
+            // The run is over either way; losing the note about it is not a
+            // reason to fail the job or retry it.
+            warn!(error = %err, "Failed to record a workflow run in the audit log: {err}");
         }
     }
 
@@ -539,6 +611,71 @@ mod tests {
     use crate::services::ServicesContainer;
 
     use super::*;
+
+    fn queued(
+        partition: &str,
+        idempotency_key: Option<&str>,
+        payload: serde_json::Value,
+    ) -> QueueMessage<serde_json::Value> {
+        QueueMessage {
+            key: "message".to_string(),
+            partition: partition.to_string(),
+            reservation_id: "reservation".to_string(),
+            payload,
+            scheduled_at: Utc::now(),
+            traceparent: None,
+            tracestate: None,
+            idempotency_key: idempotency_key.map(ToString::to_string),
+        }
+    }
+
+    #[test]
+    fn a_scheduled_run_is_attributed_by_its_idempotency_key() {
+        let id = automate_api::WorkflowId::from_entropy(7);
+        let message = queued("rss", Some(&id.to_string()), serde_json::json!({}));
+
+        assert_eq!(workflow_of(&message), Some(id));
+    }
+
+    #[test]
+    fn a_webhook_delivery_is_attributed_by_its_payload() {
+        let id = automate_api::WorkflowId::from_entropy(9);
+        let message = queued(
+            "github_webhook",
+            None,
+            serde_json::json!({ "workflow": id, "event": {} }),
+        );
+
+        assert_eq!(workflow_of(&message), Some(id));
+    }
+
+    #[test]
+    fn housekeeping_belongs_to_no_workflow() {
+        // Its key is whatever the job's configuration renders as, which is not
+        // an identifier and must not be mistaken for one.
+        let message = queued(
+            "todoist_cleanup",
+            Some("todoist_cleanup"),
+            serde_json::json!({}),
+        );
+
+        assert_eq!(workflow_of(&message), None);
+    }
+
+    #[test]
+    fn a_schedule_is_not_itself_a_run() {
+        // The cron message is keyed by the workflow it arms, so without an
+        // exception it would record a run for every dispatch as well as for the
+        // work that dispatch enqueued.
+        let id = automate_api::WorkflowId::from_entropy(11);
+        let message = queued(
+            crate::jobs::CRON_PARTITION,
+            Some(&id.to_string()),
+            serde_json::json!({}),
+        );
+
+        assert_eq!(workflow_of(&message), None);
+    }
 
     #[derive(Serialize, Deserialize)]
     struct TestPayload {
