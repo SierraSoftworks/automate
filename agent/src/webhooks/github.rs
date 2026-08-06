@@ -49,10 +49,11 @@ const SECURITY_ALERT_EVENTS: &[&str] = &[
     "secret_scanning_alert",
 ];
 
-/// Alert and assignment actions which mean the subject no longer needs
+/// Alert, assignment and subject actions which mean the subject no longer needs
 /// attention, so any task tracking it is completed instead of raised.
 const RESOLVING_ACTIONS: &[&str] = &[
     "auto_dismissed",
+    "closed",
     "closed_by_user",
     "dismissed",
     "fixed",
@@ -671,6 +672,9 @@ pub enum GitHubAttentionKind {
     Comment,
     Assignment,
     SecurityAlert,
+
+    /// The subject was closed or merged, which only ever retires a task.
+    Closure,
 }
 
 impl GitHubAttentionKind {
@@ -679,6 +683,7 @@ impl GitHubAttentionKind {
             Self::Comment => "comment",
             Self::Assignment => "assignment",
             Self::SecurityAlert => "security_alert",
+            Self::Closure => "closure",
         }
     }
 }
@@ -865,16 +870,20 @@ impl GitHubAttentionEvent {
         if matches!(event_type, "issues" | "pull_request") {
             let payload: GitHubActivityPayload = job.json()?;
 
-            if !matches!(payload.action.as_str(), "assigned" | "unassigned") {
-                return Ok(None);
-            }
+            let kind = match payload.action.as_str() {
+                "assigned" | "unassigned" => GitHubAttentionKind::Assignment,
+                // A merged pull request arrives as `closed` too, with `merged`
+                // set, so both cases are covered by the one action.
+                "closed" => GitHubAttentionKind::Closure,
+                _ => return Ok(None),
+            };
 
             let Some(subject) = payload.subject() else {
                 return Ok(None);
             };
 
             return Ok(Some(Self {
-                kind: GitHubAttentionKind::Assignment,
+                kind,
                 event: event_type.to_string(),
                 action: payload.action.clone(),
                 resolved: RESOLVING_ACTIONS.contains(&payload.action.as_str()),
@@ -1036,6 +1045,7 @@ struct GitHubRule {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rstest::rstest;
     use std::collections::HashMap;
 
     use crate::{
@@ -1351,6 +1361,61 @@ mod tests {
         assert_eq!(parsed.kind, GitHubAttentionKind::Assignment);
         assert_eq!(parsed.assignee.as_deref(), Some("notheotherben"));
         assert!(parsed.resolved);
+    }
+
+    #[rstest]
+    #[case("issues", "issue")]
+    #[case("pull_request", "pull_request")]
+    fn closing_a_subject_resolves_it(#[case] event_type: &str, #[case] field: &str) {
+        let job = payload(serde_json::json!({
+            "action": "closed",
+            field: {
+                "number": 7,
+                "title": "Fix the thing",
+                "html_url": "https://github.com/example/repo/issues/7",
+                "user": { "login": "notheotherben" },
+                "merged": true,
+            },
+            "repository": {
+                "name": "repo",
+                "full_name": "example/repo",
+                "owner": { "login": "example" },
+            },
+            "sender": { "login": "someone-else" },
+        }));
+
+        let parsed = GitHubAttentionEvent::parse(event_type, &job)
+            .expect("the closure should parse")
+            .expect("the closure should warrant attention");
+
+        assert_eq!(parsed.kind, GitHubAttentionKind::Closure);
+        assert!(parsed.resolved);
+        // The task the comment and notification paths file is keyed on the
+        // subject, so this is what has to be completed.
+        assert_eq!(parsed.unique_key(), "github/attention/example/repo#7");
+    }
+
+    #[test]
+    fn reopening_a_subject_raises_nothing() {
+        let job = payload(serde_json::json!({
+            "action": "reopened",
+            "issue": {
+                "number": 7,
+                "title": "Fix the thing",
+                "html_url": "https://github.com/example/repo/issues/7",
+            },
+            "repository": {
+                "name": "repo",
+                "full_name": "example/repo",
+                "owner": { "login": "example" },
+            },
+        }));
+
+        assert!(
+            GitHubAttentionEvent::parse("issues", &job)
+                .expect("the event should parse")
+                .is_none()
+        );
     }
 
     #[test]
