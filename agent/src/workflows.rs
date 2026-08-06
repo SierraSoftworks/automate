@@ -619,6 +619,7 @@ mod tests {
             "github-releases",
             "xkcd",
             "ynab-stocks",
+            "spotify-yearly-playlist",
         ] {
             assert!(
                 registry().contains_key(expected),
