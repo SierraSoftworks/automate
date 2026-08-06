@@ -1,6 +1,7 @@
 use std::borrow::Cow;
 use tracing_batteries::prelude::*;
 
+use crate::db::StateKey;
 use crate::prelude::*;
 
 pub trait IncrementalCollector: Collector {
@@ -9,6 +10,12 @@ pub trait IncrementalCollector: Collector {
     fn partition(&self) -> &'static str;
 
     fn key(&self) -> Cow<'static, str>;
+
+    /// Where the watermark this collector remembers is kept, so that it can be
+    /// cleared without a second copy of the derivation going stale.
+    fn state(&self) -> StateKey {
+        StateKey::new(self.partition(), self.key())
+    }
 
     async fn fetch_since(
         &self,

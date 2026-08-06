@@ -27,6 +27,7 @@ use std::sync::LazyLock;
 use automate_api::WorkflowTypeDescriptor;
 use human_errors::Error;
 
+use crate::db::StateKey;
 use crate::job::Job;
 
 /// A [`Job`] that a user can create instances of from the API.
@@ -59,6 +60,22 @@ pub trait ConfigurableWorkflow: Job {
         let _ = config;
         Self::descriptor().name
     }
+
+    /// Everything this workflow remembers between runs, so that it can be
+    /// forgotten.
+    ///
+    /// A list of addresses rather than a `reset` method that does the work. The
+    /// work is always the same — delete these entries from the key-value store —
+    /// and returning the addresses keeps this synchronous and object safe,
+    /// keeps the deletion and its audit record in one place, and makes what a
+    /// reset would do something a test can assert without a database.
+    ///
+    /// Empty by default, which is the truthful answer for the workflows that
+    /// act on whatever they are handed and remember nothing afterwards.
+    fn state(config: &Self::ConfigType) -> Vec<StateKey> {
+        let _ = config;
+        Vec::new()
+    }
 }
 
 /// The type-erased view of a workflow type, so that the registry can hold every
@@ -76,6 +93,10 @@ pub trait WorkflowType: Send + Sync {
 
     /// What to call the instance this configuration describes.
     fn describe(&self, config: &serde_json::Value) -> Result<String, Error>;
+
+    /// Everything the instance this configuration describes remembers between
+    /// runs. Clearing these is what resetting a workflow means.
+    fn state(&self, config: &serde_json::Value) -> Result<Vec<StateKey>, Error>;
 }
 
 impl<W> WorkflowType for W
@@ -100,6 +121,12 @@ where
 
     fn describe(&self, config: &serde_json::Value) -> Result<String, Error> {
         Ok(<W as ConfigurableWorkflow>::describe(
+            &self.deserialize(config)?,
+        ))
+    }
+
+    fn state(&self, config: &serde_json::Value) -> Result<Vec<StateKey>, Error> {
+        Ok(<W as ConfigurableWorkflow>::state(
             &self.deserialize(config)?,
         ))
     }

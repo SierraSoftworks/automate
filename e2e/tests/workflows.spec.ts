@@ -16,6 +16,7 @@ import {
   setSwitch,
   test,
   uniqueName,
+  workflowAction,
   type Connection,
 } from "./helpers";
 
@@ -135,7 +136,31 @@ test("deleting a workflow removes it from the list", async ({ page }) => {
   const row = page.locator("li.workflow").filter({ hasText: name });
   await expect(row).toHaveCount(1);
 
-  await row.getByRole("button", { name: "Delete" }).click();
+  await workflowAction(row, "Delete");
 
   await expect(page.locator("li.workflow").filter({ hasText: name })).toHaveCount(0);
+});
+
+test("resetting a workflow forgets what it remembered, after confirming", async ({ page }) => {
+  // The operator-facing replacement for finding the right key in the Data view
+  // and deleting it by hand. It is asked for rather than done, because the
+  // consequence lands in somebody's task list rather than on this page.
+  const name = uniqueName(NAME_PREFIX);
+  await gotoApp(page, "/admin/workflows");
+  await addRssWorkflow(page, name);
+
+  const row = page.locator("li.workflow").filter({ hasText: name });
+  await expect(row).toHaveCount(1);
+
+  await workflowAction(row, "Reset state");
+
+  // Backing out must leave the workflow exactly as it was.
+  await row.getByRole("button", { name: "Leave it as it is" }).click();
+  await expect(row.getByRole("button", { name: "Reset state" })).toHaveCount(0);
+
+  await workflowAction(row, "Reset state");
+  await row.getByRole("button", { name: "Reset state" }).click();
+
+  await expect(row).toContainText("Forgot");
+  await expect(page.locator("li.workflow").filter({ hasText: name })).toHaveCount(1);
 });

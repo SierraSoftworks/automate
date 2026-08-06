@@ -23,6 +23,12 @@ where
 
     fn key(&self) -> Cow<'static, str>;
 
+    /// Where the snapshot this collector diffs against is kept, so that it can
+    /// be cleared without a second copy of the derivation going stale.
+    fn state(&self) -> crate::db::StateKey {
+        crate::db::StateKey::new(self.partition(), self.key())
+    }
+
     fn identifier(&self, item: &Self::Item) -> Self::Identifier;
 
     async fn fetch(&self, services: &impl Services)

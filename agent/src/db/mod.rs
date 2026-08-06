@@ -25,6 +25,27 @@ pub use audit::{AuditCategory, AuditEntry, AuditOutcome, AuditQuery, AuditRecord
 pub use partition::Partition;
 pub use sqlite::{SqliteDatabase, TenantDb};
 
+/// The address of one value in the key-value store.
+///
+/// Exists so that something which keeps state can say *where* it keeps it
+/// without the asker having to reconstruct the address. A watermark's key is
+/// built from a feed's URL or a repository's name, and the only place that
+/// derivation is known to be right is the collector that reads and writes it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StateKey {
+    pub partition: Cow<'static, str>,
+    pub key: Cow<'static, str>,
+}
+
+impl StateKey {
+    pub fn new(partition: impl Into<Cow<'static, str>>, key: impl Into<Cow<'static, str>>) -> Self {
+        Self {
+            partition: partition.into(),
+            key: key.into(),
+        }
+    }
+}
+
 #[allow(dead_code)]
 #[async_trait::async_trait]
 pub trait KeyValueStore {

@@ -3,7 +3,8 @@ use std::fmt::Display;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    collectors::RssCollector,
+    collectors::{IncrementalCollector, RssCollector},
+    db::StateKey,
     prelude::*,
     publishers::TodoistTarget,
     publishers::{TodoistCreateTask, TodoistCreateTaskPayload, TodoistDueDate},
@@ -103,6 +104,13 @@ impl crate::workflows::ConfigurableWorkflow for RssWorkflow {
 
     fn describe(config: &Self::JobType) -> String {
         config.name.clone()
+    }
+
+    /// The feed's watermark, which is kept against the feed's address rather
+    /// than this workflow — so resetting here re-files the backlog for anything
+    /// else watching the same feed too.
+    fn state(config: &Self::ConfigType) -> Vec<StateKey> {
+        vec![RssCollector::new(&config.url).state()]
     }
 
     fn descriptor() -> automate_api::WorkflowTypeDescriptor {

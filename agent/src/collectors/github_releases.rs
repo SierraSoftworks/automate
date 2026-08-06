@@ -65,6 +65,16 @@ impl Filterable for GitHubReleaseItem {
 }
 
 impl GitHubReleasesCollector {
+    /// Polls anonymously. Enough to work out where the watermark for a
+    /// repository is kept; not enough to read a private one.
+    pub fn new(repo: impl ToString) -> Self {
+        Self {
+            api_url: "https://api.github.com".into(),
+            repo: repo.to_string(),
+            api_key: None,
+        }
+    }
+
     pub fn with_api_key(repo: impl ToString, api_key: impl Into<String>) -> Self {
         Self {
             api_url: "https://api.github.com".into(),

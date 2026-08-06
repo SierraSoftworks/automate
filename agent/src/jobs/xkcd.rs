@@ -6,6 +6,7 @@ use crate::prelude::*;
 use crate::publishers::{TodoistCreateTask, TodoistCreateTaskPayload};
 use crate::{
     collectors::{Collector, XkcdCollector},
+    db::StateKey,
     filter::Filter,
     publishers::TodoistTarget,
     services::Services,
@@ -71,6 +72,10 @@ impl crate::workflows::ConfigurableWorkflow for XkcdWorkflow {
 
     fn type_id() -> &'static str {
         "xkcd"
+    }
+
+    fn state(_config: &Self::ConfigType) -> Vec<StateKey> {
+        vec![XkcdCollector::new().state()]
     }
 
     fn descriptor() -> automate_api::WorkflowTypeDescriptor {

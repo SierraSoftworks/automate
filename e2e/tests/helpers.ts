@@ -198,3 +198,15 @@ export async function setSwitch(input: Locator, checked: boolean): Promise<void>
 
 /** The shape of a webhook ingress URL: a fixed path and 22 base64url characters. */
 export const WEBHOOK_URL = /^https?:\/\/[^/]+\/webhooks\/w\/[A-Za-z0-9_-]{22}$/;
+
+/**
+ * Chooses one of the actions folded behind a workflow row's chevron.
+ *
+ * Editing is the one action the row carries out on its own; everything else —
+ * running now, resetting, deleting — lives in the menu beside it, so a spec that
+ * wants one of those has to open the menu first.
+ */
+export async function workflowAction(row: Locator, name: string): Promise<void> {
+  await row.getByRole("button", { name: "Workflow actions" }).click();
+  await row.getByRole("menuitem", { name }).click();
+}

@@ -128,6 +128,10 @@ pub fn configure() -> actix_web::Scope<
                     "/workflows/{workflow}/trigger",
                     web::post().to(workflows::trigger),
                 )
+                .route(
+                    "/workflows/{workflow}/reset",
+                    web::post().to(workflows::reset),
+                )
                 // Installation-wide endpoints. These take the `Administrative`
                 // extractor, which refuses a request from anyone who is not an
                 // administrator, so the guard cannot be lost by remounting them.

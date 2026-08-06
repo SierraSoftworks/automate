@@ -4,7 +4,12 @@ use serde::{Deserialize, Serialize};
 
 use crate::prelude::*;
 use crate::publishers::{TodoistCreateTask, TodoistCreateTaskPayload, TodoistDueDate};
-use crate::{collectors::GitHubReleasesCollector, filter::Filter, publishers::TodoistTarget};
+use crate::{
+    collectors::{GitHubReleasesCollector, IncrementalCollector},
+    db::StateKey,
+    filter::Filter,
+    publishers::TodoistTarget,
+};
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct GitHubReleasesConfig {
@@ -91,6 +96,10 @@ impl crate::workflows::ConfigurableWorkflow for GitHubReleasesWorkflow {
 
     fn describe(config: &Self::JobType) -> String {
         config.repository.clone()
+    }
+
+    fn state(config: &Self::ConfigType) -> Vec<StateKey> {
+        vec![GitHubReleasesCollector::new(&config.repository).state()]
     }
 
     fn descriptor() -> automate_api::WorkflowTypeDescriptor {
