@@ -1,7 +1,6 @@
-use automate_api::{ConnectionId, ConnectionStatus};
+use automate_api::ConnectionId;
 use chrono::Datelike;
 
-use crate::connections::{ConnectionSecret, ConnectionStore};
 use crate::db::StateKey;
 use crate::{prelude::*, publishers::SpotifyClient};
 
@@ -179,61 +178,16 @@ impl Job for SpotifyYearlyPlaylistWorkflow {
         job: &Self::JobType,
     ) -> Result<(), human_errors::Error> {
         let services = ctx.services();
-        let connections = ConnectionStore::for_services(services);
 
-        let Some(connection) = connections.get(job.connection).await? else {
-            return Err(human_errors::user(
-                format!(
-                    "The selected Spotify connection ('{}') no longer exists.",
-                    job.connection
-                ),
-                &["Link the account again, or select another connection for this workflow."],
-            ));
-        };
-
-        let ConnectionSecret::OAuth2 {
-            access_token,
-            refresh_token,
-            expires_at,
-        } = connections.open(&connection)?
+        // The refresh token has expired or been revoked: a re-authorization
+        // reminder has been raised, so completing here (rather than erroring)
+        // stops us retrying against a dead account on every schedule.
+        let Some(token) =
+            crate::connections::resolve_oauth2_token(job.connection, SPOTIFY_PROVIDER, services)
+                .await?
         else {
-            return Err(human_errors::user(
-                "This Spotify connection does not hold an authorization grant.",
-                &["Reconnect your Spotify account."],
-            ));
+            return Ok(());
         };
-
-        let stored = OAuth2RefreshToken::new(access_token, refresh_token, expires_at);
-
-        let token = match crate::web::refresh_or_notify(SPOTIFY_PROVIDER, &stored, services).await?
-        {
-            Some(token) => token,
-            // The refresh token has expired or been revoked: a re-authorization
-            // reminder has been raised. Marking the connection and completing
-            // here (rather than erroring) stops us retrying against a dead
-            // account on every schedule until somebody notices.
-            None => {
-                connections
-                    .set_status(job.connection, ConnectionStatus::NeedsReauthorization)
-                    .await?;
-                return Ok(());
-            }
-        };
-
-        // Write the renewed grant back, so the next run starts from it rather
-        // than repeating the refresh.
-        if token.access_token() != stored.access_token() {
-            connections
-                .update_secret(
-                    job.connection,
-                    ConnectionSecret::OAuth2 {
-                        access_token: token.access_token().to_string(),
-                        refresh_token: token.refresh_token().to_string(),
-                        expires_at: token.expires_at(),
-                    },
-                )
-                .await?;
-        }
 
         let client = SpotifyClient::new(token.clone(), services.http_client());
         let user = client.get_current_user().await?;

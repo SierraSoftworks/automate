@@ -103,6 +103,54 @@ impl SpotifyClient {
         Ok(())
     }
 
+    #[instrument("spotify.get_playlist_items", skip(self, playlist_id), err(Display))]
+    pub async fn get_playlist_items(
+        &self,
+        playlist_id: &str,
+    ) -> Result<Vec<SpotifyPlaylistItem>, human_errors::Error> {
+        let items = self
+            .call_spotify_paginated(
+                reqwest::Method::GET,
+                format!("playlists/{playlist_id}/tracks"),
+                None::<()>,
+                |_| true,
+            )
+            .await?;
+
+        Ok(items)
+    }
+
+    /// Removes the named occurrences of items from a playlist.
+    ///
+    /// `snapshot_id` is the version the positions were read from, so Spotify
+    /// resolves them against that version rather than whatever the playlist has
+    /// become since — which is what makes several batches of removals, each
+    /// computed from one reading, safe to send.
+    #[instrument(
+        "spotify.remove_playlist_items",
+        skip(self, playlist_id, snapshot_id, removals),
+        err(Display)
+    )]
+    pub async fn remove_playlist_items(
+        &self,
+        playlist_id: &str,
+        snapshot_id: &str,
+        removals: &[SpotifyPlaylistItemRemoval],
+    ) -> Result<(), human_errors::Error> {
+        let _: serde_json::Value = self
+            .call_spotify(
+                reqwest::Method::DELETE,
+                format!("playlists/{playlist_id}/tracks"),
+                Some(serde_json::json!({
+                    "tracks": removals,
+                    "snapshot_id": snapshot_id,
+                })),
+            )
+            .await?;
+
+        Ok(())
+    }
+
     async fn call_spotify_paginated<T: DeserializeOwned, W: Fn(&T) -> bool>(
         &self,
         method: reqwest::Method,
@@ -228,6 +276,64 @@ pub struct SpotifyPlaylist {
     pub id: String,
     pub name: String,
     pub uri: String,
-    pub public: bool,
+
+    /// Null for the playlists Spotify considers the question irrelevant for,
+    /// so this cannot be a bare `bool` without a listing occasionally failing
+    /// to parse in its entirety.
+    #[serde(default)]
+    pub public: Option<bool>,
+
     pub collaborative: bool,
+
+    pub owner: SpotifyPlaylistOwner,
+
+    /// The version of the playlist this reading came from, which removals are
+    /// resolved against.
+    pub snapshot_id: String,
+}
+
+#[allow(dead_code)]
+#[derive(Deserialize)]
+pub struct SpotifyPlaylistOwner {
+    pub id: String,
+    #[serde(default)]
+    pub display_name: Option<String>,
+}
+
+/// One entry in a playlist.
+#[derive(Deserialize)]
+pub struct SpotifyPlaylistItem {
+    /// Absent when Spotify cannot resolve what was added.
+    #[serde(default)]
+    pub track: Option<SpotifyPlaylistItemTrack>,
+
+    /// A file on the user's own machine rather than anything in Spotify's
+    /// catalogue.
+    #[serde(default)]
+    pub is_local: bool,
+}
+
+/// Deliberately not [`SpotifyTrack`]: a playlist entry may be a podcast episode
+/// or an unavailable track, neither of which carries everything a saved track
+/// does.
+#[allow(dead_code)]
+#[derive(Deserialize)]
+pub struct SpotifyPlaylistItemTrack {
+    #[serde(default)]
+    pub id: Option<String>,
+
+    #[serde(default)]
+    pub name: Option<String>,
+
+    pub uri: String,
+}
+
+/// The occurrences of one item to remove from a playlist.
+#[derive(Debug, PartialEq, Serialize)]
+pub struct SpotifyPlaylistItemRemoval {
+    pub uri: String,
+
+    /// Which copies to remove. Without this Spotify removes every copy of the
+    /// URI, which is the opposite of keeping one.
+    pub positions: Vec<usize>,
 }

@@ -83,6 +83,8 @@ auth_url = "https://accounts.spotify.com/authorize"
 token_url = "https://accounts.spotify.com/api/token"
 scopes = [
     "user-library-read",
+    "playlist-read-private",
+    "playlist-read-collaborative",
     "playlist-modify-public",
     "playlist-modify-private"
 ]
