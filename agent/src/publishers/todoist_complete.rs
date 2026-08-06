@@ -34,10 +34,11 @@ impl Job for TodoistCompleteTask {
         let services = ctx.services();
 
         let client = TodoistClient::connect(services, &job.config).await?;
+        let cache_key = client.task_cache_key(&job.unique_key);
 
         if let Some(existing_task) = services
             .kv()
-            .get::<TodoistUpsertTaskState>("todoist/task", job.unique_key.clone())
+            .get::<TodoistUpsertTaskState>("todoist/task", cache_key.clone())
             .await?
         {
             client.0.complete_task(&existing_task.id).await.wrap_user_err(
@@ -48,10 +49,7 @@ impl Job for TodoistCompleteTask {
                 ],
             )?;
 
-            services
-                .kv()
-                .remove("todoist/task", job.unique_key.clone())
-                .await?;
+            services.kv().remove("todoist/task", cache_key).await?;
         }
 
         Ok(())

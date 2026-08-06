@@ -43,11 +43,12 @@ impl Job for TodoistUpsertTask {
         let services = ctx.services();
 
         let client = TodoistClient::connect(services, &job.config).await?;
+        let cache_key = client.task_cache_key(&job.unique_key);
         let hash = self.job_hash(job)?;
 
         if let Some(existing_task) = services
             .kv()
-            .get::<TodoistUpsertTaskState>("todoist/task", job.unique_key.clone())
+            .get::<TodoistUpsertTaskState>("todoist/task", cache_key.clone())
             .await?
         {
             if hash == existing_task.hash {
@@ -88,7 +89,7 @@ impl Job for TodoistUpsertTask {
                 .kv()
                 .set(
                     "todoist/task",
-                    job.unique_key.clone(),
+                    cache_key,
                     TodoistUpsertTaskState {
                         id: existing_task.id.clone(),
                         hash,
@@ -137,7 +138,7 @@ impl Job for TodoistUpsertTask {
                 .kv()
                 .set(
                     "todoist/task",
-                    job.unique_key.clone(),
+                    cache_key,
                     TodoistUpsertTaskState {
                         id: task.id.clone(),
                         hash,

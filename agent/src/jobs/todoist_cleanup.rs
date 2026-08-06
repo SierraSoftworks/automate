@@ -68,13 +68,17 @@ impl Job for TodoistCleanupWorkflow {
     ) -> Result<(), human_errors::Error> {
         let services = ctx.services();
         let client = TodoistClient::connect(services, &job.todoist).await?;
+        let cache_key_prefix = client.task_cache_key("");
 
         let entries = services
             .kv()
             .list::<TodoistUpsertTaskState>("todoist/task")
             .await?;
 
-        for (key, state) in entries {
+        for (key, state) in entries
+            .into_iter()
+            .filter(|(key, _)| key.starts_with(&cache_key_prefix))
+        {
             match client.0.get_task(&state.id).await {
                 Ok(task) if task.checked || task.is_deleted || task.completed_at.is_some() => {
                     info!(
