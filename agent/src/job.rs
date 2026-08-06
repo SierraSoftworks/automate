@@ -372,6 +372,20 @@ impl JobHost {
         // nobody's workflows to run.
         for tenant in context.database().tenants().await? {
             let services = context.tenant(tenant.clone());
+
+            // Before the comparison, so that a Spotify account linked under the
+            // old implicit scheme has a record for the reconciler to arm.
+            if let Err(err) =
+                crate::workflow_migration::adopt_spotify_yearly_playlists(&services).await
+            {
+                error!(
+                    tenant = %tenant,
+                    error = %err,
+                    "Failed to create workflows for a tenant's linked Spotify accounts; their yearly playlists may stop being filled until this is fixed: {err}",
+                );
+                services.session().record_human_error(&err);
+            }
+
             if let Err(err) = crate::jobs::CronJob::reconcile(&services).await {
                 error!(
                     tenant = %tenant,

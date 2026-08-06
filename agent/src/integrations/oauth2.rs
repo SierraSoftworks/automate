@@ -105,15 +105,14 @@ impl Integration for OAuth2Integration {
         // Re-authorising an account we already hold refreshes it in place, so
         // somebody reconnecting after an expiry is not left with two entries
         // they cannot tell apart.
-        let connection = match connections.find_by_account(id, owner.as_str()).await? {
+        match connections.find_by_account(id, owner.as_str()).await? {
             Some(existing) => {
-                let refreshed = connections.update_secret(existing.id, secret).await?;
+                connections.update_secret(existing.id, secret).await?;
                 info!(
                     connection.id = %existing.id,
                     oauth.provider = id,
                     "Refreshed an existing connection after re-authorisation."
                 );
-                refreshed.unwrap_or(existing)
             }
             None => {
                 let created = connections
@@ -124,14 +123,8 @@ impl Integration for OAuth2Integration {
                     oauth.provider = id,
                     "Linked a new account."
                 );
-                created
             }
-        };
-
-        // Start whatever this provider drives. Keyed by the connection, so
-        // re-authorising an account that is already running does not leave two
-        // schedules chasing each other.
-        start_provider_workflows(id, connection.id, &ctx.for_tenant(owner)).await?;
+        }
 
         Ok(SetupComplete {
             heading: "Login complete".to_string(),
@@ -207,28 +200,6 @@ impl Integration for OAuth2Integration {
 
         Ok(())
     }
-}
-
-/// Kicks off the workflows a newly linked account drives.
-///
-/// The set is keyed off the provider rather than configured, because a provider
-/// and the work it enables are decided together in code; making it configurable
-/// would only invite the two to disagree.
-async fn start_provider_workflows(
-    provider: &str,
-    connection: automate_api::ConnectionId,
-    services: &crate::services::AppServices,
-) -> Result<(), human_errors::Error> {
-    if provider == "spotify" {
-        crate::jobs::SpotifyYearlyPlaylistWorkflow::dispatch(
-            crate::jobs::SpotifyYearlyPlaylistTask { connection },
-            Some(connection.to_string().into()),
-            services,
-        )
-        .await?;
-    }
-
-    Ok(())
 }
 
 #[cfg(test)]

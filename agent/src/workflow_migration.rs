@@ -46,8 +46,9 @@ use human_errors::Error;
 use crate::db::KeyValueStore;
 use crate::jobs::{
     CRON_PARTITION, CalendarWorkflow, CronJobConfig, CronJobTask,
-    GitHubNotificationsCleanupWorkflow, GitHubReleasesWorkflow, RssWorkflow, XkcdWorkflow,
-    YnabStocksWorkflow, YouTubeWorkflow,
+    GitHubNotificationsCleanupWorkflow, GitHubReleasesWorkflow, RssWorkflow, SPOTIFY_PROVIDER,
+    SpotifyYearlyPlaylistConfig, SpotifyYearlyPlaylistWorkflow, XkcdWorkflow, YnabStocksWorkflow,
+    YouTubeWorkflow,
 };
 use crate::prelude::*;
 use crate::workflow_store::{WorkflowDraft, WorkflowStore};
@@ -70,6 +71,9 @@ pub const GITHUB_CLEANUP_FROM_CONFIG: &str = "github-cleanup-from-config";
 
 /// The marker saying existing GitHub workflows were linked to the imported PAT.
 pub const GITHUB_PAT_WORKFLOW_CONNECTIONS: &str = "github-pat-workflow-connections";
+
+/// The marker saying this tenant's linked Spotify accounts were given workflows.
+pub const SPOTIFY_YEARLY_PLAYLIST_WORKFLOWS: &str = "spotify-yearly-playlist-workflows";
 
 /// The most armed schedules we will look at when clearing out the ones the file
 /// pushed.
@@ -248,6 +252,102 @@ async fn attach_github_pat_to_existing_workflows<S: Services>(services: &S) -> R
         .await?;
 
     Ok(())
+}
+
+/// Gives every linked Spotify account the workflow that used to be implied by
+/// linking it.
+///
+/// The yearly playlist job had no record: authorising Spotify queued a message
+/// that re-queued itself for as long as the account existed, so there was
+/// nothing to see, disable or configure. Now that it is a workflow type, an
+/// upgrading installation would otherwise find its playlists quietly stop being
+/// filled the moment the last self-scheduled message was consumed.
+///
+/// Run for every tenant rather than only the local one, because a Spotify
+/// account is linked by a person rather than described by the configuration
+/// file. The marker lives in that tenant's own space, so each is migrated once.
+#[instrument("workflow_migration.adopt_spotify", skip(services), err(Display))]
+pub async fn adopt_spotify_yearly_playlists<S: Services>(services: &S) -> Result<usize, Error> {
+    if services
+        .kv()
+        .get::<Marker>(MIGRATIONS_PARTITION, SPOTIFY_YEARLY_PLAYLIST_WORKFLOWS)
+        .await?
+        .is_some()
+    {
+        return Ok(0);
+    }
+
+    let store = WorkflowStore::new(services);
+
+    // A tenant that has already created one by hand keeps it, rather than
+    // ending up with two workflows filing into the same playlists.
+    let covered: std::collections::HashSet<automate_api::ConnectionId> = store
+        .records()
+        .await?
+        .into_iter()
+        .filter(|record| record.type_id == SpotifyYearlyPlaylistWorkflow::type_id())
+        .filter_map(|record| {
+            serde_json::from_value::<SpotifyYearlyPlaylistConfig>(record.config).ok()
+        })
+        .map(|config| config.connection)
+        .collect();
+
+    let mut imported = 0;
+    for connection in crate::connections::ConnectionStore::for_services(services)
+        .list_for_provider(SPOTIFY_PROVIDER)
+        .await?
+    {
+        if covered.contains(&connection.id) {
+            continue;
+        }
+
+        // Only the connection is written. The rest of the configuration takes
+        // its defaults, which are the names the old job used, so the playlists
+        // already out there go on being the ones filed into.
+        store
+            .create(WorkflowDraft {
+                type_id: SpotifyYearlyPlaylistWorkflow::type_id().to_string(),
+                config: serde_json::json!({ "connection": connection.id }),
+                schedule: None,
+                enabled: true,
+            })
+            .await?;
+
+        // The self-scheduled message this replaces was keyed by the connection.
+        // Left alone it would fire once more and then stop, which is harmless
+        // but would run the new workflow's first poll twice over.
+        services
+            .queue()
+            .purge(
+                <SpotifyYearlyPlaylistWorkflow as Job>::partition(),
+                connection.id.to_string(),
+            )
+            .await?;
+
+        imported += 1;
+    }
+
+    services
+        .kv()
+        .set(
+            MIGRATIONS_PARTITION,
+            SPOTIFY_YEARLY_PLAYLIST_WORKFLOWS,
+            Marker {
+                at: Utc::now(),
+                imported,
+            },
+        )
+        .await?;
+
+    if imported > 0 {
+        info!(
+            workflows.imported = imported,
+            "Created a Spotify Yearly Playlists workflow for {imported} linked account(s); \
+             they can now be edited or paused alongside your other workflows.",
+        );
+    }
+
+    Ok(imported)
 }
 
 /// Moves the old installation-level cleanup schedule into the local user's
@@ -974,6 +1074,100 @@ mod tests {
             },
             cron: croner::Cron::from_str("@daily").unwrap(),
         }
+    }
+
+    /// Links a Spotify account the way an authorisation used to.
+    async fn link_spotify(services: &TestServices, account: &str) -> automate_api::ConnectionId {
+        crate::connections::ConnectionStore::for_services(services)
+            .create(
+                SPOTIFY_PROVIDER,
+                "Spotify".to_string(),
+                Some(account.to_string()),
+                crate::connections::ConnectionSecret::OAuth2 {
+                    access_token: "access".into(),
+                    refresh_token: "refresh".into(),
+                    expires_at: "2030-01-01T00:00:00Z".parse().unwrap(),
+                },
+            )
+            .await
+            .unwrap()
+            .id
+    }
+
+    async fn spotify_workflows(services: &TestServices) -> Vec<SpotifyYearlyPlaylistConfig> {
+        WorkflowStore::new(services)
+            .records()
+            .await
+            .unwrap()
+            .into_iter()
+            .filter(|record| record.type_id == SpotifyYearlyPlaylistWorkflow::type_id())
+            .map(|record| serde_json::from_value(record.config).unwrap())
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn every_linked_spotify_account_gets_the_workflow_that_used_to_be_implied() {
+        let services = ServicesContainer::new_mock().await.unwrap();
+        let personal = link_spotify(&services, "alice-personal").await;
+        let work = link_spotify(&services, "alice-work").await;
+
+        assert_eq!(adopt_spotify_yearly_playlists(&services).await.unwrap(), 2);
+
+        let mut connections: Vec<_> = spotify_workflows(&services)
+            .await
+            .into_iter()
+            .map(|config| config.connection)
+            .collect();
+        connections.sort();
+
+        let mut expected = vec![personal, work];
+        expected.sort();
+        assert_eq!(connections, expected);
+    }
+
+    #[tokio::test]
+    async fn an_adopted_workflow_keeps_filing_into_the_playlists_already_out_there() {
+        let services = ServicesContainer::new_mock().await.unwrap();
+        link_spotify(&services, "alice-personal").await;
+
+        adopt_spotify_yearly_playlists(&services).await.unwrap();
+
+        let config = spotify_workflows(&services).await.remove(0);
+        assert_eq!(config.playlist_name, "{year} Liked Songs");
+
+        // Armed by the reconciler rather than here, so what matters is that it
+        // was given a schedule to be armed from.
+        let record = WorkflowStore::new(&services)
+            .records()
+            .await
+            .unwrap()
+            .remove(0);
+        assert_eq!(record.schedule.as_deref(), Some("@hourly"));
+        assert!(record.enabled);
+    }
+
+    #[tokio::test]
+    async fn adopting_twice_leaves_one_workflow_per_account() {
+        let services = ServicesContainer::new_mock().await.unwrap();
+        link_spotify(&services, "alice-personal").await;
+
+        assert_eq!(adopt_spotify_yearly_playlists(&services).await.unwrap(), 1);
+        assert_eq!(adopt_spotify_yearly_playlists(&services).await.unwrap(), 0);
+        assert_eq!(spotify_workflows(&services).await.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn an_account_linked_after_the_adoption_is_left_to_its_owner() {
+        // Linking no longer starts anything, so a workflow created for an
+        // account nobody asked to automate would be a surprise rather than a
+        // rescue.
+        let services = ServicesContainer::new_mock().await.unwrap();
+
+        adopt_spotify_yearly_playlists(&services).await.unwrap();
+        link_spotify(&services, "alice-personal").await;
+        adopt_spotify_yearly_playlists(&services).await.unwrap();
+
+        assert!(spotify_workflows(&services).await.is_empty());
     }
 
     /// A workflow type whose stored configuration asks for more than the payload
