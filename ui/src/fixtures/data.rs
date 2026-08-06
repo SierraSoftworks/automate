@@ -10,8 +10,8 @@
 use automate_api::{
     AdminUser, AuditCategory, AuditOutcome, AuditRecord, Connection, ConnectionId, ConnectionKind,
     ConnectionStatus, ConnectionSummary, FieldDescriptor, FieldKind, IntegrationInfo,
-    KeyValueEntry, OptionItem, QueueMessage, QueueStatus, TenantId, Workflow, WorkflowId,
-    WorkflowTrigger, WorkflowTypeDescriptor,
+    KeyValueEntry, OptionItem, QueueMessage, QueueStatus, RunOutcome, RunReport, RunState,
+    TenantId, Workflow, WorkflowId, WorkflowTrigger, WorkflowTypeDescriptor,
 };
 use chrono::{Duration, Utc};
 use serde_json::json;
@@ -410,8 +410,13 @@ pub fn workflow_types() -> Vec<WorkflowTypeDescriptor> {
 }
 
 /// Sample workflows: one of each trigger, one of them paused.
+///
+/// Health is derived from [`workflow_runs`] rather than written out again, so
+/// the pill on a row and the panel it opens cannot disagree.
 pub fn workflows() -> Vec<Workflow> {
     let now = Utc::now();
+    let health = |id: WorkflowId| workflow_runs(&id.to_string()).map(|state| state.health());
+
     vec![
         Workflow {
             id: WorkflowId::from_entropy(1),
@@ -435,6 +440,7 @@ pub fn workflows() -> Vec<Workflow> {
             updated_at: now - Duration::days(3),
             last_run: Some(now - Duration::hours(2)),
             next_run: Some(now + Duration::hours(4)),
+            health: health(WorkflowId::from_entropy(1)),
         },
         Workflow {
             id: WorkflowId::from_entropy(2),
@@ -456,6 +462,7 @@ pub fn workflows() -> Vec<Workflow> {
             updated_at: now - Duration::days(1),
             last_run: Some(now - Duration::days(1)),
             next_run: None,
+            health: health(WorkflowId::from_entropy(2)),
         },
         Workflow {
             id: WorkflowId::from_entropy(3),
@@ -474,13 +481,17 @@ pub fn workflows() -> Vec<Workflow> {
             updated_at: now - Duration::days(7),
             last_run: Some(now - Duration::minutes(20)),
             next_run: None,
+            health: health(WorkflowId::from_entropy(3)),
         },
     ]
 }
 
-/// A history covering every outcome and most categories, so the activity page
-/// shows each shape it can draw: a workflow that keeps failing, one that is
-/// working, a delivery that was refused, and the changes somebody made by hand.
+/// A history of the things worth keeping: a workflow whose health changed, a
+/// delivery that was turned away, and the changes somebody made by hand.
+///
+/// Deliberately without an entry per run. That is the arrangement this replaced,
+/// and a fixture that still showed one would have the page reviewed against
+/// behaviour the agent no longer has.
 pub fn audit() -> Vec<AuditRecord> {
     let now = Utc::now();
     let tenant = TenantId::new("demo").expect("the demo tenant name is valid");
@@ -518,30 +529,12 @@ pub fn audit() -> Vec<AuditRecord> {
         entry(
             now - Duration::minutes(12),
             AuditCategory::WorkflowRun,
-            "ran",
+            "started-failing",
             AuditOutcome::Failure,
             Some(rss.clone()),
             Some(
                 "The feed at https://blog.sierrasoftworks.com/feed.xml did not respond within 30 seconds.",
             ),
-            Some(json!({ "attempt": 3, "status": 504 })),
-        ),
-        entry(
-            now - Duration::minutes(20),
-            AuditCategory::WebhookDelivery,
-            "received",
-            AuditOutcome::Success,
-            Some(webhook.clone()),
-            Some("Accepted a delivery for 'github_webhook'."),
-            None,
-        ),
-        entry(
-            now - Duration::hours(1),
-            AuditCategory::WorkflowRun,
-            "ran",
-            AuditOutcome::Success,
-            Some(webhook.clone()),
-            None,
             None,
         ),
         entry(
@@ -549,19 +542,17 @@ pub fn audit() -> Vec<AuditRecord> {
             AuditCategory::WebhookDelivery,
             "received",
             AuditOutcome::Denied,
-            Some(webhook),
+            Some(webhook.clone()),
             Some("Refused a delivery whose address did not match this workflow."),
             None,
         ),
         entry(
-            now - Duration::hours(6),
+            now - Duration::hours(9),
             AuditCategory::WorkflowRun,
-            "ran",
-            AuditOutcome::Failure,
-            Some(rss.clone()),
-            Some(
-                "The feed at https://blog.sierrasoftworks.com/feed.xml did not respond within 30 seconds.",
-            ),
+            "recovered",
+            AuditOutcome::Success,
+            Some(webhook),
+            Some("This workflow is working again, after 4 failed runs."),
             None,
         ),
         entry(
@@ -600,16 +591,82 @@ pub fn audit() -> Vec<AuditRecord> {
             None,
             None,
         ),
-        entry(
-            now - Duration::days(9),
-            AuditCategory::WorkflowRun,
-            "ran",
-            AuditOutcome::Skipped,
-            Some(WorkflowId::from_entropy(1).to_string()),
-            Some("Nothing in the feed had changed since the last run."),
-            None,
-        ),
     ]
+}
+
+/// What each workflow's last runs looked like.
+///
+/// Between them: one that is failing and shows the payload it failed on, one
+/// that is working but failed earlier in the night, and one that has never run.
+pub fn workflow_runs(workflow: &str) -> Option<RunState> {
+    let now = Utc::now();
+
+    let report = |finished: chrono::DateTime<Utc>,
+                  outcome,
+                  message: Option<&str>,
+                  input: Option<serde_json::Value>| RunReport {
+        started_at: finished - Duration::milliseconds(840),
+        finished_at: finished,
+        outcome,
+        message: message.map(ToString::to_string),
+        input,
+    };
+
+    let rss = report(
+        now - Duration::minutes(12),
+        RunOutcome::Failed,
+        Some(
+            "The feed at https://blog.sierrasoftworks.com/feed.xml did not respond within 30 seconds.",
+        ),
+        Some(json!({
+            "feed": { "url": "https://blog.sierrasoftworks.com/feed.xml" },
+            "include_summary": true,
+        })),
+    );
+
+    // A delivery, redacted the way the agent redacts one before storing it.
+    let delivery = |action: &str, finished, outcome, message: Option<&str>| {
+        report(
+            finished,
+            outcome,
+            message,
+            Some(json!({
+                "workflow": WorkflowId::from_entropy(3).to_string(),
+                "event": {
+                    "headers": {
+                        "x-github-event": "release",
+                        "x-hub-signature-256": "<redacted>",
+                        "content-type": "application/json",
+                    },
+                    "body": format!("{{\"action\":\"{action}\",\"release\":{{\"tag_name\":\"v2.0.2\"}}}}"),
+                },
+            })),
+        )
+    };
+
+    match workflow {
+        id if id == WorkflowId::from_entropy(1).to_string() => Some(RunState {
+            last: rss.clone(),
+            last_failure: Some(rss),
+            consecutive_failures: 3,
+        }),
+        id if id == WorkflowId::from_entropy(3).to_string() => Some(RunState {
+            last: delivery(
+                "published",
+                now - Duration::hours(1),
+                RunOutcome::Succeeded,
+                None,
+            ),
+            last_failure: Some(delivery(
+                "created",
+                now - Duration::hours(9),
+                RunOutcome::Failed,
+                Some("Todoist refused the request: 403 Forbidden."),
+            )),
+            consecutive_failures: 0,
+        }),
+        _ => None,
+    }
 }
 
 /// The integrations demo mode pretends the agent has configured.
