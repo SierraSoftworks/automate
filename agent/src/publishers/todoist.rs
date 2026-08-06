@@ -48,7 +48,7 @@ impl TodoistTarget {
     }
 }
 
-pub struct TodoistClient(pub Arc<TodoistWrapper>);
+pub struct TodoistClient(pub Arc<TodoistWrapper>, ConnectionId);
 
 impl TodoistClient {
     /// Builds a client for the Todoist account a target names.
@@ -105,7 +105,15 @@ impl TodoistClient {
             }
         };
 
-        Ok(Self(Arc::new(TodoistWrapper::new(token))))
+        Ok(Self(Arc::new(TodoistWrapper::new(token)), connection.id))
+    }
+
+    fn cache_key(&self) -> String {
+        self.1.to_string()
+    }
+
+    pub(crate) fn task_cache_key(&self, unique_key: &str) -> String {
+        format!("{}/{unique_key}", self.cache_key())
     }
 
     pub fn escape_content(content: &str) -> Cow<'_, str> {
@@ -134,7 +142,7 @@ impl TodoistClient {
             .cache()
             .cached(
                 "todoist/projects",
-                "default",
+                self.cache_key(),
                 move || {
                     Box::pin(async move {
                         let mut projects = Vec::new();
@@ -181,7 +189,7 @@ impl TodoistClient {
             .cache()
             .cached(
                 "todoist/sections",
-                "default",
+                self.cache_key(),
                 move || {
                     Box::pin(async move {
                         let mut sections = Vec::new();
@@ -221,7 +229,7 @@ impl TodoistClient {
         services: &impl crate::services::Services,
     ) -> Result<String, human_errors::Error> {
         let partition = "todoist/projects";
-        let key = "default";
+        let key = self.cache_key();
 
         let client = self.0.clone();
 
@@ -281,7 +289,7 @@ impl TodoistClient {
     ) -> Result<Option<String>, human_errors::Error> {
         if let Some(section_name) = name {
             let partition = "todoist/sections";
-            let key = "default";
+            let key = self.cache_key();
 
             let client = self.0.clone();
 
@@ -495,10 +503,46 @@ mod target_tests {
             ..Default::default()
         };
 
-        assert!(
-            TodoistClient::connect(&context.tenant(alice()), &target)
-                .await
-                .is_ok()
+        let client = TodoistClient::connect(&context.tenant(alice()), &target)
+            .await
+            .unwrap();
+
+        assert_eq!(client.cache_key(), work.to_string());
+    }
+
+    #[tokio::test]
+    async fn linked_accounts_have_distinct_cache_keys() {
+        let context = AppContext::new_mock(|_| {}).await.unwrap();
+        let personal = link(&context, "personal").await;
+        let work = link(&context, "work").await;
+
+        let personal_client = TodoistClient::connect(
+            &context.tenant(alice()),
+            &TodoistTarget {
+                connection: Some(personal),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        let work_client = TodoistClient::connect(
+            &context.tenant(alice()),
+            &TodoistTarget {
+                connection: Some(work),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+        assert_ne!(personal_client.cache_key(), work_client.cache_key());
+        assert_ne!(
+            personal_client.task_cache_key("calendar/event"),
+            work_client.task_cache_key("calendar/event")
+        );
+        assert_eq!(
+            personal_client.task_cache_key("calendar/event"),
+            format!("{personal}/calendar/event")
         );
     }
 
