@@ -14,7 +14,7 @@ use crate::app::AuthHandle;
 use crate::components::{
     Alert, AlertKind, BrowserPartition, PageActions, PartitionBrowser, RefreshButton,
 };
-use crate::search::{SearchVocabulary, VocabularyContext};
+use crate::search::{SearchField, SearchVocabulary, VocabularyContext};
 
 use super::{kv, queue};
 
@@ -215,11 +215,19 @@ pub fn admin() -> Html {
                 keys.insert(AttrValue::from(message.key.clone()));
             }
         }
-        let vocabulary = SearchVocabulary {
-            partitions: partitions.into_iter().collect(),
-            keys: keys.into_iter().collect(),
-            kinds: kinds.into_iter().collect(),
-        };
+        let vocabulary = SearchVocabulary::new(vec![
+            SearchField::new(
+                "partition",
+                "Match a partition name",
+                partitions.into_iter().collect(),
+            ),
+            SearchField::new("key", "Match an entry key", keys.into_iter().collect()),
+            SearchField::new(
+                "kind",
+                "Match the store kind (kv or queue)",
+                kinds.into_iter().collect(),
+            ),
+        ]);
         use_effect_with(vocabulary, move |vocabulary| {
             if let Some(ctx) = &vocabulary_ctx {
                 ctx.set.emit(vocabulary.clone());

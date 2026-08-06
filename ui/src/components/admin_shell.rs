@@ -112,6 +112,12 @@ pub fn admin_shell(props: &AdminShellProps) -> Html {
             "Search workflows…",
             false,
         ),
+        Route::Activity => (
+            "Activity",
+            "What Automate has been doing for you, and anything that did not work.",
+            "Search… (try outcome:failure)",
+            true,
+        ),
         _ => (
             "Admin",
             "Browse the key-value store and job queues across every partition.",
@@ -167,6 +173,7 @@ fn admin_nav() -> Html {
             (&route, &current),
             (Route::Connections, Route::Connections)
                 | (Route::Workflows, Route::Workflows)
+                | (Route::Activity, Route::Activity)
                 | (Route::Admin, Route::Admin | Route::AdminRoot)
         );
         let classes = classes!(
@@ -194,6 +201,7 @@ fn admin_nav() -> Html {
         <nav class="admin-nav">
             { link(Route::Workflows, "Workflows") }
             { link(Route::Connections, "Connections") }
+            { link(Route::Activity, "Activity") }
             { link(Route::Admin, "Data") }
             // Only reachable in demo mode, which is the only mode it works in.
             if fixtures::is_demo() {

@@ -2,7 +2,7 @@ use web_sys::HtmlInputElement;
 use yew::prelude::*;
 
 use crate::app::{AuthHandle, AuthStatus};
-use crate::search::{FIELD_PREFIXES, SearchContext, VocabularyContext};
+use crate::search::{SearchContext, VocabularyContext};
 use crate::util;
 
 /// Derives up to two uppercase initials from a display name or email address.
@@ -125,15 +125,21 @@ pub fn search_bar(props: &SearchBarProps) -> Html {
                 // with the partial token. A prefix isn't a complete term, so no
                 // trailing space — applying it re-triggers value completion.
                 let needle = active_token.to_lowercase();
-                FIELD_PREFIXES
-                    .iter()
-                    .filter(|(prefix, _)| prefix.starts_with(needle.as_str()))
-                    .map(|(prefix, desc)| Suggestion {
-                        label: AttrValue::from(*prefix),
-                        desc: Some(AttrValue::from(*desc)),
-                        replacement: format!("{head}{prefix}"),
+                vocabulary
+                    .as_ref()
+                    .map(|v| {
+                        v.vocabulary
+                            .fields
+                            .iter()
+                            .filter(|field| format!("{}:", field.name).starts_with(needle.as_str()))
+                            .map(|field| Suggestion {
+                                label: AttrValue::from(format!("{}:", field.name)),
+                                desc: Some(field.description.clone()),
+                                replacement: format!("{head}{}:", field.name),
+                            })
+                            .collect()
                     })
-                    .collect()
+                    .unwrap_or_default()
             };
 
             let show_suggestions = !suggestions.is_empty() && !*dismissed;

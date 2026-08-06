@@ -22,6 +22,7 @@ mod page_title;
 mod partition_browser;
 mod refresh_button;
 mod secret_input;
+mod status_pill;
 mod webhook_address;
 
 pub use admin_shell::{AdminShell, PageActions};
@@ -46,4 +47,5 @@ pub use page_title::PageTitle;
 pub use partition_browser::{BrowserEntry, BrowserPartition, PartitionBrowser};
 pub use refresh_button::RefreshButton;
 pub use secret_input::SecretInput;
+pub use status_pill::{StatusPill, StatusTone};
 pub use webhook_address::WebhookAddress;

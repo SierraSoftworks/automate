@@ -13,8 +13,8 @@
 //! a demo branch of its own — and why a page cannot accidentally leave one out.
 
 use automate_api::{
-    AdminUser, Connection, ConnectionSummary, IntegrationInfo, KeyValueEntry, OptionItem,
-    QueueMessage, Workflow, WorkflowTypeDescriptor,
+    AdminUser, AuditRecord, Connection, ConnectionSummary, IntegrationInfo, KeyValueEntry,
+    OptionItem, QueueMessage, Workflow, WorkflowTypeDescriptor,
 };
 use gloo_net::http::{Request, Response};
 use serde::Serialize;
@@ -431,6 +431,32 @@ pub async fn delete_workflow(id: &str) -> Result<(), ApiError> {
     demo!(fixtures::delete_workflow(id); Ok(()));
 
     delete(&format!("/workflows/{}", urlencode(id))).await
+}
+
+/// This account's own history, most recent first.
+///
+/// `subject` narrows it to one workflow or connection; the whole log is
+/// returned otherwise. Paging backwards is done by passing the id of the oldest
+/// entry already held as `before`.
+pub async fn list_audit(
+    subject: Option<&str>,
+    before: Option<i64>,
+) -> Result<Vec<AuditRecord>, ApiError> {
+    demo!(Ok(fixtures::audit(subject, before)));
+
+    let mut path = String::from("/audit");
+    let mut separator = '?';
+
+    if let Some(subject) = subject {
+        path.push_str(&format!("{separator}subject={}", urlencode(subject)));
+        separator = '&';
+    }
+
+    if let Some(before) = before {
+        path.push_str(&format!("{separator}before={before}"));
+    }
+
+    get_json(&path).await
 }
 
 /// Runs a scheduled workflow now, without disturbing its schedule.

@@ -1,31 +1,44 @@
-//! The unified search filter shared by the admin toolbar and the partition
-//! browser.
+//! The unified search filter shared by the admin toolbar and the routed pages.
 //!
 //! A query is a space-separated list of terms. A term may be scoped to a
 //! particular property using a `field:value` prefix (for example
-//! `partition:cron` or `key:ynab`); an unscoped term (for example `ynab`)
-//! matches against every searchable property of an entry. All terms must match
-//! (logical AND) and matching is case-insensitive and substring-based.
+//! `partition:cron` or `workflow:copper-tiger-canyon`); an unscoped term (for
+//! example `ynab`) matches against every searchable property of an entry. All
+//! terms must match (logical AND) and matching is case-insensitive and
+//! substring-based.
+//!
+//! Which fields exist is decided by the page rather than here. Every page has
+//! its own idea of what an entry is, and a fixed list meant a page either
+//! borrowed names that did not describe its data or offered no scoping at all.
 
 use std::rc::Rc;
 
 use yew::prelude::*;
 
-/// The canonical `field:` prefixes offered as autocomplete suggestions in the
-/// search input, paired with a short human description. The order here is the
-/// order they are presented to the user.
-pub const FIELD_PREFIXES: &[(&str, &str)] = &[
-    ("partition:", "Match a partition name"),
-    ("key:", "Match an entry key"),
-    ("kind:", "Match the store kind (kv or queue)"),
-];
-
-/// A property a search term can be scoped to.
+/// A property a page offers to scope a search term to.
 #[derive(Clone, PartialEq)]
-enum Field {
-    Partition,
-    Key,
-    Kind,
+pub struct SearchField {
+    /// The name typed before the colon.
+    pub name: AttrValue,
+    /// A short description, shown beside the `name:` suggestion.
+    pub description: AttrValue,
+    /// The values offered once a term is scoped to this field. Expected to be
+    /// de-duplicated and sorted.
+    pub values: Vec<AttrValue>,
+}
+
+impl SearchField {
+    pub fn new(
+        name: impl Into<AttrValue>,
+        description: impl Into<AttrValue>,
+        values: Vec<AttrValue>,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            description: description.into(),
+            values,
+        }
+    }
 }
 
 /// A single parsed search term.
@@ -33,9 +46,13 @@ enum Field {
 struct Term {
     /// The property the term is scoped to, or `None` for a free-text term that
     /// matches against every property.
-    field: Option<Field>,
+    field: Option<String>,
     /// The lowercased needle to look for.
     needle: String,
+    /// The whole lowercased token. Used when the entry being matched has no
+    /// such field, which is how a token that merely contains a colon (a URL,
+    /// say) keeps working as plain free text.
+    raw: String,
 }
 
 /// A parsed search query: a conjunction of [`Term`]s.
@@ -44,51 +61,44 @@ pub struct SearchFilter {
     terms: Vec<Term>,
 }
 
-/// The searchable properties of a single entry, supplied by the browser when
+/// The searchable properties of a single entry, supplied by the page when
 /// evaluating a [`SearchFilter`].
 pub struct MatchContext<'a> {
-    /// The partition the entry belongs to.
-    pub partition: &'a str,
-    /// The entry's key within its partition.
-    pub key: &'a str,
-    /// The entry's store kind (for example `kv` or `queue`).
-    pub kind: &'a str,
-    /// A pre-lowercased concatenation of every searchable property (partition,
-    /// key, kind, and payload), used to evaluate free-text terms.
+    /// The named properties this entry can be scoped by, as `(field, value)`.
+    pub fields: &'a [(&'a str, &'a str)],
+    /// A pre-lowercased concatenation of every searchable property, used to
+    /// evaluate free-text terms.
     pub text: &'a str,
+}
+
+impl MatchContext<'_> {
+    fn value_of(&self, field: &str) -> Option<&str> {
+        self.fields
+            .iter()
+            .find(|(name, _)| name.eq_ignore_ascii_case(field))
+            .map(|(_, value)| *value)
+    }
 }
 
 impl SearchFilter {
     /// Parses a raw query string into a [`SearchFilter`].
-    ///
-    /// A `field:value` token is only treated as scoped when `field` is a known
-    /// property name; this keeps tokens that merely contain a colon (such as a
-    /// URL key) working as plain free-text terms.
     pub fn parse(query: &str) -> Self {
         let terms = query
             .split_whitespace()
-            .filter_map(|token| {
-                if let Some((prefix, value)) = token.split_once(':') {
-                    let field = match prefix.to_ascii_lowercase().as_str() {
-                        "partition" | "p" => Some(Field::Partition),
-                        "key" | "k" => Some(Field::Key),
-                        "kind" | "type" => Some(Field::Kind),
-                        _ => None,
-                    };
-                    if let Some(field) = field {
-                        if value.is_empty() {
-                            return None;
-                        }
-                        return Some(Term {
-                            field: Some(field),
-                            needle: value.to_lowercase(),
-                        });
-                    }
+            .map(|token| {
+                let raw = token.to_lowercase();
+                match token.split_once(':') {
+                    Some((field, value)) if !field.is_empty() && !value.is_empty() => Term {
+                        field: Some(field.to_lowercase()),
+                        needle: value.to_lowercase(),
+                        raw,
+                    },
+                    _ => Term {
+                        field: None,
+                        needle: raw.clone(),
+                        raw,
+                    },
                 }
-                Some(Term {
-                    field: None,
-                    needle: token.to_lowercase(),
-                })
             })
             .collect();
         Self { terms }
@@ -102,16 +112,17 @@ impl SearchFilter {
     /// Evaluates the filter against a single entry's properties.
     pub fn matches(&self, ctx: &MatchContext) -> bool {
         self.terms.iter().all(|term| match &term.field {
-            Some(Field::Partition) => ctx.partition.to_lowercase().contains(&term.needle),
-            Some(Field::Key) => ctx.key.to_lowercase().contains(&term.needle),
-            Some(Field::Kind) => ctx.kind.to_lowercase().contains(&term.needle),
+            Some(field) => match ctx.value_of(field) {
+                Some(value) => value.to_lowercase().contains(&term.needle),
+                None => ctx.text.contains(&term.raw),
+            },
             None => ctx.text.contains(&term.needle),
         })
     }
 }
 
 /// The shared search state provided to the toolbar (which owns the input) and
-/// the partition browser (which consumes the parsed filter).
+/// the routed page (which consumes the parsed filter).
 #[derive(Clone, PartialEq)]
 pub struct SearchContext {
     /// The raw query string, bound to the toolbar's search input.
@@ -122,31 +133,27 @@ pub struct SearchContext {
     pub set: Callback<String>,
 }
 
-/// The concrete values available for context-aware completion of scoped search
-/// terms (for example the partition names offered after typing `partition:`).
-/// It is published by the page that owns the data and consumed by the toolbar's
-/// autocomplete. Each list is expected to be de-duplicated and sorted.
+/// The fields available for completion of scoped search terms (for example the
+/// partition names offered after typing `partition:`). It is published by the
+/// page that owns the data and consumed by the toolbar's autocomplete.
 #[derive(Clone, PartialEq, Default)]
 pub struct SearchVocabulary {
-    /// Every known partition name.
-    pub partitions: Vec<AttrValue>,
-    /// Every known entry key (across all partitions).
-    pub keys: Vec<AttrValue>,
-    /// Every known store kind (for example `kv` and `queue`).
-    pub kinds: Vec<AttrValue>,
+    /// The fields this page offers, in the order they are presented.
+    pub fields: Vec<SearchField>,
 }
 
 impl SearchVocabulary {
-    /// Returns the candidate values for a scoped term's field, accepting the
-    /// same field names and aliases as the parser. Returns `None` when the
-    /// field is unknown (so no value completion is offered).
+    pub fn new(fields: Vec<SearchField>) -> Self {
+        Self { fields }
+    }
+
+    /// The candidate values for a scoped term's field, or `None` when the page
+    /// does not offer that field.
     pub fn values_for(&self, field: &str) -> Option<&[AttrValue]> {
-        match field.to_ascii_lowercase().as_str() {
-            "partition" | "p" => Some(&self.partitions),
-            "key" | "k" => Some(&self.keys),
-            "kind" | "type" => Some(&self.kinds),
-            _ => None,
-        }
+        self.fields
+            .iter()
+            .find(|candidate| candidate.name.eq_ignore_ascii_case(field))
+            .map(|candidate| candidate.values.as_slice())
     }
 }
 

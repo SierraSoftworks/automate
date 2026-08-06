@@ -1399,32 +1399,45 @@ footer {
     color: $text-secondary;
   }
 
-  &__status {
-    flex: none;
-    font-size: 0.75rem;
-    font-weight: 600;
-    padding: 0.2rem 0.55rem;
-    border-radius: 999px;
-
-    &--warning {
-      color: $warning;
-      background: $warning-bg;
-      border: 1px solid $warning-border;
-    }
-
-    &--error {
-      color: $danger;
-      background: $danger-bg;
-      border: 1px solid $danger-border;
-    }
-
-  }
-
   &__error {
     flex-basis: 100%;
     margin: 0;
     color: $danger;
     font-size: 0.75rem;
+  }
+}
+
+// How something is doing, wherever a row has a health to report.
+.status-pill {
+  flex: none;
+  font-size: 0.75rem;
+  font-weight: 600;
+  padding: 0.2rem 0.55rem;
+  border-radius: 999px;
+  white-space: nowrap;
+
+  &--ok {
+    color: $success;
+    background: $success-bg;
+    border: 1px solid $success-border;
+  }
+
+  &--warning {
+    color: $warning;
+    background: $warning-bg;
+    border: 1px solid $warning-border;
+  }
+
+  &--error {
+    color: $danger;
+    background: $danger-bg;
+    border: 1px solid $danger-border;
+  }
+
+  &--neutral {
+    color: $text-secondary;
+    background: $fill-light;
+    border: 1px solid $border-light;
   }
 }
 
@@ -1454,6 +1467,91 @@ footer {
     &--active {
       color: $brand;
       border-bottom-color: $brand;
+    }
+  }
+}
+
+// Activity: the log of what the agent has been doing, and what did not work.
+.activity {
+  margin-bottom: 1.5rem;
+
+  &__empty {
+    margin: 0 0 1.25rem;
+    font-size: 0.875rem;
+    color: $text-secondary;
+  }
+
+  &__list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+}
+
+.activity-entry {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0.75rem 1rem;
+  border: 1px solid $border-lighter;
+  border-radius: $radius;
+  background: $bg-white;
+
+  &__summary {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+  }
+
+  // Fixed width so the entries line up into a column that can be read down.
+  &__when {
+    flex: none;
+    width: 5rem;
+    font-size: 0.75rem;
+    color: $text-secondary;
+    font-variant-numeric: tabular-nums;
+  }
+
+  &__detail {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+  }
+
+  &__subject {
+    font-weight: 600;
+    font-size: 0.9375rem;
+    color: $text-primary;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  &__meta {
+    font-size: 0.75rem;
+    color: $text-secondary;
+  }
+
+  &__message {
+    margin: 0;
+    padding-left: 6rem;
+    font-size: 0.8125rem;
+    color: $text-regular;
+  }
+
+  &__more {
+    padding-left: 6rem;
+    font-size: 0.8125rem;
+
+    summary {
+      cursor: pointer;
+      color: $text-secondary;
+      user-select: none;
     }
   }
 }

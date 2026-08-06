@@ -48,9 +48,11 @@ fn entry_matches(
     entry: &BrowserEntry,
 ) -> bool {
     filter.matches(&MatchContext {
-        partition: &partition.name,
-        key: &entry.key,
-        kind: &partition.kind,
+        fields: &[
+            ("partition", &partition.name),
+            ("key", &entry.key),
+            ("kind", &partition.kind),
+        ],
         text: &entry.search,
     })
 }

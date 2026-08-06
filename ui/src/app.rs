@@ -33,6 +33,9 @@ pub enum Route {
     /// The workflows this account has configured.
     #[at("/admin/workflows")]
     Workflows,
+    /// What the agent has been doing: runs, deliveries, and changes.
+    #[at("/admin/activity")]
+    Activity,
     /// The control gallery, for reviewing every control without a backend. It
     /// exists in debug builds only, alongside the fixtures it renders with.
     #[cfg(debug_assertions)]
@@ -178,6 +181,9 @@ fn switch(route: Route) -> Html {
         },
         Route::Workflows => html! {
             <AdminShell><pages::Workflows /></AdminShell>
+        },
+        Route::Activity => html! {
+            <AdminShell><pages::Activity /></AdminShell>
         },
         #[cfg(debug_assertions)]
         Route::DemoControls => html! { <pages::DemoControls /> },

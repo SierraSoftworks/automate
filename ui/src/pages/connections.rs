@@ -11,7 +11,7 @@ use yew::prelude::*;
 use crate::api;
 use crate::components::{
     Alert, AlertKind, Button, ButtonGroup, ButtonKind, ConnectMenu, Field, MenuButtonOption,
-    PageActions, TextInput,
+    PageActions, StatusPill, StatusTone, TextInput,
 };
 use crate::search::{MatchContext, SearchContext};
 use crate::util::short_relative;
@@ -162,9 +162,12 @@ pub fn connections() -> Html {
                                 )
                                 .to_lowercase();
                                 filter.matches(&MatchContext {
-                                    partition: "connections",
-                                    key: &connection.name,
-                                    kind: connection.kind.as_str(),
+                                    fields: &[
+                                        ("name", &connection.name),
+                                        ("service", &connection.provider),
+                                        ("kind", connection.kind.as_str()),
+                                        ("status", connection.status.as_str()),
+                                    ],
                                     text: &text,
                                 })
                             })
@@ -615,17 +618,13 @@ fn status_badge(props: &StatusBadgeProps) -> Html {
     // Only says something when there is something to say: a working connection
     // is the expected case, and labelling every row "OK" is noise that makes the
     // rows that do need attention harder to spot.
-    let (class, label) = match props.status {
+    let (tone, label) = match props.status {
         ConnectionStatus::Ok => return html! {},
-        ConnectionStatus::NeedsReauthorization => {
-            ("connection__status--warning", "Needs reconnecting")
-        }
-        ConnectionStatus::Error => ("connection__status--error", "Not working"),
+        ConnectionStatus::NeedsReauthorization => (StatusTone::Warning, "Needs reconnecting"),
+        ConnectionStatus::Error => (StatusTone::Error, "Not working"),
     };
 
-    html! {
-        <span class={classes!("connection__status", class)}>{ label }</span>
-    }
+    html! { <StatusPill {tone} {label} /> }
 }
 
 fn kind_label(kind: ConnectionKind) -> &'static str {
