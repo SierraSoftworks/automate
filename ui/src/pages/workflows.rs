@@ -11,8 +11,8 @@
 use std::rc::Rc;
 
 use automate_api::{
-    AuditCategory, AuditOutcome, AuditRecord, ConnectionSummary, FieldKind, Workflow,
-    WorkflowTrigger, WorkflowTypeDescriptor,
+    ConnectionSummary, FieldKind, RunOutcome, RunState, Workflow, WorkflowHealth, WorkflowTrigger,
+    WorkflowTypeDescriptor,
 };
 use gloo_timers::callback::Timeout;
 use yew::prelude::*;
@@ -21,10 +21,11 @@ use crate::api;
 use crate::components::dynamic_form::{set_at, value_at};
 use crate::components::{
     Alert, AlertKind, Button, ButtonKind, Documentation, DynamicForm, FetchedOptions, Field,
-    MenuButton, MenuButtonOption, PageActions, StatusPill, StatusTone, Switch, TextInput,
-    WebhookAddress,
+    JsonHighlight, MenuButton, MenuButtonOption, PageActions, StatusPill, StatusTone, Switch,
+    TextInput, WebhookAddress,
 };
 use crate::search::{MatchContext, SearchContext};
+use crate::util::{format_iso8601, short_relative};
 
 /// What a form hands back when it is submitted.
 #[derive(Clone, PartialEq)]
@@ -46,26 +47,55 @@ fn announce(notice: &UseStateHandle<Option<String>>, message: String) {
     Timeout::new(4_000, move || notice.set(None)).forget();
 }
 
-/// How a workflow's last run turned out.
+/// How a workflow's health reads on its row.
 ///
-/// Only runs count. A workflow's settings being changed says nothing about
-/// whether it works, and a delivery being accepted says only that it arrived —
-/// the run it started is what either worked or did not.
-///
-/// A skipped run is passed over rather than reported: it means the workflow
-/// looked and found nothing to do, which is the healthy state of most of them
-/// and would otherwise hide the failure before it.
-fn last_run(entries: &[AuditRecord], workflow: &Workflow) -> Option<AuditRecord> {
-    let id = workflow.id.to_string();
+/// Only says "working" once there has been a run to say it about. A workflow
+/// created a minute ago is not working and not failing, and claiming either
+/// would be a guess dressed up as a status.
+fn health_pill(health: &WorkflowHealth) -> Html {
+    let failing = health.consecutive_failures > 0;
 
-    entries
-        .iter()
-        .find(|entry| {
-            entry.category == AuditCategory::WorkflowRun
-                && entry.subject.as_deref() == Some(id.as_str())
-                && matches!(entry.outcome, AuditOutcome::Success | AuditOutcome::Failure)
-        })
-        .cloned()
+    let title = match &health.message {
+        Some(message) if failing => message.clone(),
+        _ if failing => format!("Its last run failed {}.", short_relative(health.at)),
+        _ => format!("Its last run worked, {}.", short_relative(health.at)),
+    };
+
+    let label = match health.consecutive_failures {
+        0 => "Working".to_string(),
+        1 => "Failing".to_string(),
+        runs => format!("Failing ({runs} runs)"),
+    };
+
+    html! {
+        <StatusPill
+            tone={if failing { StatusTone::Error } else { StatusTone::Ok }}
+            {label}
+            {title}
+        />
+    }
+}
+
+/// Whether a click landed on something that already does something of its own.
+///
+/// The row is clickable as a whole, and the switch and the action button sitting
+/// in it are not obstacles somebody should have to aim around: a click on either
+/// must do that thing and nothing else.
+fn from_a_control(event: &MouseEvent) -> bool {
+    let mut node = event.target_dyn_into::<web_sys::Element>();
+
+    while let Some(element) = node {
+        match element.tag_name().to_ascii_lowercase().as_str() {
+            "a" | "button" | "input" | "label" | "select" | "summary" | "textarea" => return true,
+            // The row itself, so the walk stops rather than climbing the page.
+            "li" => return false,
+            _ => {}
+        }
+
+        node = element.parent_element();
+    }
+
+    false
 }
 
 #[function_component(Workflows)]
@@ -73,18 +103,16 @@ pub fn workflows() -> Html {
     let workflows = use_state(Vec::<Workflow>::new);
     let types = use_state(Vec::<WorkflowTypeDescriptor>::new);
     let connections = use_state(Vec::<ConnectionSummary>::new);
-    let history = use_state(Vec::<AuditRecord>::new);
     let error = use_state(|| None::<String>);
     let loading = use_state(|| true);
     let reload = use_state(|| 0u32);
     let chosen = use_state(|| None::<String>);
 
     {
-        let (workflows, types, connections, history, error, loading) = (
+        let (workflows, types, connections, error, loading) = (
             workflows.clone(),
             types.clone(),
             connections.clone(),
-            history.clone(),
             error.clone(),
             loading.clone(),
         );
@@ -117,12 +145,6 @@ pub fn workflows() -> Html {
                 }
                 if let Ok(found) = api::list_service_connections().await {
                     connections.set(found);
-                }
-                // Likewise the history: without it a row simply says nothing
-                // about how it has been getting on, which is where this page
-                // was before there was a log to ask.
-                if let Ok(found) = api::list_audit(None, None).await {
-                    history.set(found);
                 }
 
                 loading.set(false);
@@ -228,7 +250,6 @@ pub fn workflows() -> Html {
                         workflow={workflow.clone()}
                         descriptor={types.iter().find(|t| t.id == workflow.type_id).cloned()}
                         connections={(*connections).clone()}
-                        last_run={last_run(&history, workflow)}
                         on_changed={on_changed.clone()}
                     />
                 }) }
@@ -267,9 +288,6 @@ struct WorkflowRowProps {
     /// what an upgrade that removed one looks like from here.
     descriptor: Option<WorkflowTypeDescriptor>,
     connections: Vec<ConnectionSummary>,
-    /// The most recent run that either worked or did not, where there has been
-    /// one. Absent for a workflow that has not run since the log began.
-    last_run: Option<AuditRecord>,
     on_changed: Callback<()>,
 }
 
@@ -288,6 +306,11 @@ fn workflow_row(props: &WorkflowRowProps) -> Html {
     // backlog re-filed as though it were new — lands in somebody's task list
     // rather than here, so it is worth saying out loud before it happens.
     let confirming_reset = use_state(|| false);
+    // What the row folds away: the address it receives deliveries on, and how
+    // its last runs went. The runs are fetched only once this is open, since
+    // they carry the payload each run was handed and nobody wants every row's
+    // at once.
+    let expanded = use_state(|| false);
     let workflow = &props.workflow;
 
     /// Saves a change to this workflow, whatever prompted it.
@@ -499,6 +522,23 @@ fn workflow_row(props: &WorkflowRowProps) -> Html {
         })
     };
 
+    let on_expand = {
+        let expanded = expanded.clone();
+        Callback::from(move |_: MouseEvent| expanded.set(!*expanded))
+    };
+
+    // The whole row responds, not just its title. A row is a thing on a page
+    // rather than a link in a sentence, and having to find the few words that
+    // happen to be clickable is a worse job than it looks.
+    let on_row = {
+        let expanded = expanded.clone();
+        Callback::from(move |event: MouseEvent| {
+            if !from_a_control(&event) {
+                expanded.set(!*expanded);
+            }
+        })
+    };
+
     let on_cancel_reset = {
         let confirming_reset = confirming_reset.clone();
         Callback::from(move |_| confirming_reset.set(false))
@@ -534,9 +574,28 @@ fn workflow_row(props: &WorkflowRowProps) -> Html {
 
     actions.push(MenuButtonOption::new("delete", "Delete").destructive());
 
+    // Nothing to open for a workflow that has neither an address nor a run
+    // behind it, so it is not made to look as though there is.
+    let expandable = workflow.health.is_some() || workflow.webhook_path.is_some();
+    let panel_id = format!("workflow-detail-{}", workflow.id);
+
+    let title = html! {
+        <>
+            <span class="workflow__name">{ &workflow.name }</span>
+            <span class="workflow__meta">
+                { &workflow.type_id }{ " · " }{ schedule }
+                if workflow.enabled && let Some(next) = workflow.next_run {
+                    { " · next " }{ crate::util::short_relative(next) }
+                } else if !workflow.enabled {
+                    { " · paused" }
+                }
+            </span>
+        </>
+    };
+
     html! {
-        <li class="workflow">
-            <div class="workflow__summary">
+        <li class={classes!("workflow", expandable.then_some("workflow--expandable"))}>
+            <div class="workflow__summary" onclick={expandable.then_some(on_row)}>
                 <Switch
                     id={format!("workflow-enabled-{}", workflow.id)}
                     checked={workflow.enabled}
@@ -544,28 +603,38 @@ fn workflow_row(props: &WorkflowRowProps) -> Html {
                     disabled={*busy}
                 />
 
-                <div class="workflow__detail">
-                    <span class="workflow__name">{ &workflow.name }</span>
-                    <span class="workflow__meta">
-                        { &workflow.type_id }{ " · " }{ schedule }
-                        if workflow.enabled && let Some(next) = workflow.next_run {
-                            { " · next " }{ crate::util::short_relative(next) }
-                        } else if !workflow.enabled {
-                            { " · paused" }
-                        }
-                    </span>
-                </div>
+                // A real button, so the row can be opened from the keyboard and
+                // says whether it is open. The rest of the row is a convenience
+                // on top of this rather than the only way in.
+                if expandable {
+                    <button
+                        type="button"
+                        class="workflow__detail workflow__detail--button"
+                        aria-expanded={expanded.to_string()}
+                        aria-controls={panel_id.clone()}
+                        onclick={on_expand}
+                    >
+                        { title }
+                        <span
+                            class={classes!(
+                                "workflow__chevron",
+                                expanded.then_some("workflow__chevron--open"),
+                            )}
+                            aria-hidden="true"
+                        >
+                            <svg viewBox="0 0 24 24" width="12" height="12" fill="none"
+                                stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                                stroke-linejoin="round">
+                                <polyline points="6 9 12 15 18 9" />
+                            </svg>
+                        </span>
+                    </button>
+                } else {
+                    <div class="workflow__detail">{ title }</div>
+                }
 
-                if let Some(run) = &props.last_run {
-                    <StatusPill
-                        tone={StatusTone::of_outcome(run.outcome)}
-                        label={if run.outcome == AuditOutcome::Success { "Working" } else { "Failing" }}
-                        title={run.message.clone().unwrap_or_else(|| format!(
-                            "Its last run {} {}.",
-                            crate::util::short_relative(run.occurred_at),
-                            if run.outcome == AuditOutcome::Success { "worked" } else { "failed" },
-                        ))}
-                    />
+                if let Some(health) = &workflow.health {
+                    { health_pill(health) }
                 }
 
                 // Editing is what a row is usually clicked for, so it stays a
@@ -623,12 +692,20 @@ fn workflow_row(props: &WorkflowRowProps) -> Html {
                 </div>
             }
 
-            if let Some(path) = workflow.webhook_path.clone() {
-                <WebhookAddress
-                    workflow={workflow.id.to_string()}
-                    path={path}
-                    on_rotated={props.on_changed.clone()}
-                />
+            if *expanded {
+                <div class="workflow__panel" id={panel_id}>
+                    if let Some(path) = workflow.webhook_path.clone() {
+                        <WebhookAddress
+                            workflow={workflow.id.to_string()}
+                            path={path}
+                            on_rotated={props.on_changed.clone()}
+                        />
+                    }
+
+                    if workflow.health.is_some() {
+                        <WorkflowRuns workflow={workflow.id.to_string()} />
+                    }
+                </div>
             }
 
             if props.descriptor.is_none() {
@@ -652,6 +729,118 @@ fn workflow_row(props: &WorkflowRowProps) -> Html {
                 />
             }
         </li>
+    }
+}
+
+#[derive(Properties, PartialEq)]
+struct WorkflowRunsProps {
+    workflow: String,
+}
+
+/// What a workflow's most recent runs did, and what they did it to.
+///
+/// Two runs at most: the last one, and the last one that failed. A history
+/// would be the thing this arrangement replaced — but a failure that has been
+/// overwritten by three hundred successful deliveries is a failure nobody can
+/// look into, which is why the second one is kept.
+#[function_component(WorkflowRuns)]
+fn workflow_runs(props: &WorkflowRunsProps) -> Html {
+    let state = use_state(|| None::<Option<RunState>>);
+    let error = use_state(|| None::<String>);
+
+    {
+        let (id, state, error) = (props.workflow.clone(), state.clone(), error.clone());
+        use_effect_with(props.workflow.clone(), move |_| {
+            wasm_bindgen_futures::spawn_local(async move {
+                match api::workflow_runs(&id).await {
+                    Ok(found) => state.set(Some(found)),
+                    Err(err) => error.set(Some(err.to_string())),
+                }
+            });
+            || ()
+        });
+    }
+
+    if let Some(message) = (*error).clone() {
+        return html! {
+            <Alert
+                kind={AlertKind::Error}
+                title="We could not load this workflow's runs."
+                message={message}
+            />
+        };
+    }
+
+    let body = match &*state {
+        None => html! { <p class="workflow-runs__empty">{ "Loading…" }</p> },
+        Some(None) => html! {
+            <p class="workflow-runs__empty">{ "This workflow has not run yet." }</p>
+        },
+        Some(Some(state)) => {
+            // Shown once when the last run is itself the failure, which is the
+            // usual case for a workflow that is currently broken.
+            let earlier_failure = state
+                .last_failure
+                .as_ref()
+                .filter(|failure| failure.finished_at != state.last.finished_at);
+
+            html! {
+                <>
+                    <Run label="Last run" report={state.last.clone()} />
+                    if let Some(failure) = earlier_failure {
+                        <Run label="Last failure" report={failure.clone()} />
+                    }
+                </>
+            }
+        }
+    };
+
+    html! { <div class="workflow-runs">{ body }</div> }
+}
+
+#[derive(Properties, PartialEq)]
+struct RunProps {
+    label: &'static str,
+    report: automate_api::RunReport,
+}
+
+#[function_component(Run)]
+fn run(props: &RunProps) -> Html {
+    let report = &props.report;
+    let failed = report.outcome == RunOutcome::Failed;
+    let took = (report.finished_at - report.started_at)
+        .num_milliseconds()
+        .max(0);
+
+    html! {
+        <div class="workflow-runs__run">
+            <div class="workflow-runs__header">
+                <span class="workflow-runs__label">{ props.label }</span>
+                <StatusPill
+                    tone={if failed { StatusTone::Error } else { StatusTone::Ok }}
+                    label={if failed { "Failed" } else { "Succeeded" }}
+                />
+                <span
+                    class="workflow-runs__when"
+                    title={format_iso8601(report.finished_at)}
+                >
+                    { short_relative(report.finished_at) }{ format!(" · took {took}ms") }
+                </span>
+            </div>
+
+            if let Some(message) = &report.message {
+                <p class="workflow-runs__message">{ message }</p>
+            }
+
+            // The payload is what makes a failure actionable: which delivery,
+            // which fields, which of the twelve repositories.
+            if let Some(input) = &report.input {
+                <details class="workflow-runs__input">
+                    <summary>{ "What it ran on" }</summary>
+                    <JsonHighlight value={input.clone()} />
+                </details>
+            }
+        </div>
     }
 }
 

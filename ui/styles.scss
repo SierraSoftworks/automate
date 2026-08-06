@@ -1642,6 +1642,12 @@ footer {
     gap: 1rem;
   }
 
+  // The whole row opens the card, so it has to look as though it does. The
+  // controls inside it keep their own cursor, since they do something else.
+  &--expandable > .workflow__summary {
+    cursor: pointer;
+  }
+
   // Shown where an upgrade removed the workflow type this was created from.
   &__orphaned {
     margin: 0;
@@ -1656,12 +1662,50 @@ footer {
   &__detail {
     flex: 1;
     min-width: 0;
-    display: flex;
-    flex-direction: column;
-    gap: 0.15rem;
+    display: grid;
+    grid-template-columns: auto 1fr;
+    align-items: center;
+    column-gap: 0.4rem;
+    row-gap: 0.15rem;
+    text-align: left;
   }
 
+  // The title doubles as the control that opens the card, so it sheds
+  // everything a button brings with it and keeps only the focus ring.
+  &__detail--button {
+    appearance: none;
+    padding: 0;
+    background: none;
+    border: 0;
+    font: inherit;
+    color: inherit;
+    cursor: pointer;
+
+    &:focus-visible {
+      outline: 2px solid $brand;
+      outline-offset: 3px;
+      border-radius: $radius-sm;
+    }
+  }
+
+  &__chevron {
+    grid-row: 1;
+    grid-column: 2;
+    justify-self: start;
+    display: inline-flex;
+    align-items: center;
+    color: $text-placeholder;
+    transition: transform $transition;
+
+    &--open {
+      transform: rotate(180deg);
+    }
+  }
+
+  // Both lines start in the first column; the chevron sits beside the name.
   &__name {
+    grid-row: 1;
+    grid-column: 1;
     font-weight: 600;
     font-size: 0.9375rem;
     color: $text-primary;
@@ -1671,8 +1715,17 @@ footer {
   }
 
   &__meta {
+    grid-row: 2;
+    grid-column: 1 / -1;
     font-size: 0.75rem;
     color: $text-secondary;
+  }
+
+  // What the card folds away: the address it is reached at, and its last runs.
+  &__panel {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
   }
 
   &__status {
@@ -1718,6 +1771,64 @@ footer {
   &__confirm-actions {
     display: flex;
     gap: 0.5rem;
+  }
+}
+
+// What a workflow's last runs did, shown inline beneath the row.
+.workflow-runs {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  padding: 0.75rem 1rem;
+  background: $fill-lighter;
+  border: 1px solid $border-lighter;
+  border-radius: $radius;
+
+  &__empty {
+    margin: 0;
+    font-size: 0.8125rem;
+    color: $text-secondary;
+  }
+
+  &__run {
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+  }
+
+  &__header {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+  }
+
+  &__label {
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: $text-secondary;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+
+  &__when {
+    font-size: 0.75rem;
+    color: $text-secondary;
+  }
+
+  &__message {
+    margin: 0;
+    font-size: 0.8125rem;
+    color: $text-regular;
+  }
+
+  &__input {
+    font-size: 0.8125rem;
+
+    summary {
+      cursor: pointer;
+      color: $text-secondary;
+      user-select: none;
+    }
   }
 }
 

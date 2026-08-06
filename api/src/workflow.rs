@@ -379,6 +379,14 @@ pub struct Workflow {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub next_run: Option<chrono::DateTime<chrono::Utc>>,
 
+    /// How the most recent runs have gone, once there has been one.
+    ///
+    /// A summary rather than the runs themselves: a list of workflows carrying
+    /// every one of their payloads is the saturation problem this replaced,
+    /// moved somewhere else. The payloads are fetched per workflow, on demand.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub health: Option<crate::WorkflowHealth>,
+
     /// Whether this workflow remembers anything between runs that could be
     /// forgotten.
     ///
@@ -621,6 +629,7 @@ mod tests {
             updated_at: chrono::Utc::now(),
             last_run: None,
             next_run: None,
+            health: None,
         };
 
         let json = serde_json::to_value(&workflow).unwrap();

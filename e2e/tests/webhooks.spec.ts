@@ -61,6 +61,12 @@ async function addWebhookWorkflow(page: import("@playwright/test").Page, name: s
 
   const row = page.locator("li.workflow").filter({ hasText: name });
   await expect(row).toHaveCount(1);
+
+  // The address lives in the card's folded-away detail, so every test that
+  // wants it has to open the card first.
+  await row.getByRole("button", { name: new RegExp(name) }).click();
+  await expect(row.locator(".webhook-address")).toBeVisible();
+
   return row;
 }
 
@@ -85,6 +91,46 @@ test("a webhook workflow is given an address of its own to receive deliveries on
 
   await expect(address.getByRole("button", { name: "Copy" })).toBeVisible();
   await expect(address.getByRole("button", { name: "Issue a new address" })).toBeVisible();
+});
+
+test("a card's details fold away until its header is clicked", async ({ page }) => {
+  // A row that showed everything it knows would be several inches tall on a
+  // page whose job is to let somebody scan a dozen of them.
+  const name = uniqueName(NAME_PREFIX);
+  await gotoApp(page, "/admin/workflows");
+
+  const row = await addWebhookWorkflow(page, name);
+  const header = row.getByRole("button", { name: new RegExp(name) });
+
+  await expect(header).toHaveAttribute("aria-expanded", "true");
+
+  await header.click();
+  await expect(header).toHaveAttribute("aria-expanded", "false");
+  await expect(row.locator(".webhook-address")).toHaveCount(0);
+
+  await header.click();
+  await expect(row.locator(".webhook-address")).toBeVisible();
+});
+
+test("the row's own controls do not open the card", async ({ page }) => {
+  // The whole row is clickable, so the controls sitting in it have to be
+  // exceptions — otherwise pausing a workflow also unfolds it.
+  const name = uniqueName(NAME_PREFIX);
+  await gotoApp(page, "/admin/workflows");
+
+  const row = await addWebhookWorkflow(page, name);
+  const header = row.getByRole("button", { name: new RegExp(name) });
+
+  await header.click();
+  await expect(header).toHaveAttribute("aria-expanded", "false");
+
+  await row.locator(".switch__track").click();
+  await expect(row).toContainText("paused");
+  await expect(header).toHaveAttribute("aria-expanded", "false");
+
+  await row.getByRole("button", { name: "Edit", exact: true }).click();
+  await expect(row.locator(".workflow-form")).toBeVisible();
+  await expect(header).toHaveAttribute("aria-expanded", "false");
 });
 
 test("issuing a new address warns before it does it, and can be backed out of", async ({ page }) => {

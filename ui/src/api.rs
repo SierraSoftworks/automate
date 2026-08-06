@@ -14,7 +14,7 @@
 
 use automate_api::{
     AdminUser, AuditRecord, Connection, ConnectionSummary, IntegrationInfo, KeyValueEntry,
-    OptionItem, QueueMessage, Workflow, WorkflowTypeDescriptor,
+    OptionItem, QueueMessage, RunState, Workflow, WorkflowTypeDescriptor,
 };
 use gloo_net::http::{Request, Response};
 use serde::Serialize;
@@ -431,6 +431,17 @@ pub async fn delete_workflow(id: &str) -> Result<(), ApiError> {
     demo!(fixtures::delete_workflow(id); Ok(()));
 
     delete(&format!("/workflows/{}", urlencode(id))).await
+}
+
+/// How a workflow's most recent runs went, and what they ran on.
+///
+/// `None` where the workflow has never run. The payloads live here rather than
+/// on the workflow itself so that drawing a list does not fetch every one of
+/// them.
+pub async fn workflow_runs(id: &str) -> Result<Option<RunState>, ApiError> {
+    demo!(Ok(fixtures::workflow_runs(id)));
+
+    get_json(&format!("/workflows/{}/runs", urlencode(id))).await
 }
 
 /// This account's own history, most recent first.

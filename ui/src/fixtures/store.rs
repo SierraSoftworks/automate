@@ -16,7 +16,7 @@ use std::cell::RefCell;
 use automate_api::{
     AdminUser, AuditRecord, Connection, ConnectionId, ConnectionKind, ConnectionStatus,
     ConnectionSummary, FieldKind, IntegrationInfo, KeyValueEntry, OptionItem, QueueMessage,
-    QueueStatus, Workflow, WorkflowId, WorkflowTrigger, WorkflowTypeDescriptor,
+    QueueStatus, RunState, Workflow, WorkflowId, WorkflowTrigger, WorkflowTypeDescriptor,
 };
 use chrono::Utc;
 
@@ -172,6 +172,11 @@ pub fn workflows() -> Vec<Workflow> {
     with(|state| state.workflows.clone())
 }
 
+/// How a workflow's most recent runs went, payloads included.
+pub fn workflow_runs(workflow: &str) -> Option<RunState> {
+    data::workflow_runs(workflow)
+}
+
 /// The audit log, narrowed the way the agent narrows it.
 ///
 /// The filtering is repeated here rather than left to the page because the page
@@ -221,6 +226,9 @@ pub fn create_workflow(
             updated_at: now,
             last_run: None,
             next_run: None,
+            // Nothing has run it yet, which is what a workflow created a moment
+            // ago should look like.
+            health: None,
         };
 
         state.workflows.push(workflow.clone());

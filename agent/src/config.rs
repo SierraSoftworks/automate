@@ -17,6 +17,8 @@ pub struct Config {
     pub web: WebConfig,
     #[serde(default)]
     pub workflows: WorkflowConfigs,
+    #[serde(default)]
+    pub audit: AuditConfig,
 }
 
 impl Config {
@@ -90,6 +92,47 @@ impl Config {
                 ],
             )
         })
+    }
+}
+
+/// How much of the audit log is kept.
+///
+/// Two limits rather than one, because either alone leaves a gap: an age limit
+/// lets a busy installation fill the disk inside the window, and a count limit
+/// lets a quiet one keep entries indefinitely. The count is per account so that
+/// one noisy user cannot evict everybody else's history.
+#[derive(Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AuditConfig {
+    /// How long an entry is kept, in days.
+    #[serde(default = "default_audit_retain_days")]
+    pub retain_days: u32,
+
+    /// The most entries any one account keeps.
+    #[serde(default = "default_audit_max_entries")]
+    pub max_entries_per_account: usize,
+}
+
+fn default_audit_retain_days() -> u32 {
+    90
+}
+
+fn default_audit_max_entries() -> usize {
+    10_000
+}
+
+impl Default for AuditConfig {
+    fn default() -> Self {
+        Self {
+            retain_days: default_audit_retain_days(),
+            max_entries_per_account: default_audit_max_entries(),
+        }
+    }
+}
+
+impl AuditConfig {
+    pub fn retain_for(&self) -> chrono::Duration {
+        chrono::Duration::days(self.retain_days as i64)
     }
 }
 

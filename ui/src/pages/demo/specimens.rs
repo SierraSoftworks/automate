@@ -205,6 +205,15 @@ fn status_pills() -> Html {
                            respond within 30 seconds."
                 />
             </Specimen>
+
+            <Specimen
+                label="A count, once one failure is not the story"
+                note="A workflow that has failed once may be a blip; one that has failed \
+                      forty times is not, and the row should not read the same either way."
+            >
+                <StatusPill tone={StatusTone::Error} label="Failing" />
+                <StatusPill tone={StatusTone::Error} label="Failing (41 runs)" />
+            </Specimen>
         </>
     }
 }

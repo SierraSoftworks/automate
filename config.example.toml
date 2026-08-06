@@ -32,6 +32,19 @@
 # acl. Admin-gated when omitted.
 # acl = 'true'
 
+[audit]
+# How much of the audit log is kept. Two limits, because either alone leaves a
+# gap: an age limit lets a busy installation fill the disk inside the window,
+# and a count limit lets a quiet one keep entries indefinitely. Trimmed daily.
+#
+# The log records what changed rather than what happened: a workflow that
+# started failing or recovered, a delivery turned away, a connection replaced,
+# somebody signing in. Ordinary runs and deliveries are kept against the
+# workflow itself instead, as one record each, so a busy webhook cannot crowd
+# out the entries worth reading.
+# retain_days = 90
+# max_entries_per_account = 10000
+
 [connections.todoist]
 # Superseded by per-account connections, which each user manages themselves.
 # This is imported once on start-up into the account a single-user installation
