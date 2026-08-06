@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     collectors::{CalendarCollector, Diff, DifferentialCollector},
+    db::StateKey,
     prelude::*,
     publishers::TodoistTarget,
 };
@@ -105,6 +106,13 @@ impl crate::workflows::ConfigurableWorkflow for CalendarWorkflow {
 
     fn describe(config: &Self::JobType) -> String {
         config.name.clone()
+    }
+
+    /// The snapshot of the calendar this mirrors against. Clearing it makes the
+    /// next run treat every event in the window as new, so tasks that were
+    /// completed by hand come back.
+    fn state(config: &Self::ConfigType) -> Vec<StateKey> {
+        vec![CalendarCollector::new(&config.url).state()]
     }
 
     fn descriptor() -> automate_api::WorkflowTypeDescriptor {

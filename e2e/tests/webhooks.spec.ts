@@ -23,6 +23,7 @@ import {
   purgeWorkflowsNamed,
   test,
   uniqueName,
+  workflowAction,
   type Connection,
 } from "./helpers";
 
@@ -177,7 +178,7 @@ test("the address of a deleted workflow stops working", async ({ page, request }
 
   expect((await request.post(path, { data: { environment: "production" } })).status()).toBe(204);
 
-  await row.getByRole("button", { name: "Delete" }).click();
+  await workflowAction(row, "Delete");
   await expect(page.locator("li.workflow").filter({ hasText: name })).toHaveCount(0);
 
   expect(

@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     collectors::{GitHubNotificationsCollector, IncrementalCollector},
+    db::StateKey,
     prelude::*,
 };
 
@@ -37,6 +38,13 @@ impl crate::workflows::ConfigurableWorkflow for GitHubNotificationsCleanupWorkfl
 
     fn describe(_config: &Self::ConfigType) -> String {
         "GitHub notifications cleanup".to_string()
+    }
+
+    /// The `If-Modified-Since` watermark, which is kept against the GitHub API
+    /// rather than this workflow, so clearing it makes every notification look
+    /// new to anything reading the same inbox.
+    fn state(_config: &Self::ConfigType) -> Vec<StateKey> {
+        vec![GitHubNotificationsCollector::new().state()]
     }
 
     fn descriptor() -> automate_api::WorkflowTypeDescriptor {

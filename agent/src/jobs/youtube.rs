@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     collectors::YouTubeCollector,
+    db::StateKey,
     prelude::*,
     publishers::TodoistTarget,
     publishers::{TodoistCreateTask, TodoistCreateTaskPayload},
@@ -89,6 +90,10 @@ impl crate::workflows::ConfigurableWorkflow for YouTubeWorkflow {
 
     fn describe(config: &Self::JobType) -> String {
         config.name.clone()
+    }
+
+    fn state(config: &Self::ConfigType) -> Vec<StateKey> {
+        vec![YouTubeCollector::new(&config.channel_id).state()]
     }
 
     fn descriptor() -> automate_api::WorkflowTypeDescriptor {

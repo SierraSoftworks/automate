@@ -35,6 +35,12 @@ impl YouTubeCollector {
         )))
     }
 
+    /// Where the feed watermark this collector shares with the RSS collector is
+    /// kept.
+    pub fn state(&self) -> crate::db::StateKey {
+        self.0.state()
+    }
+
     #[cfg(test)]
     pub fn new_with_feed(feed_url: impl ToString) -> Self {
         Self(RssCollector::new(feed_url))

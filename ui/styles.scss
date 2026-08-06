@@ -597,6 +597,17 @@ pre {
     &:focus-visible {
       @include focus-ring;
     }
+
+    // An action that destroys something reads as one before it is chosen, since
+    // a menu gives no other warning that this entry is not like its neighbours.
+    &--destructive {
+      color: $danger;
+
+      &:hover {
+        color: #fff;
+        background: $danger;
+      }
+    }
   }
 
   &__section {
@@ -607,6 +618,42 @@ pre {
     font-weight: 600;
     line-height: 1.2;
     text-transform: uppercase;
+  }
+
+  // A split button: the action people came for, joined to the menu holding the
+  // ones they did not. Same shared edge as `.btn-group`, for the same reason.
+  &--split {
+    > .btn {
+      position: relative;
+      // Collapses the doubled border between the two halves to a single line.
+      margin-left: -1px;
+      border-radius: 0;
+
+      &:first-child {
+        margin-left: 0;
+        border-radius: $radius-sm 0 0 $radius-sm;
+      }
+
+      &:last-child {
+        border-radius: 0 $radius-sm $radius-sm 0;
+      }
+
+      &:only-child {
+        border-radius: $radius-sm;
+      }
+
+      &:hover:not(:disabled),
+      &:focus-visible {
+        z-index: 1;
+      }
+    }
+  }
+
+  // The chevron half carries no label, so it is sized by its glyph rather than
+  // by text it does not have.
+  &__toggle {
+    padding-left: 0.5rem;
+    padding-right: 0.5rem;
   }
 
 }
@@ -1542,6 +1589,37 @@ footer {
       background: $fill-light;
       border: 1px solid $border-light;
     }
+  }
+
+  // Says that a run was queued, or that state was forgotten. Both finish out of
+  // sight, so the row would otherwise answer the request by not changing.
+  &__notice {
+    margin: 0;
+    padding: 0.4rem 0.6rem;
+    font-size: 0.8125rem;
+    color: $brand-dark;
+    background: $brand-tint;
+    border-radius: $radius-sm;
+  }
+
+  // Asking before throwing away what a workflow remembers. Inline rather than a
+  // dialog, because the warning is about this row and belongs beside it.
+  &__confirm {
+    padding: 0.7rem 0.75rem;
+    background: $danger-bg;
+    border: 1px solid $danger-border;
+    border-radius: $radius-sm;
+  }
+
+  &__warning {
+    margin: 0 0 0.6rem;
+    font-size: 0.8125rem;
+    color: $text-regular;
+  }
+
+  &__confirm-actions {
+    display: flex;
+    gap: 0.5rem;
   }
 }
 

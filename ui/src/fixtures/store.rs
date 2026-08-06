@@ -193,6 +193,10 @@ pub fn create_workflow(
             config: config.clone(),
             schedule: schedule.map(str::to_string),
             webhook_path: webhook_path(&descriptor.trigger, id),
+            // The agent derives this from the type's declared state. Here the
+            // trigger is the closest honest stand-in: the workflows that poll
+            // are the ones that remember where they got to.
+            resettable: matches!(descriptor.trigger, WorkflowTrigger::Cron { .. }),
             created_at: now,
             updated_at: now,
             last_run: None,
@@ -272,6 +276,23 @@ pub fn trigger_workflow(id: &str) -> Option<()> {
 
         workflow.last_run = Some(Utc::now());
         Some(())
+    })
+}
+
+/// Forgets what a workflow remembers between runs.
+///
+/// The agent works out which stored values belong to a workflow from its type
+/// and configuration, which is knowledge the browser deliberately does not have.
+/// So this reports the shape of the answer — how many values were cleared —
+/// without pretending to know which entries in the demo's data view they were.
+pub fn reset_workflow(id: &str) -> Option<usize> {
+    with(|state| {
+        let workflow = state
+            .workflows
+            .iter()
+            .find(|workflow| workflow.id.to_string() == id)?;
+
+        workflow.resettable.then_some(1)
     })
 }
 

@@ -451,6 +451,34 @@ pub async fn trigger_workflow(id: &str) -> Result<(), ApiError> {
     }
 }
 
+/// Forgets what a workflow remembers between runs, reporting how many stored
+/// values were cleared.
+pub async fn reset_workflow(id: &str) -> Result<usize, ApiError> {
+    demo!(fixtures::reset_workflow(id).ok_or(not_found("workflow")));
+
+    let resp = send::<()>(
+        Verb::Post,
+        &format!("/workflows/{}/reset", urlencode(id)),
+        None,
+    )
+    .await?;
+
+    if !resp.ok() {
+        return Err(error_from_response(resp).await);
+    }
+
+    resp.json::<ResetSummary>()
+        .await
+        .map(|summary| summary.cleared)
+        .map_err(|e| ApiError::Network(e.to_string()))
+}
+
+/// What a reset cleared.
+#[derive(serde::Deserialize)]
+struct ResetSummary {
+    cleared: usize,
+}
+
 /// The choices a picker should offer, fetched through a linked account.
 pub async fn list_connection_options(
     connection: &str,

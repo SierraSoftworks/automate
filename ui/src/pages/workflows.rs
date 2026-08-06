@@ -19,8 +19,8 @@ use yew::prelude::*;
 use crate::api;
 use crate::components::dynamic_form::{set_at, value_at};
 use crate::components::{
-    Alert, AlertKind, Button, ButtonGroup, ButtonKind, Documentation, DynamicForm, FetchedOptions,
-    Field, MenuButton, MenuButtonOption, PageActions, Switch, TextInput, WebhookAddress,
+    Alert, AlertKind, Button, ButtonKind, Documentation, DynamicForm, FetchedOptions, Field,
+    MenuButton, MenuButtonOption, PageActions, Switch, TextInput, WebhookAddress,
 };
 use crate::search::{MatchContext, SearchContext};
 
@@ -30,6 +30,18 @@ pub struct WorkflowValues {
     pub config: serde_json::Value,
     pub schedule: Option<String>,
     pub enabled: bool,
+}
+
+/// Says that an action was accepted, then takes it back down.
+///
+/// Running and resetting both finish somewhere the row cannot see, so without a
+/// line like this the page answers the request by looking exactly as it did
+/// before.
+fn announce(notice: &UseStateHandle<Option<String>>, message: String) {
+    notice.set(Some(message));
+
+    let notice = notice.clone();
+    Timeout::new(4_000, move || notice.set(None)).forget();
 }
 
 #[function_component(Workflows)]
@@ -51,9 +63,17 @@ pub fn workflows() -> Html {
             loading.clone(),
         );
 
-        use_effect_with(*reload, move |_| {
+        use_effect_with(*reload, move |reload| {
+            // Only the first pass shows the placeholder. A refresh after an edit
+            // already has a list to show, and swapping it for "Loading…" throws
+            // away every row's own state — including the line saying what just
+            // happened to it.
+            let first_load = *reload == 0;
+
             wasm_bindgen_futures::spawn_local(async move {
-                loading.set(true);
+                if first_load {
+                    loading.set(true);
+                }
 
                 match api::list_workflows().await {
                     Ok(found) => {
@@ -226,10 +246,14 @@ fn workflow_row(props: &WorkflowRowProps) -> Html {
     // The heading as well as the message, because a row can fail at two
     // different things and "we could not save this change" is untrue of one.
     let error = use_state(|| None::<(&'static str, String)>);
-    // Set briefly after a run is queued. A run happens elsewhere and finishes
-    // later, so without this the button is the only place that could say the
-    // request was accepted, and it says nothing.
-    let triggered = use_state(|| false);
+    // Set briefly after an action whose effect happens elsewhere. A run is
+    // queued and finishes later, and a reset changes nothing the row shows, so
+    // without this the page would answer both requests by looking unchanged.
+    let notice = use_state(|| None::<String>);
+    // Resetting throws away what a workflow remembers, and the consequence — a
+    // backlog re-filed as though it were new — lands in somebody's task list
+    // rather than here, so it is worth saying out loud before it happens.
+    let confirming_reset = use_state(|| false);
     let workflow = &props.workflow;
 
     /// Saves a change to this workflow, whatever prompted it.
@@ -340,20 +364,20 @@ fn workflow_row(props: &WorkflowRowProps) -> Html {
     // Runs the workflow now. Its schedule is left where it was, so this is an
     // extra run rather than one brought forward.
     let on_trigger = {
-        let (id, busy, error, triggered, on_changed) = (
+        let (id, busy, error, notice, on_changed) = (
             workflow.id.to_string(),
             busy.clone(),
             error.clone(),
-            triggered.clone(),
+            notice.clone(),
             props.on_changed.clone(),
         );
 
         Callback::from(move |_| {
-            let (id, busy, error, triggered, on_changed) = (
+            let (id, busy, error, notice, on_changed) = (
                 id.clone(),
                 busy.clone(),
                 error.clone(),
-                triggered.clone(),
+                notice.clone(),
                 on_changed.clone(),
             );
 
@@ -363,8 +387,7 @@ fn workflow_row(props: &WorkflowRowProps) -> Html {
 
                 match api::trigger_workflow(&id).await {
                     Ok(()) => {
-                        triggered.set(true);
-                        Timeout::new(3_000, move || triggered.set(false)).forget();
+                        announce(&notice, "Queued to run now.".to_string());
                         on_changed.emit(());
                     }
                     Err(err) => {
@@ -375,6 +398,76 @@ fn workflow_row(props: &WorkflowRowProps) -> Html {
                 busy.set(false);
             });
         })
+    };
+
+    // Forgets the watermarks and snapshots this workflow keeps between runs, so
+    // that the next run starts from nothing.
+    //
+    // Deliberately does not reload the list. Nothing a row shows is derived from
+    // the state that was cleared, and reloading replaces the list with its
+    // loading placeholder — which would take the row, and the line saying what
+    // just happened, down with it.
+    let on_reset = {
+        let (id, busy, error, notice, confirming_reset) = (
+            workflow.id.to_string(),
+            busy.clone(),
+            error.clone(),
+            notice.clone(),
+            confirming_reset.clone(),
+        );
+
+        Callback::from(move |_| {
+            let (id, busy, error, notice, confirming_reset) = (
+                id.clone(),
+                busy.clone(),
+                error.clone(),
+                notice.clone(),
+                confirming_reset.clone(),
+            );
+
+            wasm_bindgen_futures::spawn_local(async move {
+                busy.set(true);
+                error.set(None);
+
+                match api::reset_workflow(&id).await {
+                    Ok(cleared) => {
+                        confirming_reset.set(false);
+                        announce(
+                            &notice,
+                            match cleared {
+                                1 => "Forgot 1 remembered value.".to_string(),
+                                other => format!("Forgot {other} remembered values."),
+                            },
+                        );
+                    }
+                    Err(err) => {
+                        error.set(Some(("We could not reset this workflow.", err.to_string())))
+                    }
+                }
+
+                busy.set(false);
+            });
+        })
+    };
+
+    let on_action = {
+        let (on_trigger, on_delete, confirming_reset) = (
+            on_trigger.clone(),
+            on_delete.clone(),
+            confirming_reset.clone(),
+        );
+
+        Callback::from(move |action: String| match action.as_str() {
+            "trigger" => on_trigger.emit(()),
+            "reset" => confirming_reset.set(true),
+            "delete" => on_delete.emit(()),
+            _ => {}
+        })
+    };
+
+    let on_cancel_reset = {
+        let confirming_reset = confirming_reset.clone();
+        Callback::from(move |_| confirming_reset.set(false))
     };
 
     let on_cancel = {
@@ -388,6 +481,24 @@ fn workflow_row(props: &WorkflowRowProps) -> Html {
         .and_then(crate::util::describe_cron)
         .or_else(|| workflow.schedule.clone())
         .unwrap_or_else(|| "when its webhook is called".to_string());
+
+    // Everything the row can do other than the one the button itself carries
+    // out. Assembled rather than written out, because which of them apply
+    // depends on the workflow: only a scheduled one can be run on demand, and
+    // only one that remembers something can forget it.
+    let mut actions = Vec::new();
+
+    if let Some(descriptor) = &props.descriptor
+        && matches!(descriptor.trigger, WorkflowTrigger::Cron { .. })
+    {
+        actions.push(MenuButtonOption::new("trigger", "Run now"));
+    }
+
+    if workflow.resettable {
+        actions.push(MenuButtonOption::new("reset", "Reset state"));
+    }
+
+    actions.push(MenuButtonOption::new("delete", "Delete").destructive());
 
     html! {
         <li class="workflow">
@@ -411,35 +522,59 @@ fn workflow_row(props: &WorkflowRowProps) -> Html {
                     </span>
                 </div>
 
-                <ButtonGroup label="Workflow actions">
-                    if props.descriptor.is_some() {
-                        <Button onclick={on_edit} disabled={*busy}>
-                            if *editing { { "Close" } } else { { "Edit" } }
-                        </Button>
-                    }
-
-                    // Only for the workflows that have something to run without
-                    // being handed a payload first.
-                    if let Some(descriptor) = &props.descriptor
-                        && matches!(descriptor.trigger, WorkflowTrigger::Cron { .. })
-                    {
-                        <Button
-                            onclick={on_trigger}
-                            disabled={*busy}
-                            title="Run this workflow now, without changing its schedule"
-                        >
-                            if *triggered { { "Queued" } } else { { "Trigger" } }
-                        </Button>
-                    }
-
-                    <Button kind={ButtonKind::Danger} onclick={on_delete} busy={*busy}>
-                        { "Delete" }
-                    </Button>
-                </ButtonGroup>
+                // Editing is what a row is usually clicked for, so it stays a
+                // button; the rest sit behind the chevron, which keeps the
+                // destructive one from being a neighbour of the ordinary one.
+                // A workflow whose type has gone cannot be edited, so it has no
+                // default action and the menu is the whole control.
+                if props.descriptor.is_some() {
+                    <MenuButton
+                        label={if *editing { "Close" } else { "Edit" }}
+                        menu_label="Workflow actions"
+                        onclick={on_edit}
+                        options={actions}
+                        onselect={on_action}
+                        disabled={*busy}
+                    />
+                } else {
+                    <MenuButton
+                        label="Actions"
+                        options={actions}
+                        onselect={on_action}
+                        disabled={*busy}
+                    />
+                }
             </div>
+
+            if let Some(message) = (*notice).clone() {
+                <p class="workflow__notice" role="status">{ message }</p>
+            }
 
             if let Some((title, message)) = (*error).clone() {
                 <Alert kind={AlertKind::Error} title={title} message={message} />
+            }
+
+            if *confirming_reset {
+                <div class="workflow__confirm">
+                    <p class="workflow__warning">
+                        { "This forgets where the workflow got to. The next run treats \
+                           everything it finds as new, so a backlog that was already dealt \
+                           with will be filed again." }
+                    </p>
+
+                    <div class="workflow__confirm-actions">
+                        <Button kind={ButtonKind::Danger} onclick={on_reset} busy={*busy}>
+                            { "Reset state" }
+                        </Button>
+                        <Button
+                            kind={ButtonKind::Subtle}
+                            onclick={on_cancel_reset}
+                            disabled={*busy}
+                        >
+                            { "Leave it as it is" }
+                        </Button>
+                    </div>
+                </div>
             }
 
             if let Some(path) = workflow.webhook_path.clone() {

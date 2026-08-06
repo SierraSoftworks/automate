@@ -4,9 +4,13 @@ use std::fmt::Display;
 use rust_ynab::{Account, ClearedStatus, Client, NewTransaction, PlanId, ServerKnowledge};
 use uuid::Uuid;
 
+use crate::db::StateKey;
 use crate::parsers::parse_key_value_pairs;
 use crate::prelude::*;
 use crate::services::AlphaVantageClient;
+
+/// Where the account mirror and server knowledge token for a budget are kept.
+const STATE_PARTITION: &str = "ynab/stocks/state";
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct YnabStocksConfig {
@@ -101,6 +105,13 @@ impl crate::workflows::ConfigurableWorkflow for YnabStocksWorkflow {
 
     fn describe(config: &Self::JobType) -> String {
         format!("Stocks in {}", config.budget)
+    }
+
+    /// The account mirror. Clearing it costs a full re-read of the budget's
+    /// accounts on the next run, which is how a mirror that has drifted out of
+    /// step with YNAB is put right.
+    fn state(config: &Self::ConfigType) -> Vec<StateKey> {
+        vec![StateKey::new(STATE_PARTITION, config.budget.to_string())]
     }
 
     fn descriptor() -> automate_api::WorkflowTypeDescriptor {
@@ -220,7 +231,7 @@ impl Job for YnabStocksWorkflow {
 
         let kv = services.kv();
         let mut state: StocksState = kv
-            .get("ynab/stocks/state", budget.to_string())
+            .get(STATE_PARTITION, budget.to_string())
             .await?
             .unwrap_or_default();
 
@@ -247,7 +258,7 @@ impl Job for YnabStocksWorkflow {
             }
         }
         state.server_knowledge = Some(new_knowledge);
-        kv.set("ynab/stocks/state", budget.to_string(), state.clone())
+        kv.set(STATE_PARTITION, budget.to_string(), state.clone())
             .await?;
 
         let settings = client.get_plan_settings(plan).await.wrap_system_err(

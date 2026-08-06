@@ -322,6 +322,78 @@ pub async fn trigger(services: Scoped, id: web::Path<String>) -> HttpResponse {
     HttpResponse::NoContent().finish()
 }
 
+/// What a reset cleared, so the browser can say so rather than guess.
+#[derive(serde::Serialize)]
+pub struct ResetSummary {
+    /// How many stored values were removed.
+    pub cleared: usize,
+}
+
+/// `POST /api/v1/workflows/{workflow}/reset` — forgets what a workflow remembers
+/// between runs.
+///
+/// This is the supported way to do what previously meant finding the right
+/// entries in the Data view and deleting them by hand: the workflow type says
+/// where its own state lives, so the operator does not have to know that an RSS
+/// watermark is keyed by feed URL under `rss/feed`.
+///
+/// Deliberately does not run the workflow afterwards. Clearing a watermark and
+/// running are separate decisions — the usual reason to reset is to fix
+/// something before the next scheduled run, and re-filing a year of backlog as
+/// a side effect of a repair is not what anybody asked for.
+pub async fn reset(services: Scoped, id: web::Path<String>) -> HttpResponse {
+    let id = match parse_id(&id) {
+        Ok(id) => id,
+        Err(response) => return response,
+    };
+
+    let store = services.workflows();
+
+    let stored = match store.find(id).await {
+        Ok(Some(stored)) => stored,
+        Ok(None) => return not_found(id),
+        Err(err) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, err.description()),
+    };
+
+    let workflow_type = match crate::workflows::lookup(&stored.type_id) {
+        Ok(workflow_type) => workflow_type,
+        Err(err) => return json_error(StatusCode::BAD_REQUEST, err.description()),
+    };
+
+    let state = match workflow_type.state(&stored.config) {
+        Ok(state) => state,
+        Err(err) => return json_error(StatusCode::BAD_REQUEST, err.description()),
+    };
+
+    // Refused rather than reported as a reset that cleared nothing, because the
+    // two are the same response and only one of them means the workflow will
+    // behave differently afterwards.
+    if state.is_empty() {
+        return json_error(
+            StatusCode::BAD_REQUEST,
+            "This workflow does not remember anything between runs, so there is nothing to reset.",
+        );
+    }
+
+    let cleared = state.len();
+
+    for entry in state {
+        if let Err(err) = services.kv().remove(entry.partition, entry.key).await {
+            return json_error(StatusCode::INTERNAL_SERVER_ERROR, err.to_string());
+        }
+    }
+
+    record(
+        &services,
+        "reset",
+        id,
+        format!("Cleared {cleared} stored values this workflow remembered between runs."),
+    )
+    .await;
+
+    HttpResponse::Ok().json(ResetSummary { cleared })
+}
+
 /// How a file should be applied.
 #[derive(serde::Deserialize)]
 pub struct ImportQuery {
@@ -430,7 +502,7 @@ mod tests {
     use actix_web::{App, test, web};
     use automate_api::{TenantId, Workflow, WorkflowTypeDescriptor};
 
-    use crate::db::Queue;
+    use crate::db::{KeyValueStore, Queue};
     use crate::filter::Filter;
     use crate::prelude::Services;
     use crate::services::AppContext;
@@ -677,6 +749,124 @@ mod tests {
         assert_eq!(
             test::call_service(&app, req).await.status(),
             StatusCode::BAD_REQUEST,
+        );
+    }
+
+    /// The state an RSS workflow keeps, as its collector addresses it.
+    async fn rss_state(context: &AppContext) -> Option<serde_json::Value> {
+        context
+            .tenant(TenantId::local())
+            .kv()
+            .get("rss/feed", "https://example.com/rss/")
+            .await
+            .unwrap()
+    }
+
+    #[actix_web::test]
+    async fn resetting_a_workflow_forgets_what_it_remembered_between_runs() {
+        // The point of the endpoint: an operator should not have to know that an
+        // RSS watermark is keyed by feed URL under `rss/feed` to clear one.
+        let context = context().await;
+        let app = app!(context);
+
+        let req = test::TestRequest::post()
+            .uri("/api/v1/workflows")
+            .set_json(valid_body())
+            .to_request();
+        let created: Workflow = test::call_and_read_body_json(&app, req).await;
+        assert!(
+            created.resettable,
+            "an RSS workflow keeps a watermark, so it has something to reset",
+        );
+
+        context
+            .tenant(TenantId::local())
+            .kv()
+            .set(
+                "rss/feed",
+                "https://example.com/rss/",
+                serde_json::json!({ "published": "2024-01-01T00:00:00Z" }),
+            )
+            .await
+            .unwrap();
+
+        let req = test::TestRequest::post()
+            .uri(&format!("/api/v1/workflows/{}/reset", created.id))
+            .to_request();
+        let resp = test::call_service(&app, req).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        let summary: serde_json::Value = test::read_body_json(resp).await;
+        assert_eq!(summary["cleared"], 1);
+
+        assert!(
+            rss_state(&context).await.is_none(),
+            "the watermark should be gone, or the next run picks up where it left off",
+        );
+    }
+
+    #[actix_web::test]
+    async fn resetting_a_workflow_does_not_run_it() {
+        // Clearing a watermark and running are separate decisions. Re-filing a
+        // year of backlog as a side effect of a repair is not what was asked
+        // for.
+        let context = context().await;
+        let app = app!(context);
+
+        let req = test::TestRequest::post()
+            .uri("/api/v1/workflows")
+            .set_json(valid_body())
+            .to_request();
+        let created: Workflow = test::call_and_read_body_json(&app, req).await;
+
+        let req = test::TestRequest::post()
+            .uri(&format!("/api/v1/workflows/{}/reset", created.id))
+            .to_request();
+        assert_eq!(test::call_service(&app, req).await.status(), StatusCode::OK);
+
+        assert!(queued(&context, "rss/todoist").await.is_empty());
+    }
+
+    #[actix_web::test]
+    async fn a_workflow_with_nothing_to_forget_cannot_be_reset() {
+        // A webhook workflow acts on whatever it is handed. Reporting a reset
+        // that cleared nothing would be the same response as one that changed
+        // how the workflow behaves.
+        let app = app!(context().await);
+
+        let req = test::TestRequest::post()
+            .uri("/api/v1/workflows")
+            .set_json(serde_json::json!({
+                "type": "webhook",
+                "config": {
+                    "name": "Deployments",
+                    "title": "Deployed ${{ environment }}",
+                    "todoist": { "connection": null },
+                },
+            }))
+            .to_request();
+        let created: Workflow = test::call_and_read_body_json(&app, req).await;
+        assert!(!created.resettable);
+
+        let req = test::TestRequest::post()
+            .uri(&format!("/api/v1/workflows/{}/reset", created.id))
+            .to_request();
+        assert_eq!(
+            test::call_service(&app, req).await.status(),
+            StatusCode::BAD_REQUEST,
+        );
+    }
+
+    #[actix_web::test]
+    async fn resetting_a_workflow_that_is_not_there_says_so() {
+        let app = app!(context().await);
+
+        let req = test::TestRequest::post()
+            .uri("/api/v1/workflows/copper-tiger-canyon/reset")
+            .to_request();
+        assert_eq!(
+            test::call_service(&app, req).await.status(),
+            StatusCode::NOT_FOUND,
         );
     }
 

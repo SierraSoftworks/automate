@@ -624,6 +624,7 @@ impl<S: Services> WorkflowStore<S> {
             id: record.id,
             webhook_path,
             name: workflow.describe(&record.config)?,
+            resettable: !workflow.state(&record.config)?.is_empty(),
             type_id: record.type_id,
             enabled: record.enabled,
             config: record.config,

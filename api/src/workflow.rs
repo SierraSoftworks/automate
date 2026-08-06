@@ -378,6 +378,17 @@ pub struct Workflow {
     /// When this is next expected to run, for triggers that can say.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub next_run: Option<chrono::DateTime<chrono::Utc>>,
+
+    /// Whether this workflow remembers anything between runs that could be
+    /// forgotten.
+    ///
+    /// Carried so the UI can offer to reset only the workflows a reset would do
+    /// something to. A workflow that acts on whatever it is handed and keeps no
+    /// watermark has nothing to clear, and offering the action anyway would make
+    /// the one that does nothing indistinguishable from the one that re-files a
+    /// year of history.
+    #[serde(default)]
+    pub resettable: bool,
 }
 
 fn default_enabled() -> bool {
@@ -605,6 +616,7 @@ mod tests {
             config: serde_json::json!({}),
             schedule: Some("@daily".into()),
             webhook_path: None,
+            resettable: true,
             created_at: chrono::Utc::now(),
             updated_at: chrono::Utc::now(),
             last_run: None,

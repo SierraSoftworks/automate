@@ -15,8 +15,8 @@ use yew::prelude::*;
 use crate::components::{
     Alert, AlertKind, BrowserEntry, BrowserPartition, Button, ButtonGroup, ButtonKind, ConnectMenu,
     ConnectionsPanel, DbEntity, Documentation, DynamicForm, EntityMetadata, Field, FilterInput,
-    JsonHighlight, NumberInput, PageTitle, PartitionBrowser, RefreshButton, SecretInput, Select,
-    SelectOption, Switch, TextArea, TextInput, WebhookAddress,
+    JsonHighlight, MenuButton, MenuButtonOption, NumberInput, PageTitle, PartitionBrowser,
+    RefreshButton, SecretInput, Select, SelectOption, Switch, TextArea, TextInput, WebhookAddress,
 };
 use crate::fixtures;
 
@@ -48,6 +48,12 @@ pub const CONTROLS: &[Control] = &[
         name: "Button",
         blurb: "Every prominence and state a button can be in.",
         view: || html! { <Buttons /> },
+    },
+    Control {
+        slug: "menu-button",
+        name: "Menu button",
+        blurb: "A menu of commands, on its own or joined to the action people came for.",
+        view: || html! { <MenuButtons /> },
     },
     Control {
         slug: "field",
@@ -278,22 +284,102 @@ fn buttons() -> Html {
                       shown."
             >
                 <div class="specimen__row">
-                    <ButtonGroup label="Workflow actions">
-                        <Button onclick={inert()}>{ "Edit" }</Button>
-                        <Button onclick={inert()}>{ "Trigger" }</Button>
-                        <Button kind={ButtonKind::Danger} onclick={inert()}>{ "Delete" }</Button>
-                    </ButtonGroup>
-
-                    <ButtonGroup label="Workflow actions">
-                        <Button onclick={inert()} disabled=true>{ "Edit" }</Button>
-                        <Button kind={ButtonKind::Danger} onclick={inert()} busy=true>
-                            { "Delete" }
+                    <ButtonGroup label="Connection actions">
+                        <Button small=true onclick={inert()}>{ "Reconnect" }</Button>
+                        <Button small=true onclick={inert()}>{ "Edit" }</Button>
+                        <Button kind={ButtonKind::Danger} small=true onclick={inert()}>
+                            { "Unlink" }
                         </Button>
                     </ButtonGroup>
 
-                    <ButtonGroup label="Workflow actions">
-                        <Button kind={ButtonKind::Danger} onclick={inert()}>{ "Delete" }</Button>
+                    <ButtonGroup label="Connection actions">
+                        <Button small=true onclick={inert()} disabled=true>{ "Edit" }</Button>
+                        <Button kind={ButtonKind::Danger} small=true onclick={inert()} busy=true>
+                            { "Unlink" }
+                        </Button>
                     </ButtonGroup>
+
+                    <ButtonGroup label="Connection actions">
+                        <Button kind={ButtonKind::Danger} small=true onclick={inert()}>
+                            { "Unlink" }
+                        </Button>
+                    </ButtonGroup>
+                </div>
+            </Specimen>
+        </>
+    }
+}
+
+#[function_component(MenuButtons)]
+fn menu_buttons() -> Html {
+    let workflow_actions = vec![
+        MenuButtonOption::new("trigger", "Run now"),
+        MenuButtonOption::new("reset", "Reset state"),
+        MenuButtonOption::new("delete", "Delete").destructive(),
+    ];
+
+    html! {
+        <>
+            <Specimen
+                label="Menu"
+                note="The whole button opens the menu. Used where every choice is equal, such \
+                      as picking which kind of thing to add."
+            >
+                <div class="specimen__row">
+                    <MenuButton
+                        label="Add Workflow"
+                        kind={ButtonKind::Primary}
+                        options={vec![
+                            MenuButtonOption::new("rss", "RSS Feed"),
+                            MenuButtonOption::new("calendar", "Calendar"),
+                            MenuButtonOption::new("xkcd", "XKCD"),
+                        ]}
+                        onselect={inert()}
+                    />
+
+                    <MenuButton label="Add Workflow" options={Vec::new()} onselect={inert()} />
+                </div>
+            </Specimen>
+
+            <Specimen
+                label="Split"
+                note="The action a row is usually clicked for stays a button; the occasional \
+                      ones, and the destructive one, sit behind the chevron. A destructive \
+                      entry says so before it is chosen, since a menu gives no other warning."
+            >
+                <div class="specimen__row">
+                    <MenuButton
+                        label="Edit"
+                        menu_label="Workflow actions"
+                        onclick={inert()}
+                        options={workflow_actions.clone()}
+                        onselect={inert()}
+                    />
+
+                    <MenuButton
+                        label="Edit"
+                        menu_label="Workflow actions"
+                        onclick={inert()}
+                        options={workflow_actions}
+                        onselect={inert()}
+                        disabled=true
+                    />
+                </div>
+            </Specimen>
+
+            <Specimen
+                label="Split with nothing else to offer"
+                note="The chevron is dropped rather than left opening an empty menu, which \
+                      leaves an ordinary button — which is what the row then has."
+            >
+                <div class="specimen__row">
+                    <MenuButton
+                        label="Edit"
+                        menu_label="Workflow actions"
+                        onclick={inert()}
+                        options={Vec::new()}
+                        onselect={inert()}
+                    />
                 </div>
             </Specimen>
         </>
