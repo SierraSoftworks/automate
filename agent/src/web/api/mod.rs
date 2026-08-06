@@ -28,6 +28,7 @@ use crate::web::helpers::oidc::{
 use crate::web::helpers::request::client_ip;
 
 mod admin;
+mod audit;
 mod auth;
 mod connections;
 mod kv;
@@ -90,6 +91,7 @@ pub fn configure() -> actix_web::Scope<
                 // for, which is the impersonated one when an administrator is
                 // acting as somebody else. The `Scoped` extractor in each
                 // handler's signature is what enforces that.
+                .route("/audit", web::get().to(audit::list))
                 .route("/kv", web::get().to(kv::list))
                 .route("/kv/{partition}", web::delete().to(kv::delete))
                 .route("/queue", web::get().to(queue::list))

@@ -41,94 +41,9 @@ use tokio_rusqlite::Connection;
 
 use crate::prelude::*;
 
-/// The area of the system an entry concerns.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum AuditCategory {
-    /// A cron-triggered workflow ran.
-    WorkflowRun,
-
-    /// A webhook delivery was received and processed.
-    WebhookDelivery,
-
-    /// A workflow was created, changed or removed.
-    WorkflowConfig,
-
-    /// A connection to an external service was established or removed.
-    Connection,
-
-    /// Someone signed in, or was refused.
-    Authentication,
-
-    /// An administrator acted, including impersonating a user.
-    Administration,
-}
-
-impl AuditCategory {
-    /// The value stored in the database.
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Self::WorkflowRun => "workflow.run",
-            Self::WebhookDelivery => "webhook.delivery",
-            Self::WorkflowConfig => "workflow.config",
-            Self::Connection => "connection",
-            Self::Authentication => "authentication",
-            Self::Administration => "administration",
-        }
-    }
-
-    fn from_str(value: &str) -> Option<Self> {
-        Some(match value {
-            "workflow.run" => Self::WorkflowRun,
-            "webhook.delivery" => Self::WebhookDelivery,
-            "workflow.config" => Self::WorkflowConfig,
-            "connection" => Self::Connection,
-            "authentication" => Self::Authentication,
-            "administration" => Self::Administration,
-            _ => return None,
-        })
-    }
-}
-
-/// How an audited operation turned out.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum AuditOutcome {
-    /// The operation did what it set out to do.
-    Success,
-
-    /// The operation was attempted and did not work.
-    Failure,
-
-    /// The operation was deliberately not performed, because a filter excluded
-    /// it or there was nothing to do.
-    Skipped,
-
-    /// The operation was refused: a bad signature, or a permission check.
-    Denied,
-}
-
-impl AuditOutcome {
-    /// The value stored in the database.
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Self::Success => "success",
-            Self::Failure => "failure",
-            Self::Skipped => "skipped",
-            Self::Denied => "denied",
-        }
-    }
-
-    fn from_str(value: &str) -> Option<Self> {
-        Some(match value {
-            "success" => Self::Success,
-            "failure" => Self::Failure,
-            "skipped" => Self::Skipped,
-            "denied" => Self::Denied,
-            _ => return None,
-        })
-    }
-}
+// The shape of an entry is part of the REST contract, because the admin UI reads
+// the log back. It is defined once, alongside the rest of that contract.
+pub use automate_api::{AuditCategory, AuditOutcome, AuditRecord};
 
 /// An entry about to be written to the log.
 #[derive(Debug, Clone)]
@@ -202,31 +117,6 @@ impl AuditEntry {
     pub fn outcome_of(&self) -> AuditOutcome {
         self.outcome
     }
-}
-
-/// An entry read back from the log.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AuditRecord {
-    /// Monotonic identifier, which is also the pagination cursor.
-    pub id: i64,
-
-    pub tenant: TenantId,
-    pub occurred_at: chrono::DateTime<chrono::Utc>,
-    pub category: AuditCategory,
-    pub action: String,
-    pub outcome: AuditOutcome,
-
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub subject: Option<String>,
-
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub actor: Option<String>,
-
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub message: Option<String>,
-
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub detail: Option<serde_json::Value>,
 }
 
 /// Which entries to read back.
@@ -347,9 +237,9 @@ fn read_record(row: &rusqlite::Row<'_>) -> rusqlite::Result<AuditRecord> {
         occurred_at: row.get(2)?,
         // An unrecognised value means the row was written by a newer release.
         // Reading the rest of the entry is more useful than failing the query.
-        category: AuditCategory::from_str(&category).unwrap_or(AuditCategory::Administration),
+        category: AuditCategory::parse(&category).unwrap_or(AuditCategory::Administration),
         action: row.get(4)?,
-        outcome: AuditOutcome::from_str(&outcome).unwrap_or(AuditOutcome::Failure),
+        outcome: AuditOutcome::parse(&outcome).unwrap_or(AuditOutcome::Failure),
         subject: row.get(6)?,
         actor: row.get(7)?,
         message: row.get(8)?,
