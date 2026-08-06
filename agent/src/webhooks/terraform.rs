@@ -344,6 +344,7 @@ impl Job for TerraformWebhook {
                 )
                 .await?;
             }
+            NotificationPayload::Verification { .. } => {}
         }
 
         Ok(())
@@ -411,6 +412,19 @@ pub enum NotificationPayload {
         message: String,
         details: serde_json::Value,
     },
+    Verification {
+        payload_version: NotificationVersion<1>,
+        notification_configuration_id: String,
+        run_url: Option<String>,
+        run_id: Option<String>,
+        run_message: Option<String>,
+        run_created_at: Option<chrono::DateTime<chrono::Utc>>,
+        run_created_by: Option<String>,
+        workspace_id: Option<String>,
+        workspace_name: Option<String>,
+        organization_name: Option<String>,
+        notifications: Vec<VerificationNotification>,
+    },
 }
 
 impl NotificationPayload {
@@ -434,6 +448,7 @@ impl NotificationPayload {
                 .max()
                 .unwrap_or(1),
             NotificationPayload::Workplace { trigger, .. } => Self::priority_for(trigger),
+            NotificationPayload::Verification { .. } => 1,
         }
     }
 }
@@ -445,6 +460,21 @@ pub struct NotificationV1 {
     pub run_status: String,
     pub run_updated_at: chrono::DateTime<chrono::Utc>,
     pub run_updated_by: Option<String>,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+pub struct VerificationNotification {
+    pub message: String,
+    pub trigger: VerificationTrigger,
+    pub run_status: Option<String>,
+    pub run_updated_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub run_updated_by: Option<String>,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+pub enum VerificationTrigger {
+    #[serde(rename = "verification")]
+    Verification,
 }
 
 #[cfg(test)]
@@ -487,6 +517,29 @@ mod tests {
         "trigger": "assessment:drifted",
         "message": "Drift detected in workspace.",
         "details": {}
+    }"#;
+
+    const VERIFICATION_NOTIFICATION: &str = r#"
+    {
+        "payload_version": 1,
+        "notification_configuration_id": "nc-a93zM6YS3UNKxE5k",
+        "run_url": null,
+        "run_id": null,
+        "run_message": null,
+        "run_created_at": null,
+        "run_created_by": null,
+        "workspace_id": null,
+        "workspace_name": null,
+        "organization_name": null,
+        "notifications": [
+            {
+                "message": "Verification of Todoist Notification",
+                "trigger": "verification",
+                "run_status": null,
+                "run_updated_at": null,
+                "run_updated_by": null
+            }
+        ]
     }"#;
 
     /// The HMAC token these tests pretend was set on both this workflow and the
@@ -699,6 +752,20 @@ mod tests {
             filed[0].payload["priority"], 4,
             "drift is something somebody has to go and look at",
         );
+    }
+
+    #[tokio::test]
+    async fn a_verification_notification_is_accepted_without_filing_a_task() {
+        let services = crate::services::ServicesContainer::new_mock()
+            .await
+            .unwrap();
+        let workflow = store_with_token(&services, TOKEN).await;
+
+        run(&services, &delivery(workflow, VERIFICATION_NOTIFICATION))
+            .await
+            .expect("Terraform's verification notification should be accepted");
+
+        assert!(filed(&services).await.is_empty());
     }
 
     #[tokio::test]
