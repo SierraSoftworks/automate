@@ -21,7 +21,7 @@ pub fn refresh_button(props: &RefreshButtonProps) -> Html {
 
     html! {
         <button
-            class="btn btn--small"
+            class="btn btn--primary"
             onclick={props.onclick.clone()}
             disabled={props.busy}
             title="Refresh"
