@@ -207,14 +207,6 @@ pub async fn deliver_github(
                 error!(error = %err, workflow.id = %workflow.id, "Failed to enqueue a GitHub webhook delivery: {err}");
                 return actix_web::HttpResponse::InternalServerError().finish();
             }
-
-            audit(
-                &services,
-                workflow.id,
-                crate::db::AuditOutcome::Success,
-                "Accepted a delivery from the GitHub App.".to_string(),
-            )
-            .await;
         }
     }
 
@@ -310,18 +302,11 @@ pub async fn deliver(
         // Accepted and dropped rather than refused: the URL is real and the
         // sender did nothing wrong, and telling them otherwise would have them
         // retry or raise an alert over a workflow its owner deliberately paused.
+        //
+        // Not recorded. A busy sender talking to a paused workflow is the worst
+        // case for the log, and the workflow already says it is paused, with an
+        // entry saying when it was paused and by whom.
         debug!(workflow.id = %record.id, "Discarding a delivery for a paused workflow.");
-
-        // Recorded, because from the outside this looks exactly like a delivery
-        // that worked. Somebody wondering why nothing happened should be able to
-        // find out that it was paused rather than lost.
-        audit(
-            &services,
-            record.id,
-            crate::db::AuditOutcome::Success,
-            "Discarded a delivery because this workflow is paused.".to_string(),
-        )
-        .await;
 
         return actix_web::HttpResponse::NoContent().finish();
     }
@@ -372,18 +357,18 @@ pub async fn deliver(
         return actix_web::HttpResponse::InternalServerError().finish();
     }
 
-    audit(
-        &services,
-        record.id,
-        crate::db::AuditOutcome::Success,
-        format!("Accepted a delivery for '{}'.", record.type_id),
-    )
-    .await;
-
+    // Deliberately not recorded. A delivery that arrives is the ordinary case,
+    // and on a busy installation it is thousands of rows a day burying the ones
+    // worth reading. What became of it is kept against the workflow instead, as
+    // one record that is overwritten rather than a history that grows.
     actix_web::HttpResponse::NoContent().finish()
 }
 
-/// Notes what became of a delivery, for the workflows we could identify.
+/// Notes a delivery we would not accept, against the workflow it named.
+///
+/// Only refusals reach the log. A delivery that works says nothing the run
+/// record does not, whereas one turned away is both rare and the thing somebody
+/// is looking for when a provider insists it is sending and nothing arrives.
 ///
 /// Deliberately not called for a token nobody was issued. We do not know whose
 /// account such a delivery would belong to, and the only place to put it would
@@ -403,7 +388,7 @@ async fn audit(
         .message(message);
 
     if let Err(err) = services.audit().record(entry).await {
-        // The delivery has already been accepted; losing the note about it is
+        // The delivery has already been answered; losing the note about it is
         // not a reason to make the sender retry.
         warn!(error = %err, "Failed to record a webhook delivery in the audit log.");
     }
@@ -802,7 +787,10 @@ mod tests {
     }
 
     #[actix_web::test]
-    async fn an_accepted_delivery_leaves_a_record_its_owner_can_find() {
+    async fn an_accepted_delivery_writes_nothing_to_the_audit_log() {
+        // A GitHub App on a busy organisation delivers thousands of times a day.
+        // One row each would bury every entry somebody actually wanted to read,
+        // so what became of a delivery is kept against the workflow instead.
         use crate::db::AuditStore;
 
         let context = context().await;
@@ -822,10 +810,10 @@ mod tests {
             .unwrap();
 
         assert!(
-            entries
+            !entries
                 .iter()
                 .any(|entry| entry.category == crate::db::AuditCategory::WebhookDelivery),
-            "a delivery that was accepted should be visible to the account it ran for",
+            "an ordinary delivery is not news; only one we turned away is",
         );
     }
 

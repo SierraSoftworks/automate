@@ -98,6 +98,36 @@ pub async fn get(services: Scoped, id: web::Path<String>) -> HttpResponse {
     }
 }
 
+/// `GET /api/v1/workflows/{workflow}/runs` — how this workflow's recent runs
+/// went, and what they ran on.
+///
+/// Separate from the workflow itself because this is where the payloads are,
+/// and a list of workflows carrying every one of their payloads is the problem
+/// this arrangement exists to avoid. Somebody looking into one failure asks
+/// about one workflow.
+pub async fn runs(services: Scoped, id: web::Path<String>) -> HttpResponse {
+    let id = match parse_id(&id) {
+        Ok(id) => id,
+        Err(response) => return response,
+    };
+
+    // Checked so that asking about a workflow that is not there is a 404 rather
+    // than an empty answer, which is what a workflow that has never run returns.
+    match services.workflows().find(id).await {
+        Ok(Some(_)) => {}
+        Ok(None) => return not_found(id),
+        Err(err) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, err.description()),
+    }
+
+    match crate::runs::RunStore::new((*services).clone())
+        .get(id)
+        .await
+    {
+        Ok(state) => HttpResponse::Ok().json(state),
+        Err(err) => json_error(StatusCode::INTERNAL_SERVER_ERROR, err.description()),
+    }
+}
+
 /// `POST /api/v1/workflows` — configures a new workflow.
 pub async fn create(services: Scoped, body: web::Json<CreateWorkflow>) -> HttpResponse {
     let body = body.into_inner();

@@ -122,6 +122,7 @@ pub fn configure() -> actix_web::Scope<
                 .route("/workflows/{workflow}", web::get().to(workflows::get))
                 .route("/workflows/{workflow}", web::put().to(workflows::update))
                 .route("/workflows/{workflow}", web::delete().to(workflows::delete))
+                .route("/workflows/{workflow}/runs", web::get().to(workflows::runs))
                 .route(
                     "/workflows/{workflow}/rotate-webhook",
                     web::post().to(workflows::rotate_webhook),

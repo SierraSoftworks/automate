@@ -287,6 +287,21 @@ impl<S: Services> WorkflowStore<S> {
         }
 
         workflows.sort_by_key(|workflow| std::cmp::Reverse(workflow.created_at));
+
+        // One read for the account rather than one per workflow. Failing to read
+        // it leaves the list without health rather than without workflows: not
+        // knowing how a workflow is getting on is a worse page, not a broken one.
+        match crate::runs::RunStore::new(&self.services).health().await {
+            Ok(mut health) => {
+                for workflow in &mut workflows {
+                    workflow.health = health.remove(&workflow.id);
+                }
+            }
+            Err(err) => {
+                warn!(error = %err, "Could not read how workflows have been getting on: {err}");
+            }
+        }
+
         Ok(workflows)
     }
 
@@ -503,7 +518,12 @@ impl<S: Services> WorkflowStore<S> {
         self.services
             .kv()
             .remove(Self::partition_for(&existing.type_id)?, id.to_string())
-            .await
+            .await?;
+
+        // The runs go with it. Leaving them would have a workflow created later
+        // inherit a stranger's failure, since identifiers are drawn at random
+        // from a space small enough to be reused.
+        crate::runs::RunStore::new(&self.services).forget(id).await
     }
 
     /// Replaces a workflow's webhook token, so a leaked URL stops working.
@@ -633,6 +653,9 @@ impl<S: Services> WorkflowStore<S> {
             updated_at: record.updated_at,
             last_run: record.last_run,
             next_run,
+            // Attached by the callers that draw a list, which read every
+            // workflow's health in one go rather than one at a time.
+            health: None,
         })
     }
 }

@@ -4,6 +4,7 @@ use std::collections::HashMap;
 use chrono::{DateTime, TimeDelta, Utc};
 
 use crate::db::QueueMessage;
+use crate::db::{AuditCategory, AuditEntry, AuditOutcome, AuditStore};
 use crate::prelude::*;
 use crate::services::{AppContext, AppServices};
 
@@ -402,6 +403,11 @@ impl JobHost {
         // telemetry on the way out.
         let mut tasks = tokio::task::JoinSet::new();
 
+        // Kept here rather than as a registered job because it is the one piece
+        // of housekeeping that reaches across accounts, and a queue partition
+        // any tenant could enqueue into is the wrong shape for that.
+        tasks.spawn(Self::prune_audit_log(context.clone()));
+
         loop {
             // Reap completed job tasks so the set does not grow without bound.
             while tasks.try_join_next().is_some() {}
@@ -443,6 +449,39 @@ impl JobHost {
                     tokio::time::sleep(std::time::Duration::from_secs(5)).await;
                 }
             }
+        }
+    }
+
+    /// Trims the audit log back to its configured retention, and keeps doing so.
+    ///
+    /// The log is append-only and read by people rather than machines, so it
+    /// needs a bound whatever is written to it — sampling decides how fast it
+    /// fills, not whether it does. Runs on start-up so that an installation
+    /// upgrading into this does not have to wait a day to feel it.
+    async fn prune_audit_log(context: AppContext) {
+        /// Often enough that the log never drifts far past its limits, and
+        /// rarely enough that the delete is never the reason a write waits.
+        const EVERY: std::time::Duration = std::time::Duration::from_secs(24 * 60 * 60);
+
+        loop {
+            let audit = &context.config().audit;
+
+            match context
+                .database()
+                .prune_audit_log(audit.retain_for(), audit.max_entries_per_account)
+                .await
+            {
+                Ok(0) => debug!("The audit log is within its retention; nothing to remove."),
+                Ok(removed) => info!("Removed {removed} audit entries past their retention."),
+                Err(err) => {
+                    // Not fatal, and not retried sooner: a log that is one day
+                    // too long is not a reason to stop running anybody's work.
+                    error!(error = %err, "Failed to trim the audit log: {err}");
+                    context.session().record_human_error(&err);
+                }
+            }
+
+            tokio::time::sleep(EVERY).await;
         }
     }
 
@@ -513,6 +552,7 @@ impl JobHost {
 
         // Resolved before the message is consumed by `complete`.
         let workflow = workflow_of(&item);
+        let started_at = Utc::now();
 
         match handler
             .handle(ctx, &item.payload)
@@ -522,8 +562,15 @@ impl JobHost {
             Ok(()) => {
                 info!("Job '{name}' completed successfully (traceparent: {traceparent}).");
                 if let Some(workflow) = workflow {
-                    Self::audit_run(&services, workflow, crate::db::AuditOutcome::Success, None)
-                        .await;
+                    Self::record_run(
+                        &services,
+                        workflow,
+                        started_at,
+                        AuditOutcome::Success,
+                        None,
+                        &item.payload,
+                    )
+                    .await;
                 }
                 if let Err(err) = queue.complete(name.to_string(), item).await {
                     error!(error = %err, "Failed to mark job '{name}' as completed (traceparent: {traceparent}): {err}");
@@ -541,11 +588,13 @@ impl JobHost {
                 Self::record_job_failure(&span, &err);
 
                 if let Some(workflow) = workflow {
-                    Self::audit_run(
+                    Self::record_run(
                         &services,
                         workflow,
-                        crate::db::AuditOutcome::Failure,
+                        started_at,
+                        AuditOutcome::Failure,
                         Some(err.to_string()),
+                        &item.payload,
                     )
                     .await;
                 }
@@ -557,28 +606,67 @@ impl JobHost {
 
     /// Notes what became of a run against the workflow it belongs to.
     ///
-    /// A run happens long after the page that asked for it has gone, so this is
-    /// the only account of it its owner can reach; without it, a workflow that
-    /// has been failing for a week looks exactly like one that has been working.
-    async fn audit_run(
+    /// A run happens long after the page that asked for it has gone, so without
+    /// this a workflow that has been failing for a week looks exactly like one
+    /// that has been working.
+    ///
+    /// The record is overwritten rather than appended, and the audit log hears
+    /// about it only when the answer changes. A workflow taking thousands of
+    /// deliveries a day would otherwise write thousands of rows nobody reads,
+    /// and bury the entries somebody does.
+    async fn record_run(
         services: &AppServices,
         workflow: automate_api::WorkflowId,
-        outcome: crate::db::AuditOutcome,
+        started_at: DateTime<Utc>,
+        outcome: AuditOutcome,
         message: Option<String>,
+        payload: &serde_json::Value,
     ) {
-        use crate::db::{AuditCategory, AuditEntry, AuditStore};
+        use automate_api::{RunOutcome, RunReport};
 
-        let mut entry =
-            AuditEntry::new(AuditCategory::WorkflowRun, "ran", outcome).subject(workflow);
+        let report = RunReport {
+            started_at,
+            finished_at: Utc::now(),
+            outcome: match outcome {
+                AuditOutcome::Success => RunOutcome::Succeeded,
+                _ => RunOutcome::Failed,
+            },
+            message: message.clone(),
+            input: crate::runs::keepable(payload),
+        };
 
-        if let Some(message) = message {
-            entry = entry.message(message);
-        }
+        let transition = match crate::runs::RunStore::new(services)
+            .record(workflow, report)
+            .await
+        {
+            Ok(transition) => transition,
+            Err(err) => {
+                // The run is over either way; losing the note about it is not a
+                // reason to fail the job or retry it.
+                warn!(error = %err, "Failed to record what became of a workflow run: {err}");
+                return;
+            }
+        };
+
+        let entry = match transition {
+            crate::runs::Transition::Unchanged => return,
+            crate::runs::Transition::StartedFailing => {
+                AuditEntry::new(AuditCategory::WorkflowRun, "started-failing", outcome)
+                    .subject(workflow)
+                    .message(message.unwrap_or_else(|| "This workflow stopped working.".into()))
+            }
+            crate::runs::Transition::Recovered { after } => {
+                AuditEntry::new(AuditCategory::WorkflowRun, "recovered", outcome)
+                    .subject(workflow)
+                    .message(format!(
+                        "This workflow is working again, after {after} failed {}.",
+                        if after == 1 { "run" } else { "runs" }
+                    ))
+            }
+        };
 
         if let Err(err) = services.audit().record(entry).await {
-            // The run is over either way; losing the note about it is not a
-            // reason to fail the job or retry it.
-            warn!(error = %err, "Failed to record a workflow run in the audit log: {err}");
+            warn!(error = %err, "Failed to record a change in a workflow's health: {err}");
         }
     }
 
@@ -675,6 +763,91 @@ mod tests {
         );
 
         assert_eq!(workflow_of(&message), None);
+    }
+
+    /// The entries in one account's log, most recent first.
+    async fn audited(context: &AppContext) -> Vec<automate_api::AuditRecord> {
+        context
+            .tenant(TenantId::local())
+            .audit()
+            .audit(crate::db::AuditQuery::recent(50))
+            .await
+            .unwrap()
+    }
+
+    /// Puts a run through the recorder the way the consumer does.
+    async fn ran(
+        services: &AppServices,
+        workflow: automate_api::WorkflowId,
+        outcome: AuditOutcome,
+        payload: serde_json::Value,
+    ) {
+        JobHost::record_run(
+            services,
+            workflow,
+            Utc::now(),
+            outcome,
+            (outcome == AuditOutcome::Failure).then(|| "it broke".to_string()),
+            &payload,
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn a_busy_workflow_writes_one_entry_per_incident_rather_than_one_per_run() {
+        // The whole point of the arrangement: a webhook workflow taking
+        // thousands of deliveries a day must not be able to fill the log.
+        let context = crate::services::AppContext::new_mock(|_| {}).await.unwrap();
+        let services = context.tenant(TenantId::local());
+        let id = automate_api::WorkflowId::from_entropy(3);
+
+        for _ in 0..50 {
+            ran(&services, id, AuditOutcome::Success, serde_json::json!({})).await;
+        }
+        for _ in 0..50 {
+            ran(&services, id, AuditOutcome::Failure, serde_json::json!({})).await;
+        }
+        for _ in 0..50 {
+            ran(&services, id, AuditOutcome::Success, serde_json::json!({})).await;
+        }
+
+        let runs: Vec<_> = audited(&context)
+            .await
+            .into_iter()
+            .filter(|entry| entry.category == crate::db::AuditCategory::WorkflowRun)
+            .collect();
+
+        assert_eq!(
+            runs.len(),
+            2,
+            "150 runs covering one incident should be the two entries that describe it",
+        );
+        assert_eq!(runs[0].action, "recovered");
+        assert_eq!(runs[1].action, "started-failing");
+    }
+
+    #[tokio::test]
+    async fn a_run_keeps_what_it_ran_on() {
+        let context = crate::services::AppContext::new_mock(|_| {}).await.unwrap();
+        let services = context.tenant(TenantId::local());
+        let id = automate_api::WorkflowId::from_entropy(5);
+
+        ran(
+            &services,
+            id,
+            AuditOutcome::Failure,
+            serde_json::json!({ "workflow": id, "event": { "body": "{}" } }),
+        )
+        .await;
+
+        let state = crate::runs::RunStore::new(&services)
+            .get(id)
+            .await
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(state.last.message.as_deref(), Some("it broke"));
+        assert_eq!(state.last.input.unwrap()["event"]["body"], "{}");
     }
 
     #[derive(Serialize, Deserialize)]
