@@ -25,6 +25,8 @@ use serde::Deserialize;
 const TOKEN_KEY: &str = "automate.admin.token";
 /// sessionStorage key holding the refresh token used to renew the session.
 const REFRESH_KEY: &str = "automate.admin.refresh";
+/// sessionStorage key naming the account an administrator has chosen to act as.
+const IMPERSONATE_KEY: &str = "automate.admin.impersonate";
 /// sessionStorage key holding the in-flight OAuth `state` value.
 const STATE_KEY: &str = "automate.oidc.state";
 /// Short-lived `localStorage` slot the popup uses to hand tokens back to its opener.
@@ -150,7 +152,30 @@ pub fn clear_token() {
     if let Some(storage) = session() {
         let _ = storage.remove_item(TOKEN_KEY);
         let _ = storage.remove_item(REFRESH_KEY);
+        let _ = storage.remove_item(IMPERSONATE_KEY);
     }
+}
+
+/// The account this tab is acting as, when an administrator has chosen one.
+///
+/// Kept in `sessionStorage` beside the token rather than in the URL or in
+/// component state, so that it survives a reload and a navigation but never
+/// escapes the tab — opening a second one lands you back in your own account,
+/// which is the safer default of the two.
+pub fn impersonating() -> Option<String> {
+    session()?.get_item(IMPERSONATE_KEY).ok().flatten()
+}
+
+/// Starts or stops acting as another account.
+pub fn set_impersonating(account: Option<&str>) {
+    let Some(storage) = session() else {
+        return;
+    };
+
+    let _ = match account {
+        Some(account) => storage.set_item(IMPERSONATE_KEY, account),
+        None => storage.remove_item(IMPERSONATE_KEY),
+    };
 }
 
 /// Percent-encodes a URL query-component value.

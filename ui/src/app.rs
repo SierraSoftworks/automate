@@ -36,6 +36,9 @@ pub enum Route {
     /// What the agent has been doing: runs, deliveries, and changes.
     #[at("/admin/activity")]
     Activity,
+    /// Everyone who has signed in, for an administrator to suspend or act as.
+    #[at("/admin/users")]
+    Users,
     /// The control gallery, for reviewing every control without a backend. It
     /// exists in debug builds only, alongside the fixtures it renders with.
     #[cfg(debug_assertions)]
@@ -73,8 +76,16 @@ pub enum AuthStatus {
 pub struct AuthHandle {
     pub status: AuthStatus,
     pub user: Option<AdminUser>,
+    /// The account an administrator has chosen to act as, if any.
+    ///
+    /// Read from the stored choice rather than from the resolved identity, so
+    /// that a choice the agent went on to refuse can still be undone — which is
+    /// precisely when somebody needs to.
+    pub acting_as: Option<String>,
     pub login: Callback<()>,
     pub signout: Callback<()>,
+    /// Starts acting as an account, or stops when given `None`.
+    pub act_as: Callback<Option<String>>,
 }
 
 /// Probes the protected API to resolve the current authentication state. A
@@ -96,8 +107,12 @@ async fn resolve_status(status: &UseStateHandle<AuthStatus>) {
 /// Resolves the authentication state once on mount and exposes login/sign-out
 /// actions.
 #[hook]
-fn use_auth() -> AuthHandle {
+fn use_auth() -> (AuthHandle, u32) {
     let status = use_state(|| AuthStatus::Loading);
+    // Bumped whenever the account being acted for changes. Used as the key on
+    // the routed page so that every page drops the data it fetched for the
+    // previous account rather than showing it under the new one's name.
+    let generation = use_state(|| 0u32);
 
     {
         let status = status.clone();
@@ -137,17 +152,34 @@ fn use_auth() -> AuthHandle {
         })
     };
 
+    let act_as = {
+        let status = status.clone();
+        let generation = generation.clone();
+        Callback::from(move |account: Option<String>| {
+            auth::set_impersonating(account.as_deref());
+
+            let status = status.clone();
+            generation.set(*generation + 1);
+            status.set(AuthStatus::Loading);
+            spawn_local(async move { resolve_status(&status).await });
+        })
+    };
+
     let user = match &*status {
         AuthStatus::SignedIn(user) => Some(user.clone()),
         _ => None,
     };
 
-    AuthHandle {
+    let handle = AuthHandle {
         status: (*status).clone(),
         user,
+        acting_as: auth::impersonating(),
         login,
         signout,
-    }
+        act_as,
+    };
+
+    (handle, *generation)
 }
 
 #[function_component(App)]
@@ -161,10 +193,10 @@ pub fn app() -> Html {
 
 #[function_component(AppInner)]
 fn app_inner() -> Html {
-    let auth = use_auth();
+    let (auth, generation) = use_auth();
     html! {
         <ContextProvider<AuthHandle> context={auth}>
-            <Switch<Route> render={switch} />
+            <Switch<Route> render={switch} key={generation} />
         </ContextProvider<AuthHandle>>
     }
 }
@@ -184,6 +216,9 @@ fn switch(route: Route) -> Html {
         },
         Route::Activity => html! {
             <AdminShell><pages::Activity /></AdminShell>
+        },
+        Route::Users => html! {
+            <AdminShell><pages::Users /></AdminShell>
         },
         #[cfg(debug_assertions)]
         Route::DemoControls => html! { <pages::DemoControls /> },

@@ -6,7 +6,7 @@ use yew::prelude::*;
 use yew_router::prelude::*;
 
 use crate::app::Route;
-use crate::components::{AppBar, PageTitle, SearchBar};
+use crate::components::{AppBar, ImpersonationBanner, PageTitle, SearchBar};
 use crate::fixtures;
 use crate::pages::Protected;
 use crate::search::{SearchContext, SearchFilter, SearchVocabulary, VocabularyContext};
@@ -118,6 +118,12 @@ pub fn admin_shell(props: &AdminShellProps) -> Html {
             "Search… (try outcome:failure)",
             true,
         ),
+        Route::Users => (
+            "Accounts",
+            "Everyone who has signed in, and whose records you are looking at.",
+            "Search accounts…",
+            false,
+        ),
         _ => (
             "Admin",
             "Browse the key-value store and job queues across every partition.",
@@ -131,6 +137,7 @@ pub fn admin_shell(props: &AdminShellProps) -> Html {
             <ContextProvider<VocabularyContext> context={vocabulary_ctx}>
                 <div class="app-shell">
                     <AppBar><AdminNav /></AppBar>
+                    <ImpersonationBanner />
                     <main class="app-main">
                         <div class="app-container">
                             <ContextProvider<PageActions> context={(*page_actions).clone()}>
@@ -165,6 +172,7 @@ pub fn admin_shell(props: &AdminShellProps) -> Html {
 #[function_component(AdminNav)]
 fn admin_nav() -> Html {
     let current = use_route::<Route>().unwrap_or(Route::Admin);
+    let auth = use_context::<crate::app::AuthHandle>();
 
     let link = |route: Route, label: &'static str| {
         // Both spellings of the browser route are the same destination, so one
@@ -174,6 +182,7 @@ fn admin_nav() -> Html {
             (Route::Connections, Route::Connections)
                 | (Route::Workflows, Route::Workflows)
                 | (Route::Activity, Route::Activity)
+                | (Route::Users, Route::Users)
                 | (Route::Admin, Route::Admin | Route::AdminRoot)
         );
         let classes = classes!(
@@ -197,12 +206,21 @@ fn admin_nav() -> Html {
         }
     };
 
+    // Nobody else can load the page behind it, so offering the link would only
+    // be a promise the agent then refuses.
+    let is_admin = auth
+        .and_then(|auth| auth.user)
+        .is_some_and(|user| user.is_admin);
+
     html! {
         <nav class="admin-nav">
             { link(Route::Workflows, "Workflows") }
             { link(Route::Connections, "Connections") }
             { link(Route::Activity, "Activity") }
             { link(Route::Admin, "Data") }
+            if is_admin {
+                { link(Route::Users, "Accounts") }
+            }
             // Only reachable in demo mode, which is the only mode it works in.
             if fixtures::is_demo() {
                 <a class="admin-nav__link" href={util::nav_href("/demo/controls")}>

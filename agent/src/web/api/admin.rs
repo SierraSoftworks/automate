@@ -46,13 +46,33 @@ pub struct UpdateUser {
 }
 
 /// `GET /api/v1/admin/users` — every account that has signed in.
+///
+/// Plus the installation's own account when there is more than one, because it
+/// owns every record that predates `multi_tenant` being switched on and nobody
+/// signs into it, so it would otherwise be invisible and unreachable.
 pub async fn list_users(context: Administrative) -> HttpResponse {
     let registry = UserRegistry::new(context.tenant(TenantId::system()));
 
-    match registry.list().await {
-        Ok(users) => HttpResponse::Ok().json(users),
-        Err(err) => json_error(StatusCode::INTERNAL_SERVER_ERROR, err.description()),
+    let users = match registry.list().await {
+        Ok(users) => users,
+        Err(err) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, err.description()),
+    };
+
+    let mut accounts: Vec<automate_api::Account> =
+        users.iter().map(crate::users::User::to_account).collect();
+
+    let config = context.config();
+    if config.web.auth.multi_tenant {
+        let local = super::local_tenant(&config);
+        if !accounts.iter().any(|account| account.username == local) {
+            accounts.insert(
+                0,
+                automate_api::Account::reserved(local, "This installation"),
+            );
+        }
     }
+
+    HttpResponse::Ok().json(accounts)
 }
 
 /// `PATCH /api/v1/admin/users/{username}` — suspends or restores an account.
@@ -84,7 +104,7 @@ pub async fn update_user(
                 user.disabled = disabled,
                 "An administrator changed an account's status."
             );
-            HttpResponse::Ok().json(user)
+            HttpResponse::Ok().json(user.to_account())
         }
         Ok(None) => json_error(
             StatusCode::NOT_FOUND,

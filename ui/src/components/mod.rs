@@ -15,6 +15,7 @@ mod entity;
 mod filter_input;
 mod form;
 mod helpers;
+mod impersonation;
 mod json_highlight;
 mod layout;
 mod menu_button;
@@ -40,6 +41,7 @@ pub use form::{
     TextInput,
 };
 pub use helpers::Center;
+pub use impersonation::{ActAsMenu, ImpersonationBanner, ImpersonationNotice};
 pub use json_highlight::JsonHighlight;
 pub use layout::Layout;
 pub use menu_button::{MenuButton, MenuButtonOption};

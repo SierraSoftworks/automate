@@ -13,7 +13,7 @@
 //! a demo branch of its own — and why a page cannot accidentally leave one out.
 
 use automate_api::{
-    AdminUser, AuditRecord, Connection, ConnectionSummary, IntegrationInfo, KeyValueEntry,
+    Account, AdminUser, AuditRecord, Connection, ConnectionSummary, IntegrationInfo, KeyValueEntry,
     OptionItem, QueueMessage, RunState, Workflow, WorkflowTypeDescriptor,
 };
 use gloo_net::http::{Request, Response};
@@ -92,6 +92,12 @@ enum Verb {
     Delete,
 }
 
+/// The header by which an administrator asks the agent to act as another
+/// account. Sent on every call rather than on the ones a page thinks are
+/// account-specific, because a page that forgot it would silently write to the
+/// wrong account.
+const IMPERSONATE_HEADER: &str = "X-Impersonate-User";
+
 /// Builds a request with the bearer token (when present) and an optional JSON body.
 fn build<B: Serialize>(
     verb: Verb,
@@ -108,6 +114,10 @@ fn build<B: Serialize>(
     };
     let builder = match token {
         Some(token) => builder.header("Authorization", &format!("Bearer {token}")),
+        None => builder,
+    };
+    let builder = match auth::impersonating() {
+        Some(account) => builder.header(IMPERSONATE_HEADER, &account),
         None => builder,
     };
     match body {
@@ -220,6 +230,28 @@ pub async fn list_kv() -> Result<Vec<KeyValueEntry>, ApiError> {
     demo!(Ok(fixtures::kv_entries()));
 
     get_json("/kv").await
+}
+
+/// Every account in the installation, for an administrator to browse or act as.
+pub async fn list_accounts() -> Result<Vec<Account>, ApiError> {
+    demo!(Ok(fixtures::accounts()));
+
+    get_json("/admin/users").await
+}
+
+/// Suspends or restores an account.
+pub async fn set_account_disabled(username: &str, disabled: bool) -> Result<Account, ApiError> {
+    demo!(fixtures::set_account_disabled(username, disabled).ok_or(not_found("account")));
+
+    json_response(
+        send(
+            Verb::Patch,
+            &format!("/admin/users/{}", urlencode(username)),
+            Some(&serde_json::json!({ "disabled": disabled })),
+        )
+        .await?,
+    )
+    .await
 }
 
 /// Deletes a single key-value entry.

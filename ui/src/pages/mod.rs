@@ -12,6 +12,7 @@ mod login;
 mod not_found;
 mod protected;
 mod queue;
+mod users;
 mod workflows;
 
 pub use activity::Activity;
@@ -24,4 +25,5 @@ pub use landing::Landing;
 pub use login::Login;
 pub use not_found::NotFound;
 pub use protected::Protected;
+pub use users::Users;
 pub use workflows::Workflows;

@@ -14,9 +14,9 @@
 use std::cell::RefCell;
 
 use automate_api::{
-    AdminUser, AuditRecord, Connection, ConnectionId, ConnectionKind, ConnectionStatus,
+    Account, AdminUser, AuditRecord, Connection, ConnectionId, ConnectionKind, ConnectionStatus,
     ConnectionSummary, FieldKind, IntegrationInfo, KeyValueEntry, OptionItem, QueueMessage,
-    QueueStatus, RunState, Workflow, WorkflowId, WorkflowTrigger, WorkflowTypeDescriptor,
+    QueueStatus, RunState, TenantId, Workflow, WorkflowId, WorkflowTrigger, WorkflowTypeDescriptor,
 };
 use chrono::Utc;
 
@@ -28,6 +28,7 @@ struct State {
     queue: Vec<QueueMessage>,
     connections: Vec<ConnectionSummary>,
     workflows: Vec<Workflow>,
+    accounts: Vec<Account>,
     integration_connections: Vec<(String, Vec<Connection>)>,
     /// Distinguishes the records created during this session from the fixtures
     /// and from each other.
@@ -41,6 +42,7 @@ impl State {
             queue: data::queue_messages(),
             connections: data::service_connections(),
             workflows: data::workflows(),
+            accounts: data::accounts(),
             integration_connections: data::integrations()
                 .into_iter()
                 .map(|integration| {
@@ -66,8 +68,45 @@ fn with<R>(action: impl FnOnce(&mut State) -> R) -> R {
     STATE.with(|state| action(&mut state.borrow_mut()))
 }
 
+/// The signed-in identity, redirected when an administrator is acting as
+/// somebody else.
+///
+/// The header is what the agent reads to decide this, so the store reads it too
+/// — otherwise the one page whose whole job is to say whose records are on
+/// screen would be the one page demo mode could not show.
 pub fn admin_user() -> AdminUser {
-    data::admin_user()
+    let mut user = data::admin_user();
+
+    if let Some(account) = crate::auth::impersonating() {
+        user.impersonated_by = user.username.take();
+        user.username = Some(TenantId::from_storage(&account));
+        user.name = with(|state| {
+            state
+                .accounts
+                .iter()
+                .find(|candidate| candidate.username.as_str() == account)
+                .map(|candidate| candidate.display_name.clone())
+                .unwrap_or(account)
+        });
+        user.email = None;
+    }
+
+    user
+}
+
+pub fn accounts() -> Vec<Account> {
+    with(|state| state.accounts.clone())
+}
+
+pub fn set_account_disabled(username: &str, disabled: bool) -> Option<Account> {
+    with(|state| {
+        let account = state
+            .accounts
+            .iter_mut()
+            .find(|account| account.username.as_str() == username)?;
+        account.disabled = disabled;
+        Some(account.clone())
+    })
 }
 
 pub fn kv_entries() -> Vec<KeyValueEntry> {
