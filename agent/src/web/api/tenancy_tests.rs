@@ -673,25 +673,8 @@ async fn a_webhook_address_never_appears_in_anybody_but_its_owners_view() {
 }
 
 #[actix_web::test]
-async fn the_installations_own_accounts_cannot_be_acted_as() {
-    use crate::db::KeyValueStore;
-    use crate::prelude::Services;
-
+async fn the_installations_bookkeeping_account_cannot_be_acted_as() {
     let context = two_people().await;
-
-    // Something recognisable in each reserved namespace, so that "the request
-    // was refused" and "the request did not come back with those records" are
-    // two separate assertions rather than one hoping to imply the other.
-    // '!system' already holds the user registry; '!local' gets a record
-    // standing in for everything a single-account installation had before it
-    // adopted an identity provider.
-    context
-        .tenant(TenantId::local())
-        .kv()
-        .set("notes", "legacy", "from before anybody signed in")
-        .await
-        .unwrap();
-
     let app = app!(context);
 
     // `TenantId::new` refuses anything starting with '!' outright, before the
@@ -700,7 +683,7 @@ async fn the_installations_own_accounts_cannot_be_acted_as() {
     // which is why a shouted spelling is refused too — a refactor that
     // normalised first and then compared against a list of reserved names would
     // let that one through.
-    for reserved in [TenantId::SYSTEM, TenantId::LOCAL, "!System"] {
+    for reserved in [TenantId::SYSTEM, "!System"] {
         let response = acting_as!(app, reserved, test::TestRequest::get().uri("/api/v1/kv"));
 
         assert_eq!(
@@ -709,22 +692,18 @@ async fn the_installations_own_accounts_cannot_be_acted_as() {
             "'{reserved}' should not be an account anybody can act as",
         );
 
-        // The refusal is what matters, but so is what it protects. '!system'
+        // The refusal is what matters, but so is what it protects: '!system'
         // holds the user registry, so a request that got through would be
-        // handed every account in the installation; '!local' holds whatever the
-        // installation had before it started telling people apart, which is
-        // nobody's to browse once it does.
+        // handed every account in the installation.
         let body = String::from_utf8_lossy(&test::read_body(response).await).to_string();
         assert!(
-            !body.contains(ALICE)
-                && !body.contains(BOB)
-                && !body.contains("from before anybody signed in"),
+            !body.contains(ALICE) && !body.contains(BOB),
             "acting as '{reserved}' returned records from the reserved namespace: {body}",
         );
     }
 
     // The records really are in there, so the assertions above are refusing
-    // something rather than describing empty namespaces.
+    // something rather than describing an empty namespace.
     let registry = UserRegistry::new(context.tenant(TenantId::system()));
     let known: Vec<String> = registry
         .list()
@@ -736,6 +715,48 @@ async fn the_installations_own_accounts_cannot_be_acted_as() {
     assert!(
         known.iter().any(|name| name == ALICE) && known.iter().any(|name| name == BOB),
         "the reserved namespace should hold the very records the refusals kept back: {known:?}",
+    );
+}
+
+#[actix_web::test]
+async fn acting_as_the_installations_own_account_reaches_its_records_and_nobody_elses() {
+    use crate::db::KeyValueStore;
+    use crate::prelude::Services;
+
+    // '!local' owns everything a single-account installation held before it
+    // adopted an identity provider, and nobody can sign into it — so acting as
+    // it is the only way back to those records. What that must not become is a
+    // view across everybody: it is one more account, not a skeleton key.
+    let context = two_people().await;
+
+    context
+        .tenant(TenantId::local())
+        .kv()
+        .set("notes", "legacy", "from before anybody signed in")
+        .await
+        .unwrap();
+    context
+        .tenant(account(ALICE))
+        .kv()
+        .set("notes", "hers", "alice's note")
+        .await
+        .unwrap();
+
+    let app = app!(context);
+
+    let body = text_acting_as!(
+        app,
+        TenantId::LOCAL,
+        test::TestRequest::get().uri("/api/v1/kv")
+    );
+
+    assert!(
+        body.contains("from before anybody signed in"),
+        "acting as the installation's own account should reach its records: {body}",
+    );
+    assert!(
+        !body.contains("alice's note"),
+        "acting as the installation's own account reached somebody else's records: {body}",
     );
 }
 

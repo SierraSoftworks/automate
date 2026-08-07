@@ -106,6 +106,20 @@ continue to name the administrator, so administrator status never follows
 the impersonated account and any change made this way is recorded against
 the account it affected.
 
+The admin UI drives this from its **Accounts** page (and from the *Act
+as…* menu on the user chip): choosing somebody sets the header on every
+subsequent request and puts a banner across the top of the shell naming
+whose records are on screen. The choice lives in the tab's session, so
+opening a new one lands back in your own account.
+
+Alongside the people who have signed in, that list includes the
+installation's own account (`!local` by default, or `local_user` where
+one is configured). Nobody can sign into it, but it owns everything
+configured before `multi_tenant` was switched on, so acting as it is the
+only way back to those records. The `!system` tenant is deliberately not
+offered: it holds the user registry and the webhook indexes, which are
+the agent's own bookkeeping rather than anybody's records.
+
 ### Connections
 
 Credentials for external services are held as **connections**: one linked

@@ -75,6 +75,20 @@ impl User {
             impersonated_by: None,
         }
     }
+
+    /// The account as an administrator sees it in the accounts list.
+    pub fn to_account(&self) -> automate_api::Account {
+        automate_api::Account {
+            username: self.username.clone(),
+            display_name: self.display_name.clone(),
+            email: self.email.clone(),
+            is_admin: self.is_admin,
+            disabled: self.disabled,
+            first_seen_at: Some(self.first_seen_at),
+            last_seen_at: Some(self.last_seen_at),
+            reserved: false,
+        }
+    }
 }
 
 /// Reads and writes the user registry.

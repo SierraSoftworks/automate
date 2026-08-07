@@ -1,6 +1,64 @@
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::TenantId;
+
+/// An account an administrator can see, suspend, or act as.
+///
+/// Almost every account is a person who has signed in, and is held in the user
+/// registry. The installation's own account is not — nobody signs into it — but
+/// it owns records all the same, and after `multi_tenant` is switched on it owns
+/// every record that predates the change. It is listed here so that it can be
+/// reached, marked [`reserved`](Self::reserved) and without the sign-in dates it
+/// has no honest answer for.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Account {
+    /// The account name, which is also the namespace everything it owns is
+    /// stored under.
+    pub username: TenantId,
+
+    /// The name to show for it.
+    pub display_name: String,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub email: Option<String>,
+
+    /// Whether the administrator filter matched when they last signed in.
+    #[serde(default)]
+    pub is_admin: bool,
+
+    /// Whether an administrator has suspended this account.
+    #[serde(default)]
+    pub disabled: bool,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub first_seen_at: Option<DateTime<Utc>>,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_seen_at: Option<DateTime<Utc>>,
+
+    /// Owned by the installation rather than by a person, so it can be acted as
+    /// but never suspended — there is nobody to lock out, and suspending it
+    /// would only make its records unreachable.
+    #[serde(default)]
+    pub reserved: bool,
+}
+
+impl Account {
+    /// The installation's own account, which nobody has signed into.
+    pub fn reserved(username: TenantId, display_name: impl Into<String>) -> Self {
+        Self {
+            username,
+            display_name: display_name.into(),
+            email: None,
+            is_admin: false,
+            disabled: false,
+            first_seen_at: None,
+            last_seen_at: None,
+            reserved: true,
+        }
+    }
+}
 
 /// The identity of the signed-in user, derived from the validated OIDC token
 /// claims.

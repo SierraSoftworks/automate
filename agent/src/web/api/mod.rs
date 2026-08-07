@@ -312,7 +312,7 @@ pub async fn api_auth<S: Services + Send + Sync + 'static>(
             )));
         }
 
-        match resolve_impersonation(&req, &principal, &registry).await {
+        match resolve_impersonation(&req, &principal, &registry, &local_tenant(&config)).await {
             Ok(Some(subject)) => {
                 info!(
                     admin.account = %principal.actor(),
@@ -421,6 +421,7 @@ async fn resolve_impersonation<S: Services>(
     req: &ServiceRequest,
     principal: &Principal,
     registry: &UserRegistry<S>,
+    local: &TenantId,
 ) -> Result<Option<TenantId>, HttpResponse> {
     use actix_web::http::StatusCode;
 
@@ -443,6 +444,17 @@ async fn resolve_impersonation<S: Services>(
             StatusCode::FORBIDDEN,
             "Only administrators may act as another user.",
         ));
+    }
+
+    // The installation's own account owns everything from before `multi_tenant`
+    // was switched on, and nobody signs into it — so it is absent from the
+    // registry, and its default name is one `TenantId::new` refuses. Reaching it
+    // is the whole of what an administrator needs after that switch is thrown.
+    // The system tenant is deliberately not reachable this way: it holds the
+    // registry and the webhook indexes, which are the agent's own bookkeeping
+    // rather than anybody's records.
+    if requested.eq_ignore_ascii_case(local.as_str()) {
+        return Ok((local != principal.actor()).then(|| local.clone()));
     }
 
     let subject =
@@ -844,6 +856,117 @@ mod tests {
         let resp = test::call_service(&app, req).await;
 
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    /// Signs in as an administrator against a real identity provider.
+    ///
+    /// The other impersonation tests run without one, which resolves the
+    /// administrator's own account to the installation's — and acting as
+    /// yourself is a no-op, so the account below could never be reached from
+    /// there.
+    async fn an_administrator_and_an_installation_account()
+    -> (crate::testing::oidc::TestIdentityProvider, AppContext) {
+        let provider = crate::testing::oidc::TestIdentityProvider::start().await;
+        let context = provider
+            .context_with(|config| {
+                config.web.auth.admin_acl = Some(Filter::new("true").unwrap());
+            })
+            .await;
+
+        (provider, context)
+    }
+
+    #[actix_web::test]
+    async fn the_installations_own_account_can_be_acted_as() {
+        use actix_web::http::header::AUTHORIZATION;
+
+        // Everything configured before `multi_tenant` was switched on still
+        // belongs to this account, and nobody can sign into it, so acting as it
+        // is the only way those records are ever reachable again.
+        let (provider, context) = an_administrator_and_an_installation_account().await;
+        let app = app!(context);
+
+        let response = test::call_service(
+            &app,
+            test::TestRequest::get()
+                .uri("/api/v1/me")
+                .insert_header((
+                    AUTHORIZATION,
+                    format!("Bearer {}", provider.sign_in_as("admin")),
+                ))
+                .insert_header((IMPERSONATE_HEADER, TenantId::LOCAL))
+                .to_request(),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let user: automate_api::AdminUser = test::read_body_json(response).await;
+        assert_eq!(user.username, Some(TenantId::local()));
+        assert_eq!(
+            user.impersonated_by,
+            Some(TenantId::new("admin").unwrap()),
+            "the administrator should still be the one the change is attributed to",
+        );
+    }
+
+    #[actix_web::test]
+    async fn the_installations_bookkeeping_account_still_cannot_be_acted_as() {
+        use actix_web::http::header::AUTHORIZATION;
+
+        // The system tenant holds the user registry and the webhook indexes.
+        // Those are the agent's own records, not somebody's, and reaching them
+        // through the ordinary endpoints would put the registry in the data
+        // browser where a stray delete would lock everybody out.
+        let (provider, context) = an_administrator_and_an_installation_account().await;
+        let app = app!(context);
+
+        let response = test::call_service(
+            &app,
+            test::TestRequest::get()
+                .uri("/api/v1/me")
+                .insert_header((
+                    AUTHORIZATION,
+                    format!("Bearer {}", provider.sign_in_as("admin")),
+                ))
+                .insert_header((IMPERSONATE_HEADER, TenantId::SYSTEM))
+                .to_request(),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[actix_web::test]
+    async fn the_installations_own_account_is_listed_so_it_can_be_found() {
+        use actix_web::http::header::AUTHORIZATION;
+
+        // An administrator cannot act as an account they were never shown.
+        let (provider, context) = an_administrator_and_an_installation_account().await;
+        let app = app!(context);
+
+        let accounts: Vec<automate_api::Account> = test::call_and_read_body_json(
+            &app,
+            test::TestRequest::get()
+                .uri("/api/v1/admin/users")
+                .insert_header((
+                    AUTHORIZATION,
+                    format!("Bearer {}", provider.sign_in_as("admin")),
+                ))
+                .to_request(),
+        )
+        .await;
+
+        let local = accounts
+            .iter()
+            .find(|account| account.username == TenantId::local())
+            .expect("the installation's own account should be listed");
+
+        assert!(local.reserved);
+        assert!(
+            local.first_seen_at.is_none(),
+            "nobody has signed into it, so it has no sign-in dates to report",
+        );
     }
 
     #[actix_web::test]

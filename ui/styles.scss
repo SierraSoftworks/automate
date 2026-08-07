@@ -1285,6 +1285,115 @@ footer {
   width: min(90vw, 30rem);
 }
 
+// The strip announcing that the records on screen belong to somebody else.
+// Full-bleed and directly under the app bar, because every other thing on the
+// page means something different while it is showing.
+.impersonation {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  padding: 0.65rem 2.5rem;
+  background: rgba($warning, 0.12);
+  border-bottom: 1px solid rgba($warning, 0.45);
+  color: $text-primary;
+
+  &__message {
+    flex: 1;
+    margin: 0;
+    font-size: 0.85rem;
+    line-height: 1.4;
+  }
+
+  &__stop {
+    flex-shrink: 0;
+  }
+}
+
+// Accounts: everyone who has signed in, and the installation's own account.
+.accounts-page {
+  margin-bottom: 1.5rem;
+}
+
+.accounts {
+  &__empty {
+    color: $text-secondary;
+    font-size: 0.9rem;
+  }
+
+  &__list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+  }
+}
+
+.account {
+  @include card;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 1rem;
+  padding: 1rem 1.25rem;
+
+  &__identity {
+    display: flex;
+    flex-direction: column;
+    min-width: 14rem;
+    flex: 1;
+  }
+
+  &__name {
+    font-weight: 600;
+    color: $text-primary;
+  }
+
+  &__username {
+    font-family: $font-mono;
+    font-size: 0.8rem;
+    color: $text-secondary;
+  }
+
+  &__email {
+    font-size: 0.8rem;
+    color: $text-secondary;
+  }
+
+  &__facts {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+  }
+
+  &__seen {
+    font-size: 0.8rem;
+    color: $text-secondary;
+  }
+
+  &__actions {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin-left: auto;
+  }
+
+  &__here {
+    font-size: 0.8rem;
+    color: $text-secondary;
+    font-style: italic;
+  }
+
+  &__error {
+    flex-basis: 100%;
+    margin: 0;
+    font-size: 0.8rem;
+    color: $danger;
+  }
+}
+
 // Connections: the services an account has linked.
 .connections-page {
   margin-bottom: 1.5rem;

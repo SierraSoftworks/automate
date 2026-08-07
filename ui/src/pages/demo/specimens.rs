@@ -15,9 +15,9 @@ use yew::prelude::*;
 use crate::components::{
     Alert, AlertKind, BrowserEntry, BrowserPartition, Button, ButtonGroup, ButtonKind, ConnectMenu,
     ConnectionsPanel, DbEntity, Documentation, DynamicForm, EntityMetadata, Field, FilterInput,
-    JsonHighlight, MenuButton, MenuButtonOption, NumberInput, PageTitle, PartitionBrowser,
-    RefreshButton, SecretInput, Select, SelectOption, StatusPill, StatusTone, Switch, TextArea,
-    TextInput, WebhookAddress,
+    ImpersonationNotice, JsonHighlight, MenuButton, MenuButtonOption, NumberInput, PageTitle,
+    PartitionBrowser, RefreshButton, SecretInput, Select, SelectOption, StatusPill, StatusTone,
+    Switch, TextArea, TextInput, WebhookAddress,
 };
 use crate::fixtures;
 
@@ -164,6 +164,12 @@ pub const CONTROLS: &[Control] = &[
         blurb: "Each configured integration and the accounts connected to it.",
         view: || html! { <ConnectionsPanels /> },
     },
+    Control {
+        slug: "impersonation-notice",
+        name: "Impersonation notice",
+        blurb: "The strip saying whose records are on screen while acting as somebody.",
+        view: || html! { <ImpersonationNotices /> },
+    },
 ];
 
 /// Binds a state handle to a control's `onchange`, which is the whole of what
@@ -177,6 +183,30 @@ fn bind(state: &UseStateHandle<String>) -> Callback<String> {
 /// outside a page.
 fn inert<T: 'static>() -> Callback<T> {
     Callback::from(|_| ())
+}
+
+#[function_component(ImpersonationNotices)]
+fn impersonation_notices() -> Html {
+    html! {
+        <>
+            <Specimen
+                label="Acting as somebody"
+                note="Shown across the top of the shell rather than inside the page, because \
+                      it changes what every other screen means — and the way out of it has \
+                      to be where somebody looking for it will look."
+            >
+                <ImpersonationNotice account="rmuir" onstop={inert()} />
+            </Specimen>
+
+            <Specimen
+                label="Acting as the installation"
+                note="The account that owns everything configured before people were told \
+                      apart. Nobody can sign into it, so this is the only way back to it."
+            >
+                <ImpersonationNotice account="!local" onstop={inert()} />
+            </Specimen>
+        </>
+    }
 }
 
 #[function_component(StatusPills)]

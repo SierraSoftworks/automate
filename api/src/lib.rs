@@ -26,6 +26,6 @@ pub use kv::KeyValueEntry;
 pub use queue::{QueueMessage, QueueStatus};
 pub use run::{RunOutcome, RunReport, RunState, WorkflowHealth};
 pub use tenant::{TenantId, TenantIdError};
-pub use user::AdminUser;
+pub use user::{Account, AdminUser};
 pub use webhook::{WebhookToken, WebhookTokenError};
 pub use workflow::{FieldDescriptor, FieldKind, Workflow, WorkflowTrigger, WorkflowTypeDescriptor};

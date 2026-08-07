@@ -8,10 +8,10 @@
 //! is the thing built for it.
 
 use automate_api::{
-    AdminUser, AuditCategory, AuditOutcome, AuditRecord, Connection, ConnectionId, ConnectionKind,
-    ConnectionStatus, ConnectionSummary, FieldDescriptor, FieldKind, IntegrationInfo,
-    KeyValueEntry, OptionItem, QueueMessage, QueueStatus, RunOutcome, RunReport, RunState,
-    TenantId, Workflow, WorkflowId, WorkflowTrigger, WorkflowTypeDescriptor,
+    Account, AdminUser, AuditCategory, AuditOutcome, AuditRecord, Connection, ConnectionId,
+    ConnectionKind, ConnectionStatus, ConnectionSummary, FieldDescriptor, FieldKind,
+    IntegrationInfo, KeyValueEntry, OptionItem, QueueMessage, QueueStatus, RunOutcome, RunReport,
+    RunState, TenantId, Workflow, WorkflowId, WorkflowTrigger, WorkflowTypeDescriptor,
 };
 use chrono::{Duration, Utc};
 use serde_json::json;
@@ -20,8 +20,51 @@ use serde_json::json;
 pub fn admin_user() -> AdminUser {
     AdminUser {
         email: Some("demo@example.com".to_string()),
+        username: Some(TenantId::from_storage("demo")),
+        is_admin: true,
         ..AdminUser::new("Demo User")
     }
+}
+
+/// The accounts an administrator can browse and act as. Covers the three shapes
+/// the page has to draw: the installation's own account, an ordinary person, and
+/// somebody who has been suspended.
+pub fn accounts() -> Vec<Account> {
+    let now = Utc::now();
+
+    vec![
+        Account::reserved(TenantId::from_storage("!local"), "This installation"),
+        Account {
+            username: TenantId::from_storage("demo"),
+            display_name: "Demo User".to_string(),
+            email: Some("demo@example.com".to_string()),
+            is_admin: true,
+            disabled: false,
+            first_seen_at: Some(now - Duration::days(212)),
+            last_seen_at: Some(now - Duration::minutes(2)),
+            reserved: false,
+        },
+        Account {
+            username: TenantId::from_storage("rmuir"),
+            display_name: "Rowan Muir".to_string(),
+            email: Some("rowan@example.com".to_string()),
+            is_admin: false,
+            disabled: false,
+            first_seen_at: Some(now - Duration::days(41)),
+            last_seen_at: Some(now - Duration::hours(6)),
+            reserved: false,
+        },
+        Account {
+            username: TenantId::from_storage("tbelrose"),
+            display_name: "Theo Belrose".to_string(),
+            email: Some("theo@example.com".to_string()),
+            is_admin: false,
+            disabled: true,
+            first_seen_at: Some(now - Duration::days(380)),
+            last_seen_at: Some(now - Duration::days(97)),
+            reserved: false,
+        },
+    ]
 }
 
 /// Sample key-value entries spanning a couple of partitions. One payload

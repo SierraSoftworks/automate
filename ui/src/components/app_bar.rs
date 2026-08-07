@@ -2,6 +2,7 @@ use web_sys::HtmlInputElement;
 use yew::prelude::*;
 
 use crate::app::{AuthHandle, AuthStatus};
+use crate::components::ActAsMenu;
 use crate::search::{SearchContext, VocabularyContext};
 use crate::util;
 
@@ -305,6 +306,7 @@ pub fn app_bar(props: &AppBarProps) -> Html {
                         <span class="user-chip__name">{ user.name.clone() }</span>
                         { email }
                     </span>
+                    <ActAsMenu />
                     <button class="user-chip__signout" onclick={on_signout}>{ "Sign out" }</button>
                 </div>
             }
