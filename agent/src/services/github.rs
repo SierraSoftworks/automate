@@ -167,7 +167,7 @@ impl GitHubClient {
                         "Authorization failed when running the GitHub GraphQL operation '{operation}'."
                     ),
                     &[
-                        "Ensure that your connections.github.api_key is correct.",
+                        "Ensure that the selected GitHub connection contains a valid personal access token.",
                         "Make sure that the token has the `repo` scope for the repositories you want to manage.",
                     ],
                 ));

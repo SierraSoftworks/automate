@@ -2,8 +2,9 @@ use std::fmt::Display;
 
 use chrono::TimeDelta;
 
-use crate::jobs::GitHubNotificationsWorkflow;
+use crate::jobs::{GitHubNotificationsConfig, GitHubNotificationsWorkflow};
 use crate::prelude::*;
+use crate::workflows::ConfigurableWorkflow;
 
 /// How long a refresh waits before running, so that a burst of webhook
 /// deliveries collapses into a single fetch of the notifications API.
@@ -25,7 +26,7 @@ impl Display for GitHubNotificationsRefreshTask {
     }
 }
 
-/// Fans a webhook-triggered refresh out to every configured
+/// Fans a webhook-triggered refresh out to every stored
 /// [`GitHubNotificationsWorkflow`], so that notifications are collected when
 /// something actually happens rather than on a fixed poll interval.
 #[derive(Clone)]
@@ -87,18 +88,34 @@ impl Job for GitHubNotificationsRefreshWorkflow {
         job: &Self::JobType,
     ) -> Result<(), human_errors::Error> {
         let services = ctx.services();
-        let workflows = &services.config().workflows.github_notifications;
+        let workflows = crate::workflow_store::WorkflowStore::new(services)
+            .records()
+            .await?;
+        let workflows: Vec<_> = workflows
+            .into_iter()
+            .filter(|workflow| {
+                workflow.enabled && workflow.type_id == GitHubNotificationsWorkflow::type_id()
+            })
+            .collect();
 
         if workflows.is_empty() {
-            debug!("No GitHub notification workflows are configured; ignoring {job}.");
+            debug!("No GitHub notification workflows are stored; ignoring {job}.");
             return Ok(());
         }
 
-        for workflow in workflows.iter() {
+        for workflow in workflows {
+            let config: GitHubNotificationsConfig = serde_json::from_value(workflow.config)
+                .map_err(|err| {
+                    human_errors::system(
+                        format!("A stored GitHub notifications workflow could not be read: {err}"),
+                        &["Edit and save the workflow again."],
+                    )
+                })?;
+
             // Dispatched without an idempotency key, matching the cron path, so
             // that a refresh can never overwrite a collection which is already
             // in flight.
-            GitHubNotificationsWorkflow::dispatch(workflow.job.clone(), None, services).await?;
+            GitHubNotificationsWorkflow::dispatch(config, None, services).await?;
         }
 
         Ok(())
@@ -108,7 +125,7 @@ impl Job for GitHubNotificationsRefreshWorkflow {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::jobs::CronJobConfig;
+    use crate::workflow_store::{WorkflowDraft, WorkflowStore};
 
     async fn pending<S: Services>(services: &S, partition: &'static str) -> usize {
         services
@@ -149,17 +166,25 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_refresh_fans_out_to_every_configured_workflow() {
-        let workflow = || {
-            toml::from_str::<CronJobConfig<GitHubNotificationsWorkflow>>(r#"cron = "@hourly""#)
-                .expect("the sample workflow config should parse")
-        };
+    async fn a_refresh_fans_out_to_every_stored_workflow() {
+        let services = crate::services::ServicesContainer::new_mock()
+            .await
+            .expect("build mock services");
+        let store = WorkflowStore::new(&services);
 
-        let services = crate::services::ServicesContainer::new_custom_mock(|config, _| {
-            config.workflows.github_notifications = vec![workflow(), workflow()];
-        })
-        .await
-        .expect("build mock services");
+        for connection in [1, 2] {
+            store
+                .create(WorkflowDraft {
+                    type_id: GitHubNotificationsWorkflow::type_id().to_string(),
+                    config: serde_json::json!({
+                        "connection": automate_api::ConnectionId::from_entropy(connection),
+                    }),
+                    schedule: Some("@hourly".to_string()),
+                    enabled: true,
+                })
+                .await
+                .expect("store a notifications workflow");
+        }
 
         GitHubNotificationsRefreshWorkflow
             .handle(
@@ -178,7 +203,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_refresh_without_configured_workflows_does_nothing() {
+    async fn a_refresh_without_stored_workflows_does_nothing() {
         let services = crate::services::ServicesContainer::new_mock()
             .await
             .expect("build mock services");

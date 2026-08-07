@@ -28,15 +28,13 @@ this file to `config.toml` and modify it to suit your needs.
 
 ### Admin interface
 
-The admin REST API (under `/api/v1`) is protected by an access-control
-filter defined in `[web.admin]`. The `acl` expression is evaluated for
+The admin REST API (under `/api/v1`) is protected by the `admin_acl`
+access-control filter in `[web.auth]`. The expression is evaluated for
 every request and must return `true` for access to be granted; it can
 reference the request `method`, `path`, `client_ip`, and `headers.*`.
-The admin area is **denied by default** — if you omit `acl` (or the
-entire `[web.admin]` section) every request is rejected, so you must opt
-in explicitly.
+Access is **denied by default**, so you must opt in explicitly.
 
-To require single sign-on, add a `[web.admin.oidc]` section pointing at
+To require single sign-on, add a `[web.auth.oidc]` section pointing at
 an OpenID Connect provider. When configured, the admin SPA runs the
 Authorization Code request in a **popup**: it reads the provider's
 authorization endpoint, client id, and scopes from
@@ -58,7 +56,6 @@ rather than an automatically-attached cookie, there is no CSRF surface
 and no CSRF token to manage; signing out simply discards the stored
 token. Include `offline_access` (or your provider's equivalent) in
 `scopes` so a refresh token is issued and sessions can renew silently.
-
 
 If you run behind a reverse proxy and want absolute URLs to honour the
 forwarded scheme/host, set `web.trust_proxy = true`; only do so when the
@@ -88,17 +85,14 @@ Two account names are reserved for the installation itself and cannot be
 claimed by a person: `!system`, which holds the user registry and the
 caches that map an inbound webhook to its owner, and `!local`.
 
-`[web.auth]` supersedes `[web.admin]` and splits the single old gate in
-two:
+`[web.auth]` provides two independent access gates:
 
 - `user_acl` decides who may sign in at all.
 - `admin_acl` decides who may administer the installation, which includes
   acting as another user.
 
 Both are evaluated on every request against the same filter surface, so a
-change takes effect immediately. Where either is omitted it falls back to
-`[web.admin] acl`, which under the old model granted full access on its
-own — so an existing configuration keeps behaving exactly as it did.
+change takes effect immediately. Each denies access when omitted.
 
 An administrator can act as another user by sending
 `X-Impersonate-User: {username}`. Permission checks and audit entries
@@ -175,34 +169,6 @@ the key yourself, generate one with `openssl rand -base64 32` and set
 `secret_key`. When rotating, move the old key into
 `previous_secret_keys` and leave it there until every record that used it
 has been rewritten.
-
-### Upgrading an existing installation
-
-Schema migrations run automatically when the agent starts. Existing
-records are assigned to the `!local` account, which is what an
-installation with no identity provider configured continues to run as, so
-a single-user install keeps working with no configuration changes.
-
-If you later adopt an identity provider, set `local_user` under
-`[web.auth]` to the username you will sign in as **before** enabling it,
-so your existing workflows are already filed under the right account.
-
-#### Workflows move into the database
-
-Workflows used to live in the `[workflows]` section of your
-configuration file. On the first start after upgrading they are copied
-into the database, keeping the schedule and settings each one had, and
-the schedules the file had pushed are cleared out so nothing runs twice.
-
-After that the `[workflows]` section is no longer read, so you can delete
-it. Edit your workflows in the browser instead, or through the
-import/export endpoints if you would rather keep them in a file under
-version control. The move happens exactly once: a workflow you change
-afterwards is not overwritten by the section it came from.
-
-The GitHub notifications workflows are not moved. They are the
-installation's own housekeeping rather than anybody's workflow, so they
-stay in the configuration file where they are.
 
 ### OAuth setup wizard
 

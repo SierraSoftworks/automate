@@ -500,11 +500,11 @@ mod tests {
     /// only checks for presence, never contacts).
     async fn service(admin_acl: &str, provider_acl: Option<&str>, oidc: bool) -> AppContext {
         AppContext::new_mock(|config| {
-            config.web.admin.acl = Filter::new(admin_acl).unwrap();
+            config.web.auth.admin_acl = Some(Filter::new(admin_acl).unwrap());
             // A fixed base URL so the wizard doesn't depend on a Host header.
             config.web.base_url = Some("http://localhost:8080".to_string());
             if oidc {
-                config.web.admin.oidc = Some(OidcConfig {
+                config.web.auth.oidc = Some(OidcConfig {
                     endpoint: "https://auth.example.com".to_string(),
                     client_id: "client".to_string(),
                     client_secret: "secret".to_string(),
@@ -674,7 +674,7 @@ mod tests {
         // Resolve through the registry, then take the provider away so
         // `begin_setup` fails the way it would for a half-configured instance.
         let stripped = AppContext::new_mock(|config| {
-            config.web.admin.acl = Filter::new("true").unwrap();
+            config.web.auth.admin_acl = Some(Filter::new("true").unwrap());
             config.web.base_url = Some("http://localhost:8080".to_string());
         })
         .await

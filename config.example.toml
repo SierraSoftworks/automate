@@ -45,12 +45,6 @@
 # retain_days = 90
 # max_entries_per_account = 10000
 
-[connections.todoist]
-# Superseded by per-account connections, which each user manages themselves.
-# This is imported once on start-up into the account a single-user installation
-# runs as, after which you can delete this section.
-api_key = "${{ env.TODOIST_API_KEY }}"
-
 # The Todoist OAuth application each person connects their own account through,
 # so tasks are created as them rather than through one shared token. Register it
 # at https://app.todoist.com/app_console/ and set its OAuth redirect URL to
@@ -75,12 +69,6 @@ api_key = "${{ env.TODOIST_API_KEY }}"
 # acl. Admin-gated when omitted.
 # acl = 'true'
 
-[connections.ynab]
-# Superseded by per-account connections, which each user manages themselves.
-# This is imported once on start-up into the account a single-user installation
-# runs as, after which you can delete this section.
-api_key = "${{ env.YNAB_API_KEY }}"
-
 # The YNAB OAuth application each person connects their own account through, so
 # the agent acts on their behalf rather than through one shared personal access
 # token. Register it at https://app.ynab.com/settings/developer and set its
@@ -95,12 +83,6 @@ api_key = "${{ env.YNAB_API_KEY }}"
 # Who may use the connect wizard, evaluated exactly like the OAuth providers'
 # acl. Admin-gated when omitted.
 # acl = 'true'
-
-[connections.alphavantage]
-# An AlphaVantage API key, used by the YNAB stocks workflow to fetch stock
-# quotes and currency exchange rates. Claim a free key from
-# https://www.alphavantage.co/support/#api-key.
-api_key = "${{ env.ALPHAVANTAGE_API_KEY }}"
 
 [oauth2.spotify]
 name = "Spotify"
@@ -164,13 +146,13 @@ address = "127.0.0.1:8080"
 # identity provider later leaves your existing workflows where they are.
 # local_user = "you@example.com"
 
-# Two independent gates, both evaluated against the same filter surface as the
-# legacy [web.admin] acl below. `user_acl` decides who may sign in at all;
-# `admin_acl` decides who may administer the installation and impersonate other
-# users. When either is omitted it falls back to [web.admin] acl, so an existing
-# configuration keeps behaving exactly as it did.
-# user_acl = 'true'
-# admin_acl = 'claims.email == "you@example.com"'
+# Two independent gates evaluated against `client_ip`, `method`, `path`,
+# `headers.*`, and (when OIDC is configured) validated token claims under
+# `claims.*`. `user_acl` decides who may sign in at all; `admin_acl` decides who
+# may administer the installation and impersonate other users. Each denies
+# access when omitted.
+user_acl = 'client_ip in ["127.0.0.1"]'
+admin_acl = 'client_ip in ["127.0.0.1"]'
 
 # The key protecting stored credentials, as base64 or hexadecimal. Generate one
 # with: openssl rand -base64 32
@@ -183,99 +165,18 @@ address = "127.0.0.1:8080"
 # stays listed here until every record that used it has been rewritten.
 # previous_secret_keys = []
 
-# [web.auth.oidc] takes the same settings as [web.admin.oidc] below, plus:
 # username_claim - the claim identifying the account, which becomes the key
 # everything the user owns is stored under. Defaults to "preferred_username",
 # falling back to "sub". Choose a claim that does not change: renaming an
 # account is a deliberate migration rather than something that happens by itself.
-
-[web.admin]
-# Superseded by [web.auth] above, and retained so existing configurations keep
-# working. Under this section there is a single gate: passing it grants full
-# access, so it governs both signing in and administrator status.
 #
-# The admin area is denied by default; you must provide an `acl` that evaluates to
-# true to grant access. The filter can reference `client_ip`, `method`, `path`,
-# `headers.*`, and (when OIDC is configured) validated token claims via `claims.*`.
-acl = 'client_ip in ["127.0.0.1"]'
+# [web.auth.oidc]
+# endpoint = 'https://auth.example.com'
+# client_id = '0000000000000000000000000'
+# client_secret = '11111111111111111111111111111111111111111111111111'
+# scopes = ['openid', 'profile', 'email', 'offline_access']
+# username_claim = 'preferred_username'
 
-[web.admin.oidc]
-# Configures support for OIDC authentication on the Admin API, using the provided
-# OIDC endpoint (which should not include the .well-known/openid-configuration suffix).
-# The admin SPA runs the Authorization Code request in a popup and the agent
-# performs the confidential code exchange (and refreshes) with the client secret;
-# the issued ID token is presented by the browser as an `Authorization: Bearer`
-# header, never stored as a cookie.
-endpoint = 'https://auth.example.com'
-client_id = '0000000000000000000000000'
-client_secret = '11111111111111111111111111111111111111111111111111'
-# Include "offline_access" (where your provider supports/requires it) so a
-# refresh token is issued and sessions renew silently instead of ending when
-# the ID token expires.
-scopes = ['openid', 'profile', 'email', 'offline_access']
-
-[[workflows.calendars]]
-name = "Personal"
-url = "https://example.com/calendar.ics"
-cron = "*/30 * * * *"
-priority = 4
-todoist = { project = "Life", section = "Plans" }
-
-[[workflows.github_notifications]]
-# When the GitHub webhook is wired up this only needs to be a safety net for
-# missed or undelivered events; without it, drop the interval back to "*/15 * * * *".
-cron = "0 * * * *"
-todoist = { project = "Hobbies", section = "Open Source" }
-
-[[workflows.rss]]
-name = "Citation Needed"
-homepage = "https://citationneeded.news/"
-url = "https://citationneeded.news/rss/"
-cron = "@daily"
-
-[[workflows.rss]]
-name = "SRE Weekly"
-homepage = "https://sreweekly.com/"
-url = "https://sreweekly.com/feed/"
-cron = "@daily"
-
-[[workflows.rss]]
-name = "Tailscale Releases"
-homepage = "https://tailscale.com/changelog/"
-url = "https://tailscale.com/changelog/index.xml"
-cron = "0 */6 * * *"
-
-[[workflows.rss]]
-name = "Word of the Day"
-homepage = "https://www.merriam-webster.com/word"
-url = "https://www.merriam-webster.com/word/feed/rss2"
-cron = "@daily"
-
-[[workflows.youtube]]
-name = "Alexander the Ok"
-channel_id = "UC9XjwCMWhes6R3jtOzZx50A"
-cron = "0 */6 * * *"
-
-[[workflows.youtube]]
-name = "Dakar"
-channel_id = "UCJVKwvv58Xo3Rt4rF3NiL9w"
-filter = "title contains \"extended highlights\""
-cron = "0 */6 * * *"
-
-[[workflows.youtube]]
-name = "Formula 1"
-channel_id = "UCB_qr75-ydFVKSF9Dmo6izg"
-filter = "title contains \"highlights | \" && !(title contains \"f2 \")"
-cron = "0 */6 * * *"
-
-[[workflows.xkcd]]
-cron = "0 8 * * *"
-
-[[workflows.ynab_stocks]]
-# The YNAB budget (plan) ID whose stock accounts should be synchronised.
-budget = "00000000-0000-0000-0000-000000000000"
-cron = "0 */12 * * *"
-# Add `/automate:stock` to a YNAB account's note to opt it in, for example:
-#   /automate:stock MSFT=100 AAPL=50 cost_basis=USD5000 cgt_rate=40% payee_name="Stock Market"
-# Every `key=value` pair other than the reserved keys (cost_basis, cgt_rate,
-# payee_name) is treated as a ticker symbol and the quantity held.
+# Workflows are stored in the database and managed from the Workflows page or
+# through the workflow import/export API. Third-party credentials are stored as
+# per-account connections and selected by each workflow.

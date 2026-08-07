@@ -44,6 +44,7 @@ test("credential and account setup methods share one menu", async ({ page }) => 
     "Authorized accounts",
   ]);
   await expect(page.getByRole("menuitem")).toHaveText([
+    "AlphaVantage",
     "Todoist",
     "GitHub",
     "YNAB",

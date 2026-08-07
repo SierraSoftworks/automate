@@ -17,7 +17,9 @@ pub use calendar::CalendarCollector;
 pub use github_notifications::{GitHubNotificationsCollector, GitHubSubjectInformation};
 pub use github_releases::GitHubReleasesCollector;
 #[allow(dead_code)]
-pub use rss::{RssCollector, RssWatermark};
+pub use rss::RssCollector;
+#[cfg(test)]
+pub use rss::RssWatermark;
 pub use spotify_liked_tracks::SpotifyLikedTracksCollector;
 pub use xkcd::XkcdCollector;
 pub use youtube::YouTubeCollector;

@@ -1,13 +1,14 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::LazyLock;
 
 use serde::Deserialize;
 
-use crate::jobs::*;
 use crate::prelude::*;
 use crate::web::*;
 
 #[derive(Clone, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 pub struct Config {
     #[serde(default)]
     pub connections: ConnectionConfigs,
@@ -15,8 +16,6 @@ pub struct Config {
     pub oauth2: HashMap<String, OAuth2Config>,
     #[serde(default)]
     pub web: WebConfig,
-    #[serde(default)]
-    pub workflows: WorkflowConfigs,
     #[serde(default)]
     pub audit: AuditConfig,
 }
@@ -146,9 +145,6 @@ pub struct ConnectionConfigs {
 
     #[serde(default)]
     pub ynab: YnabConfig,
-
-    #[serde(default)]
-    pub alphavantage: AlphaVantageConfig,
 }
 
 #[derive(Clone, Deserialize)]
@@ -167,12 +163,6 @@ pub struct WebConfig {
     /// Identity and access configuration.
     #[serde(default)]
     pub auth: AuthConfig,
-
-    /// The pre-multi-tenant admin section, retained so existing configuration
-    /// files keep working. Prefer `[web.auth]`; see [`WebConfig::user_acl`] for
-    /// how the two are reconciled.
-    #[serde(default)]
-    pub admin: AdminConfig,
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub base_url: Option<String>,
@@ -196,7 +186,6 @@ impl Default for WebConfig {
             address: default_listen_address(),
             database: default_database_path(),
             auth: AuthConfig::default(),
-            admin: AdminConfig::default(),
             base_url: None,
             trust_proxy: false,
         }
@@ -206,23 +195,18 @@ impl Default for WebConfig {
 #[allow(dead_code)]
 impl WebConfig {
     /// The filter deciding who may sign in at all.
-    ///
-    /// Falls back to the legacy `[web.admin] acl`. Under that configuration
-    /// there was only one gate — passing it granted full access — so it governs
-    /// both signing in and administrator status, which preserves the behaviour
-    /// an existing installation already has.
     pub fn user_acl(&self) -> &Filter {
-        self.auth.user_acl.as_ref().unwrap_or(&self.admin.acl)
+        self.auth.user_acl.as_ref().unwrap_or(&DEFAULT_ADMIN_ACL)
     }
 
     /// The filter deciding who is an administrator.
     pub fn admin_acl(&self) -> &Filter {
-        self.auth.admin_acl.as_ref().unwrap_or(&self.admin.acl)
+        self.auth.admin_acl.as_ref().unwrap_or(&DEFAULT_ADMIN_ACL)
     }
 
     /// The identity provider to authenticate against, if any.
     pub fn oidc(&self) -> Option<&OidcConfig> {
-        self.auth.oidc.as_ref().or(self.admin.oidc.as_ref())
+        self.auth.oidc.as_ref()
     }
 }
 
@@ -251,12 +235,12 @@ pub struct AuthConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub local_user: Option<String>,
 
-    /// Who may sign in. Defaults to the legacy `[web.admin] acl`.
+    /// Who may sign in. Denies access by default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub user_acl: Option<Filter>,
 
-    /// Who may administer the installation, including impersonating another
-    /// user. Defaults to the legacy `[web.admin] acl`.
+    /// Who may administer the installation, including impersonating another user.
+    /// Denies access by default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub admin_acl: Option<Filter>,
 
@@ -278,39 +262,6 @@ pub struct AuthConfig {
     /// The identity provider to authenticate against.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub oidc: Option<OidcConfig>,
-}
-
-#[derive(Clone, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct AdminConfig {
-    /// Filter expression that must evaluate to true for a request to be granted
-    /// access to the admin endpoints. When OIDC is configured, validated token
-    /// claims are exposed to the filter under the `claims.` prefix. Defaults to
-    /// denying every request so that the admin area is closed unless explicitly
-    /// opened up.
-    #[serde(default = "default_admin_acl")]
-    pub acl: Filter,
-
-    /// Optional OIDC configuration. When present, requests to the admin API must
-    /// carry a valid `Authorization: Bearer` ID token issued by the configured
-    /// provider. The admin SPA runs the Authorization Code request in a popup and
-    /// the agent performs the confidential code exchange (and refreshes) with its
-    /// `client_secret`; the resulting ID token is held by the SPA and presented as
-    /// a bearer, never as a cookie.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub oidc: Option<OidcConfig>,
-}
-
-impl Default for AdminConfig {
-    fn default() -> Self {
-        // Deny by default: when the `[web.admin]` section is omitted entirely we
-        // must close the admin area rather than fall back to the permissive
-        // `Filter::default()` (which evaluates to `true`).
-        Self {
-            acl: default_admin_acl(),
-            oidc: None,
-        }
-    }
 }
 
 #[derive(Clone, Deserialize)]
@@ -358,37 +309,10 @@ fn default_admin_acl() -> Filter {
     Filter::new("false").expect("the literal `false` filter is always valid")
 }
 
-#[derive(Clone, Deserialize, Default)]
-pub struct WorkflowConfigs {
-    #[serde(default)]
-    pub calendars: Vec<CronJobConfig<CalendarWorkflow>>,
-    #[serde(default)]
-    pub github_notifications: Vec<CronJobConfig<GitHubNotificationsWorkflow>>,
-    /// Read only so installations upgrading from the core-scheduled cleanup
-    /// job can move it into a user-owned workflow once.
-    #[serde(default, rename = "github_notifications_cleanup")]
-    pub(crate) legacy_github_notifications_cleanup:
-        CronJobConfig<GitHubNotificationsCleanupWorkflow>,
-    #[serde(default)]
-    pub github_releases: Vec<CronJobConfig<GitHubReleasesWorkflow>>,
-    #[serde(default)]
-    pub rss: Vec<CronJobConfig<RssWorkflow>>,
-    #[serde(default)]
-    pub youtube: Vec<CronJobConfig<YouTubeWorkflow>>,
-    #[serde(default)]
-    pub xkcd: Vec<CronJobConfig<XkcdWorkflow>>,
-    #[serde(default)]
-    pub ynab_stocks: Vec<CronJobConfig<YnabStocksWorkflow>>,
-}
+static DEFAULT_ADMIN_ACL: LazyLock<Filter> = LazyLock::new(default_admin_acl);
 
 #[derive(Default, Clone, Deserialize)]
 pub struct GitHubConfig {
-    /// A classic personal access token. This cannot be replaced by the App: the
-    /// notifications API accepts classic PATs only, and the releases workflow
-    /// reads repositories no installation of ours covers.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub api_key: Option<String>,
-
     /// The GitHub App used for management calls, so that writes are attributed
     /// to the App and scoped to the repositories each installation grants.
     #[serde(default)]
@@ -429,14 +353,6 @@ pub struct GitHubAppConfig {
 
 #[derive(Default, Clone, Deserialize)]
 pub struct YnabConfig {
-    /// The YNAB Personal Access Token an installation used to share.
-    ///
-    /// Superseded by per-account connections. Kept only so that an existing
-    /// configuration file still loads and can be imported once on start-up; see
-    /// [`crate::connections::import_configured_credentials`].
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub api_key: Option<String>,
-
     /// The YNAB OAuth application each person connects their own account
     /// through, so the agent acts on their behalf rather than through one
     /// shared personal access token.
@@ -472,14 +388,6 @@ pub struct YnabAppConfig {
 
 #[derive(Default, Clone, Deserialize)]
 pub struct TodoistConfig {
-    /// The Todoist credential an installation used to share.
-    ///
-    /// Superseded by per-account connections. Kept only so that an existing
-    /// configuration file still loads and can be imported once on start-up; see
-    /// [`crate::connections::import_configured_credentials`].
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub api_key: Option<String>,
-
     /// The Todoist OAuth application each person connects their own account
     /// through, so the agent acts on their behalf rather than through one
     /// shared token.
@@ -526,13 +434,6 @@ fn default_todoist_scopes() -> Vec<String> {
     vec!["data:read_write".to_string()]
 }
 
-#[derive(Default, Clone, Deserialize)]
-pub struct AlphaVantageConfig {
-    /// The AlphaVantage API key used to fetch stock quotes and exchange rates.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub api_key: Option<String>,
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -543,43 +444,9 @@ mod tests {
     }
 
     #[test]
-    fn a_legacy_admin_section_still_governs_access() {
-        // Before multi-tenancy there was one gate, and passing it granted full
-        // access. An existing configuration must keep behaving that way rather
-        // than silently locking its operator out.
+    fn the_auth_section_controls_access() {
         let config = parse(
             r#"
-            [web.admin]
-            acl = 'client_ip in ["127.0.0.1"]'
-
-            [web.admin.oidc]
-            endpoint = "https://id.example.com"
-            client_id = "automate"
-            client_secret = "shh"
-        "#,
-        );
-
-        assert_eq!(
-            config.web.user_acl().to_string(),
-            config.web.admin.acl.to_string()
-        );
-        assert_eq!(
-            config.web.admin_acl().to_string(),
-            config.web.admin.acl.to_string()
-        );
-        assert_eq!(
-            config.web.oidc().map(|o| o.endpoint.as_str()),
-            Some("https://id.example.com")
-        );
-    }
-
-    #[test]
-    fn the_auth_section_takes_precedence_over_the_legacy_one() {
-        let config = parse(
-            r#"
-            [web.admin]
-            acl = 'false'
-
             [web.auth]
             user_acl = 'true'
             admin_acl = 'claims.email == "admin@example.com"'
@@ -715,8 +582,9 @@ mod tests {
 
         // Create a test config file with interpolation
         let mut file = std::fs::File::create(&config_file).unwrap();
-        writeln!(file, "[connections.github]").unwrap();
-        writeln!(file, "api_key = \"${{{{ env.TEST_API_KEY }}}}\"").unwrap();
+        writeln!(file, "[connections.todoist.app]").unwrap();
+        writeln!(file, "client_id = \"automate\"").unwrap();
+        writeln!(file, "client_secret = \"${{{{ env.TEST_API_KEY }}}}\"").unwrap();
         drop(file);
 
         // Load env file and config
@@ -725,8 +593,8 @@ mod tests {
 
         // Verify interpolation worked
         assert_eq!(
-            config.connections.github.api_key.as_deref(),
-            Some("secret123")
+            config.connections.todoist.app.unwrap().client_secret,
+            "secret123"
         );
 
         // Cleanup

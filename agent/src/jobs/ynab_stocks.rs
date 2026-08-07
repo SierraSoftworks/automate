@@ -4,9 +4,9 @@ use std::fmt::Display;
 use rust_ynab::{Account, ClearedStatus, Client, NewTransaction, PlanId, ServerKnowledge};
 use uuid::Uuid;
 
-use automate_api::ConnectionId;
+use automate_api::{ConnectionId, ConnectionKind};
 
-use crate::connections::{ConnectionSecret, ConnectionStore};
+use crate::connections::{ConnectionSecret, ConnectionStore, resolve_api_key};
 use crate::db::StateKey;
 use crate::integrations::ynab::YNAB_PROVIDER;
 use crate::parsers::parse_key_value_pairs;
@@ -15,6 +15,9 @@ use crate::services::AlphaVantageClient;
 
 /// Where the account mirror and server knowledge token for a budget are kept.
 const STATE_PARTITION: &str = "ynab/stocks/state";
+
+/// The provider name under which AlphaVantage API keys are linked.
+const ALPHAVANTAGE_PROVIDER: &str = "alphavantage";
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct YnabStocksConfig {
@@ -30,6 +33,9 @@ pub struct YnabStocksConfig {
     /// reported rather than guessed at.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub connection: Option<ConnectionId>,
+
+    /// Which linked AlphaVantage API key to use for quotes and exchange rates.
+    pub alphavantage_connection: ConnectionId,
 }
 
 impl Display for YnabStocksConfig {
@@ -96,10 +102,10 @@ renewed automatically and you can revoke it from YNAB) or by pasting a personal
 access token. Either way it needs write access, since this records
 transactions.
 
-AlphaVantage is still set on the installation rather than here:
-`connections.alphavantage.api_key`, used for quotes and exchange rates. A free
-key is available from
-[AlphaVantage](https://www.alphavantage.co/support/#api-key).
+**AlphaVantage key** is the connection used for quotes and exchange rates.
+Claim a free key from
+[AlphaVantage](https://www.alphavantage.co/support/#api-key), then add it under
+Connections and select it here.
 
 ## Scheduling
 
@@ -155,6 +161,16 @@ impl crate::workflows::ConfigurableWorkflow for YnabStocksWorkflow {
                     },
                 )
                 .with_help("Which linked account the budget lives in.")
+                .required(),
+                FieldDescriptor::new(
+                    crate::config_path!(YnabStocksConfig: alphavantage_connection),
+                    "AlphaVantage key",
+                    FieldKind::Connection {
+                        provider: ALPHAVANTAGE_PROVIDER.to_string(),
+                        connection_kind: Some(ConnectionKind::ApiKey),
+                    },
+                )
+                .with_help("Which AlphaVantage API key to use for quotes and exchange rates.")
                 .required(),
                 FieldDescriptor::new(
                     crate::config_path!(YnabStocksConfig: budget),
@@ -311,21 +327,12 @@ impl Job for YnabStocksWorkflow {
         job: &Self::JobType,
     ) -> Result<(), human_errors::Error> {
         let services = ctx.services();
-        let config = services.config();
 
         let client = connect(services, job.connection).await?;
 
         let alphavantage_api_key =
-            config.connections.alphavantage.api_key.as_deref().ok_or_else(|| {
-                human_errors::user(
-                    "No AlphaVantage API key has been configured.",
-                    &[
-                        "Set `connections.alphavantage.api_key` in your configuration file (for example via the ALPHAVANTAGE_API_KEY environment variable).",
-                        "Claim a free API key from https://www.alphavantage.co/support/#api-key.",
-                    ],
-                )
-            })?;
-        let alphavantage = AlphaVantageClient::new(services.http_client(), alphavantage_api_key);
+            resolve_api_key(job.alphavantage_connection, ALPHAVANTAGE_PROVIDER, services).await?;
+        let alphavantage = AlphaVantageClient::new(services.http_client(), &alphavantage_api_key);
 
         let budget = job.budget;
         let plan = PlanId::Id(budget);
@@ -668,6 +675,50 @@ mod tests {
             .await
             .expect_err("a Todoist connection is not a YNAB account");
         assert!(err.is(human_errors::Kind::User), "{err}");
+    }
+
+    #[tokio::test]
+    async fn the_selected_alphavantage_connection_provides_its_api_key() {
+        let context = AppContext::new_mock(|_| {}).await.unwrap();
+        let services = context.tenant(alice());
+        let connection = ConnectionStore::for_services(&services)
+            .create(
+                ALPHAVANTAGE_PROVIDER,
+                "Stocks",
+                None,
+                ConnectionSecret::ApiKey {
+                    key: "market-data-key".into(),
+                },
+            )
+            .await
+            .unwrap();
+
+        let key = resolve_api_key(connection.id, ALPHAVANTAGE_PROVIDER, &services)
+            .await
+            .unwrap();
+
+        assert_eq!(key, "market-data-key");
+    }
+
+    #[test]
+    fn the_workflow_requires_an_alphavantage_api_key_connection() {
+        use crate::workflows::ConfigurableWorkflow;
+
+        let descriptor = YnabStocksWorkflow::descriptor();
+        let connection = descriptor
+            .fields
+            .iter()
+            .find(|field| field.name == "alphavantage_connection")
+            .unwrap();
+
+        assert!(connection.required);
+        assert!(matches!(
+            &connection.kind,
+            automate_api::FieldKind::Connection {
+                provider,
+                connection_kind: Some(ConnectionKind::ApiKey),
+            } if provider == ALPHAVANTAGE_PROVIDER
+        ));
     }
 
     /// Sorts holdings by symbol so assertions don't depend on the

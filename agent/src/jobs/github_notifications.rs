@@ -14,12 +14,16 @@ use crate::{filter::Filter, publishers::TodoistTarget};
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct GitHubNotificationsConfig {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub connection: Option<automate_api::ConnectionId>,
+
     #[serde(default)]
     pub filter: Filter,
 
     #[serde(default)]
     pub todoist: TodoistTarget,
 
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     event: Option<<GitHubNotificationsCollector as Collector>::Item>,
 }
 
@@ -33,6 +37,26 @@ impl Display for GitHubNotificationsConfig {
 pub struct GitHubNotificationsWorkflow;
 
 impl GitHubNotificationsWorkflow {
+    async fn collector(
+        job: &GitHubNotificationsConfig,
+        services: &(impl Services + Send + Sync + 'static),
+    ) -> Result<GitHubNotificationsCollector, human_errors::Error> {
+        let connection = job.connection.ok_or_else(|| {
+            human_errors::user(
+                "This GitHub notifications workflow has no GitHub account selected.",
+                &["Edit the workflow and select a GitHub personal access token connection."],
+            )
+        })?;
+        let api_key = crate::connections::resolve_api_key(
+            connection,
+            crate::integrations::github_app::GITHUB_PROVIDER,
+            services,
+        )
+        .await?;
+
+        Ok(GitHubNotificationsCollector::with_api_key(api_key))
+    }
+
     /// The Todoist key tracking this notification's subject.
     ///
     /// Issues and pull requests are keyed on `{repo}#{number}` so that the
@@ -104,10 +128,10 @@ impl GitHubNotificationsWorkflow {
 
     async fn collect_new_notifications(
         &self,
+        collector: &GitHubNotificationsCollector,
         job: &GitHubNotificationsConfig,
         services: impl Services + Send + Sync + 'static,
     ) -> Result<(), human_errors::Error> {
-        let collector = GitHubNotificationsCollector::new();
         let items = collector.list(&services).await?;
 
         for item in items.into_iter() {
@@ -124,7 +148,7 @@ impl GitHubNotificationsWorkflow {
                     // Closing the subject bumps its notification thread, so a
                     // webhook-triggered collection resolves it within seconds
                     // rather than waiting for the delayed re-check below.
-                    self.resolve(&collector, &item, job, &services).await?;
+                    self.resolve(collector, &item, job, &services).await?;
                 } else if subject
                     .user
                     .as_ref()
@@ -135,6 +159,7 @@ impl GitHubNotificationsWorkflow {
                     let id = item.id.clone();
                     Self::dispatch_delayed(
                         GitHubNotificationsConfig {
+                            connection: job.connection,
                             event: Some(item),
                             filter: job.filter.clone(),
                             todoist: job.todoist.clone(),
@@ -190,6 +215,72 @@ impl GitHubNotificationsWorkflow {
 }
 
 crate::register_job!(GitHubNotificationsWorkflow);
+crate::register_workflow_type!(GitHubNotificationsWorkflow);
+
+impl crate::workflows::ConfigurableWorkflow for GitHubNotificationsWorkflow {
+    type ConfigType = GitHubNotificationsConfig;
+
+    fn type_id() -> &'static str {
+        "github-notifications"
+    }
+
+    fn describe(_config: &Self::ConfigType) -> String {
+        "GitHub notifications".to_string()
+    }
+
+    fn descriptor() -> automate_api::WorkflowTypeDescriptor {
+        use automate_api::{
+            ConnectionKind, FieldDescriptor, FieldKind, WorkflowTrigger, WorkflowTypeDescriptor,
+        };
+
+        WorkflowTypeDescriptor {
+            id: Self::type_id().to_string(),
+            name: "GitHub Notifications".to_string(),
+            description: "Files GitHub notifications in Todoist and resolves them when their subjects close."
+                .to_string(),
+            documentation: "Select the GitHub personal access token whose notification inbox this workflow should monitor. The token needs the `notifications` scope and access to any private repositories whose notifications should be handled."
+                .to_string(),
+            trigger: WorkflowTrigger::Cron {
+                default_schedule: "@hourly".to_string(),
+            },
+            fields: vec![
+                FieldDescriptor::new(
+                    crate::config_path!(GitHubNotificationsConfig: connection),
+                    "GitHub account",
+                    FieldKind::Connection {
+                        provider: crate::integrations::github_app::GITHUB_PROVIDER.to_string(),
+                        connection_kind: Some(ConnectionKind::ApiKey),
+                    },
+                )
+                .with_help("Which GitHub personal access token owns the notifications to process.")
+                .required(),
+                FieldDescriptor::new(
+                    crate::config_path!(GitHubNotificationsConfig: filter),
+                    "Filter",
+                    FieldKind::Filter {
+                        fields: vec![
+                            "reason".into(),
+                            "repository.name".into(),
+                            "repository.full_name".into(),
+                            "repository.owner".into(),
+                            "subject.title".into(),
+                            "subject.type".into(),
+                            "unread".into(),
+                        ],
+                    },
+                )
+                .with_help("Only file notifications matching this expression."),
+            ]
+            .into_iter()
+            .chain(crate::todoist_target_fields!(
+                GitHubNotificationsConfig,
+                project = Some("Inbox"),
+                section = Some("Notifications")
+            ))
+            .collect(),
+        }
+    }
+}
 
 impl Job for GitHubNotificationsWorkflow {
     type JobType = GitHubNotificationsConfig;
@@ -204,31 +295,19 @@ impl Job for GitHubNotificationsWorkflow {
         chrono::TimeDelta::hours(1)
     }
 
-    #[instrument(
-        "workflow.github_notifications.setup",
-        skip(self, services),
-        err(Display)
-    )]
-    async fn setup(
-        &self,
-        services: impl Services + Send + Sync + 'static,
-    ) -> Result<(), human_errors::Error> {
-        let config = services.config();
-        CronJob::schedule(&config.workflows.github_notifications, services).await
-    }
-
     #[instrument("workflow.github_notifications.handle", skip(self, ctx, job), fields(job = %job))]
     async fn handle(
         &self,
         ctx: JobContext<impl Services + Send + Sync + 'static>,
         job: &Self::JobType,
     ) -> Result<(), human_errors::Error> {
+        let collector = Self::collector(job, ctx.services()).await?;
+
         // Handle delayed auto-close checks
         if let Some(event) = job.event.as_ref() {
             let services = ctx.services();
 
             // Check the status of the subject to see if it's still open/active/etc.
-            let collector = GitHubNotificationsCollector::new();
             let subject = collector.get_subject(&event.subject, services).await?;
 
             match subject {
@@ -256,7 +335,7 @@ impl Job for GitHubNotificationsWorkflow {
 
             Ok(())
         } else {
-            self.collect_new_notifications(job, ctx.into_services())
+            self.collect_new_notifications(&collector, job, ctx.into_services())
                 .await
         }
     }

@@ -849,7 +849,7 @@ mod tests {
             .await;
 
         let services = crate::services::ServicesContainer::new_custom_mock(|c, _| {
-            c.web.admin.oidc = Some(crate::config::OidcConfig {
+            c.web.auth.oidc = Some(crate::config::OidcConfig {
                 endpoint: server.uri(),
                 client_id: "client".to_string(),
                 client_secret: "secret".to_string(),
@@ -859,7 +859,7 @@ mod tests {
         })
         .await
         .unwrap();
-        let oidc = services.config().web.admin.oidc.clone().unwrap();
+        let oidc = services.config().web.auth.oidc.clone().unwrap();
 
         let token = rs256_token_with_kid("rotated");
         let result = validate_token(&services, &oidc, &token).await;

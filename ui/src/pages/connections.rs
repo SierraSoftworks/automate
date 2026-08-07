@@ -21,6 +21,7 @@ use crate::util::short_relative;
 /// Services authorised through OAuth are absent because there is nothing for
 /// somebody to paste: the setup wizard obtains the credential itself.
 const PASTEABLE_PROVIDERS: &[(&str, &str)] = &[
+    ("alphavantage", "AlphaVantage"),
     ("todoist", "Todoist"),
     ("github", "GitHub"),
     ("ynab", "YNAB"),
@@ -29,6 +30,7 @@ const PASTEABLE_PROVIDERS: &[(&str, &str)] = &[
 /// Where to find the token for each service, so nobody has to go hunting.
 fn where_to_find_the_token(provider: &str) -> &'static str {
     match provider {
+        "alphavantage" => "AlphaVantage → Support → Claim your free API key.",
         "todoist" => "Todoist → Settings → Integrations → Developer → API token.",
         "github" => "GitHub → Settings → Developer settings → Personal access tokens.",
         "ynab" => "YNAB → Account Settings → Developer Settings → Personal Access Tokens.",
