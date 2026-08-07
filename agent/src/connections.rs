@@ -527,6 +527,72 @@ pub async fn resolve_api_key(
     Ok(key)
 }
 
+/// Opens the OAuth2 grant held by one selected connection, refreshed and ready
+/// to use.
+///
+/// Returns `Ok(None)` when the grant is dead. A re-authorization reminder has
+/// been raised and the connection marked by then, so the caller should complete
+/// rather than error: erroring would retry on every schedule against an account
+/// nobody can use until it is reconnected.
+pub async fn resolve_oauth2_token(
+    id: ConnectionId,
+    provider: &str,
+    services: &(impl Services + Send + Sync + 'static),
+) -> Result<Option<OAuth2RefreshToken>, human_errors::Error> {
+    let store = ConnectionStore::for_services(services);
+    let Some(connection) = store.get(id).await? else {
+        return Err(human_errors::user(
+            format!("The selected {provider} connection ('{id}') no longer exists."),
+            &["Link the account again, or select another connection for this workflow."],
+        ));
+    };
+
+    if connection.provider != provider {
+        return Err(human_errors::user(
+            format!("The selected connection is not a {provider} connection."),
+            &["Select a connection for the service this workflow uses."],
+        ));
+    }
+
+    let ConnectionSecret::OAuth2 {
+        access_token,
+        refresh_token,
+        expires_at,
+    } = store.open(&connection)?
+    else {
+        return Err(human_errors::user(
+            format!("The selected {provider} connection does not hold an authorization grant."),
+            &["Reconnect the account."],
+        ));
+    };
+
+    let stored = OAuth2RefreshToken::new(access_token, refresh_token, expires_at);
+
+    let Some(token) = crate::web::refresh_or_notify(provider, &stored, services).await? else {
+        store
+            .set_status(id, ConnectionStatus::NeedsReauthorization)
+            .await?;
+        return Ok(None);
+    };
+
+    // Write the renewed grant back, so the next run starts from it rather than
+    // repeating the refresh.
+    if token.access_token() != stored.access_token() {
+        store
+            .update_secret(
+                id,
+                ConnectionSecret::OAuth2 {
+                    access_token: token.access_token().to_string(),
+                    refresh_token: token.refresh_token().to_string(),
+                    expires_at: token.expires_at(),
+                },
+            )
+            .await?;
+    }
+
+    Ok(Some(token))
+}
+
 /// Moves credentials out of the configuration file and into connections.
 ///
 /// An installation configured before connections existed keeps its Todoist key

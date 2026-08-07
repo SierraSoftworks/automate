@@ -8,6 +8,7 @@ mod github_notifications_refresh;
 mod github_releases;
 mod oauth_reauthorization;
 mod rss;
+mod spotify_playlist_dedupe;
 mod spotify_yearly_playlist;
 mod todoist_cleanup;
 mod webhook_todoist;
