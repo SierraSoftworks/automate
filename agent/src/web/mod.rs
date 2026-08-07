@@ -59,8 +59,11 @@ pub async fn run_web_server(context: AppContext) -> Result<(), human_errors::Err
                 .service(api::configure())
                 .service(integrations::configure())
                 .service(integrations::configure_oauth_callback())
-                .route("/webhooks/github", web::post().to(webhooks::deliver_github))
                 .route("/webhooks/w/{token}", web::post().to(webhooks::deliver))
+                .route(
+                    "/webhooks/{source}",
+                    web::post().to(webhooks::deliver_source),
+                )
                 .route("/robots.txt", web::get().to(ui::robots))
                 .default_service(web::get().to(ui::serve))
         })

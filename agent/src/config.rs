@@ -138,13 +138,8 @@ impl AuditConfig {
 
 #[derive(Default, Clone, Deserialize)]
 pub struct ConnectionConfigs {
-    /// The Todoist credential an installation used to share.
-    ///
-    /// Superseded by per-account connections. Kept only so that an existing
-    /// configuration file still loads and can be imported once on start-up; see
-    /// [`crate::connections::import_configured_credentials`].
     #[serde(default)]
-    pub todoist: LegacyApiKey,
+    pub todoist: TodoistConfig,
 
     #[serde(default)]
     pub github: GitHubConfig,
@@ -439,11 +434,60 @@ pub struct YnabConfig {
     pub api_key: Option<String>,
 }
 
-/// A credential that used to live in the configuration file.
 #[derive(Default, Clone, Deserialize)]
-pub struct LegacyApiKey {
+pub struct TodoistConfig {
+    /// The Todoist credential an installation used to share.
+    ///
+    /// Superseded by per-account connections. Kept only so that an existing
+    /// configuration file still loads and can be imported once on start-up; see
+    /// [`crate::connections::import_configured_credentials`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub api_key: Option<String>,
+
+    /// The Todoist OAuth application each person connects their own account
+    /// through, so the agent acts on their behalf rather than through one
+    /// shared token.
+    #[serde(default)]
+    pub app: Option<TodoistAppConfig>,
+}
+
+#[derive(Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TodoistAppConfig {
+    /// The app's Client ID, from the Todoist App Management Console.
+    pub client_id: String,
+
+    /// The app's Client Secret, from the Todoist App Management Console.
+    pub client_secret: String,
+
+    /// The app's **Verification Token**, also from the App Management Console,
+    /// which is what Todoist signs webhook deliveries with.
+    ///
+    /// A different value from the client secret, despite what Todoist's API
+    /// reference says, so the two cannot be used interchangeably. Optional
+    /// because the OAuth half of the integration works without it; deliveries
+    /// are refused until it is set, since there would be nothing to check them
+    /// against.
+    #[serde(default)]
+    pub webhook_secret: Option<String>,
+
+    /// The permissions to request. Todoist sends these comma-separated.
+    #[serde(default = "default_todoist_scopes")]
+    pub scopes: Vec<String>,
+
+    /// Where Todoist's API lives. Only worth setting to point the agent at a
+    /// stand-in for it.
+    #[serde(default)]
+    pub api_url: Option<String>,
+
+    /// Who may run the connect wizard. Evaluated exactly like the OAuth2
+    /// providers' `acl`, and admin-gated when omitted.
+    #[serde(default)]
+    pub acl: Option<Filter>,
+}
+
+fn default_todoist_scopes() -> Vec<String> {
+    vec!["data:read_write".to_string()]
 }
 
 #[derive(Default, Clone, Deserialize)]

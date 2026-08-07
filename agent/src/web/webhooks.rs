@@ -1,16 +1,11 @@
-use std::borrow::Cow;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use actix_web::{Responder, web};
 use tracing_batteries::prelude::*;
 
-use crate::connections::{ConnectionSecret, ConnectionStore};
-use crate::db::{KeyValueStore, Queue};
-use crate::job::Job;
+use crate::db::Queue;
 use crate::prelude::Services;
-use crate::webhooks::{GitHubWebhook, GitHubWebhookConfig, WebhookDelivery, WebhookEvent};
-use crate::workflow_store::WorkflowRecord;
-use crate::workflows::ConfigurableWorkflow;
+use crate::webhooks::{Delivered, WebhookEvent};
 
 /// The largest delivery we will read.
 ///
@@ -20,79 +15,36 @@ use crate::workflows::ConfigurableWorkflow;
 /// what any provider sends and far below what hurts.
 const MAX_BODY: usize = 1024 * 1024;
 
-/// `POST /webhooks/github` — the shared endpoint configured on the GitHub App.
+/// `POST /webhooks/{source}` — the shared address a service posts every user's
+/// deliveries to.
 ///
-/// GitHub identifies the App installation in the payload. That installation is
-/// a per-tenant connection, and each enabled workflow selecting that connection
-/// receives its own queued delivery.
-#[instrument("webhooks.github.deliver", skip(req, body, context))]
-pub async fn deliver_github(
+/// One endpoint for every such service. What differs between them — the signing
+/// scheme, which account a delivery names, how that account maps onto stored
+/// connections — is declared by each service's
+/// [`crate::webhooks::WebhookSource`], and the routing they all share lives in
+/// [`crate::webhooks::route`]. This is only the part that needs the HTTP stack:
+/// reading a bounded body, and turning the outcome into a status code.
+///
+/// The existing `/webhooks/github` and `/webhooks/todoist` addresses are served
+/// by this, so nothing configured with a provider has to change.
+#[instrument("webhooks.source.deliver", skip(req, body, context), fields(webhook.source = %source))]
+pub async fn deliver_source(
     req: actix_web::HttpRequest,
+    source: web::Path<String>,
     body: web::Payload,
     context: web::Data<crate::services::AppContext>,
 ) -> impl Responder {
-    let config = context.config();
-    let Some(app) = config.connections.github.app.as_ref() else {
-        warn!("Received a GitHub App webhook, but no GitHub App is configured.");
-        return actix_web::HttpResponse::ServiceUnavailable().finish();
+    let Some(source) = crate::webhooks::source(&source) else {
+        return actix_web::HttpResponse::NotFound().finish();
     };
-
-    if app.webhook_secret.is_empty() {
-        warn!("Received a GitHub App webhook, but its webhook secret is not configured.");
-        return actix_web::HttpResponse::ServiceUnavailable().finish();
-    }
 
     let body = match body.to_bytes_limited(MAX_BODY).await {
         Ok(Ok(bytes)) => String::from_utf8_lossy(&bytes).to_string(),
         Ok(Err(err)) => {
-            error!("Failed to read GitHub webhook body: {err}");
+            error!("Failed to read a {} webhook body: {err}", source.id());
             return actix_web::HttpResponse::BadRequest().finish();
         }
         Err(_) => return actix_web::HttpResponse::PayloadTooLarge().finish(),
-    };
-
-    let Some(signature) = req
-        .headers()
-        .get("x-hub-signature-256")
-        .and_then(|value| value.to_str().ok())
-    else {
-        warn!("Received a GitHub App webhook without a signature.");
-        return actix_web::HttpResponse::Unauthorized().finish();
-    };
-
-    if let Err(err) = GitHubWebhook::verify_signature(&app.webhook_secret, &body, signature) {
-        warn!(error = %err, "Rejected a GitHub App webhook with an invalid signature: {err}");
-        return actix_web::HttpResponse::Unauthorized().finish();
-    }
-
-    let event_type = req
-        .headers()
-        .get("x-github-event")
-        .and_then(|value| value.to_str().ok())
-        .unwrap_or_default();
-
-    if event_type == "ping" {
-        return actix_web::HttpResponse::NoContent().finish();
-    }
-
-    let payload: serde_json::Value = match serde_json::from_str(&body) {
-        Ok(payload) => payload,
-        Err(err) => {
-            warn!(error = %err, "Rejected a GitHub App webhook whose body was not JSON: {err}");
-            return actix_web::HttpResponse::BadRequest().finish();
-        }
-    };
-
-    let Some(installation_id) = payload
-        .get("installation")
-        .and_then(|installation| installation.get("id"))
-        .and_then(serde_json::Value::as_u64)
-    else {
-        debug!(
-            event = event_type,
-            "Ignoring a GitHub App event without an installation id."
-        );
-        return actix_web::HttpResponse::NoContent().finish();
     };
 
     let mut event = WebhookEvent {
@@ -107,110 +59,15 @@ pub async fn deliver_github(
         }
     });
 
-    let tenants = match context.database().tenants().await {
-        Ok(tenants) => tenants,
-        Err(err) => {
-            error!(error = %err, "Failed to enumerate tenants for a GitHub webhook: {err}");
-            return actix_web::HttpResponse::InternalServerError().finish();
-        }
-    };
-
-    let delivery = event
-        .headers
-        .iter()
-        .find(|(name, _)| name.eq_ignore_ascii_case("x-github-delivery"))
-        .map(|(_, value)| value.clone());
-
-    for tenant in tenants {
-        if tenant == automate_api::TenantId::system() {
-            continue;
-        }
-
-        let services = context.tenant(tenant);
-        let connections = ConnectionStore::for_services(&services);
-        let mut matching = HashSet::new();
-
-        let stored_connections = match connections
-            .list_for_provider(crate::integrations::github_app::GITHUB_PROVIDER)
-            .await
-        {
-            Ok(connections) => connections,
-            Err(err) => {
-                error!(error = %err, "Failed to load GitHub connections while routing a webhook: {err}");
-                return actix_web::HttpResponse::InternalServerError().finish();
-            }
-        };
-
-        for connection in stored_connections {
-            if matches!(
-                connections.open(&connection),
-                Ok(ConnectionSecret::GitHubApp { installation_id: stored }) if stored == installation_id
-            ) {
-                matching.insert(connection.id);
-            }
-        }
-
-        if matching.is_empty() {
-            continue;
-        }
-
-        let workflows: Vec<(String, WorkflowRecord)> = match services
-            .kv()
-            .list(<GitHubWebhook as Job>::partition())
-            .await
-        {
-            Ok(workflows) => workflows,
-            Err(err) => {
-                error!(error = %err, "Failed to load GitHub workflows while routing a webhook: {err}");
-                return actix_web::HttpResponse::InternalServerError().finish();
-            }
-        };
-
-        for (_, workflow) in workflows {
-            if !workflow.enabled
-                || workflow.type_id != <GitHubWebhook as ConfigurableWorkflow>::type_id()
-            {
-                continue;
-            }
-
-            let Ok(workflow_config) =
-                serde_json::from_value::<GitHubWebhookConfig>(workflow.config.clone())
-            else {
-                warn!(workflow.id = %workflow.id, "Skipping a GitHub workflow with invalid configuration.");
-                continue;
-            };
-
-            if !workflow_config
-                .connection
-                .is_some_and(|id| matching.contains(&id))
-            {
-                continue;
-            }
-
-            let idempotency_key = delivery
-                .as_ref()
-                .map(|delivery| Cow::Owned(format!("{delivery}/{}", workflow.id)));
-
-            if let Err(err) = services
-                .queue()
-                .enqueue(
-                    <GitHubWebhook as Job>::partition(),
-                    WebhookDelivery {
-                        workflow: workflow.id,
-                        event: event.clone(),
-                    },
-                    idempotency_key,
-                    None,
-                )
-                .await
-            {
-                error!(error = %err, workflow.id = %workflow.id, "Failed to enqueue a GitHub webhook delivery: {err}");
-                return actix_web::HttpResponse::InternalServerError().finish();
-            }
-        }
+    match crate::webhooks::route(source, &context, event).await {
+        // 200 rather than 204: Todoist documents anything other than a 200 as a
+        // failed delivery, retries it three times, and then stops sending.
+        Delivered::Accepted => actix_web::HttpResponse::Ok().finish(),
+        Delivered::Unavailable => actix_web::HttpResponse::ServiceUnavailable().finish(),
+        Delivered::Unauthorized => actix_web::HttpResponse::Unauthorized().finish(),
+        Delivered::Malformed => actix_web::HttpResponse::BadRequest().finish(),
+        Delivered::Failed => actix_web::HttpResponse::InternalServerError().finish(),
     }
-
-    actix_web::HttpResponse::NoContent().finish()
 }
 
 /// `POST /webhooks/w/{token}` — a delivery for one person's workflow.
@@ -442,10 +299,22 @@ mod tests {
             config.web.auth.admin_acl = Some(crate::filter::Filter::new("true").unwrap());
             config.connections.github.app =
                 Some(crate::testing::github_app("https://api.github.com"));
+            config.connections.todoist.app = Some(crate::config::TodoistAppConfig {
+                client_id: "todoist-client".into(),
+                client_secret: "todoist-client-secret".into(),
+                // Deliberately not the client secret: Todoist signs with the
+                // app's Verification Token, and the two are different values.
+                webhook_secret: Some(TODOIST_SECRET.into()),
+                scopes: vec!["data:read_write".into()],
+                api_url: None,
+                acl: None,
+            });
         })
         .await
         .unwrap()
     }
+
+    const TODOIST_SECRET: &str = "todoist-verification-token";
 
     macro_rules! app {
         ($context:expr) => {
@@ -453,8 +322,8 @@ mod tests {
                 App::new()
                     .app_data(web::Data::new($context.tenant(TenantId::local())))
                     .app_data(web::Data::new($context.clone()))
-                    .route("/webhooks/github", web::post().to(super::deliver_github))
-                    .route("/webhooks/w/{token}", web::post().to(super::deliver)),
+                    .route("/webhooks/w/{token}", web::post().to(super::deliver))
+                    .route("/webhooks/{source}", web::post().to(super::deliver_source)),
             )
             .await
         };
@@ -587,7 +456,7 @@ mod tests {
 
         assert_eq!(
             test::call_service(&app, request).await.status(),
-            StatusCode::NO_CONTENT,
+            StatusCode::OK,
         );
 
         let alice_jobs = context
@@ -635,6 +504,108 @@ mod tests {
             test::call_service(&app, request).await.status(),
             StatusCode::UNAUTHORIZED,
         );
+    }
+
+    async fn todoist_workflow(context: &AppContext, tenant: TenantId, account: &str) -> Workflow {
+        let services = context.tenant(tenant);
+        let connection = crate::connections::ConnectionStore::for_services(&services)
+            .create(
+                crate::publishers::TODOIST_PROVIDER,
+                format!("todoist-{account}"),
+                Some(account.to_string()),
+                crate::connections::ConnectionSecret::OAuth2 {
+                    access_token: "access".into(),
+                    refresh_token: "refresh".into(),
+                    expires_at: chrono::Utc::now() + chrono::Duration::hours(1),
+                },
+            )
+            .await
+            .expect("store the Todoist connection");
+
+        crate::workflow_store::WorkflowStore::new(&services)
+            .create(WorkflowDraft {
+                type_id: "todoist".into(),
+                config: serde_json::json!({
+                    "name": format!("Todoist {account}"),
+                    "connection": connection.id,
+                    "title": "Follow up",
+                }),
+                schedule: None,
+                enabled: true,
+            })
+            .await
+            .expect("store the Todoist workflow")
+    }
+
+    /// A second service routed through the same endpoint, which is the point of
+    /// the endpoint being shared: nothing here knows what Todoist is.
+    #[actix_web::test]
+    async fn a_todoist_delivery_routes_only_to_the_tenant_who_owns_that_account() {
+        use base64::Engine;
+        use hmac::{Hmac, KeyInit, Mac};
+        use sha2::Sha256;
+
+        let context = context().await;
+        let alice = TenantId::new("alice").unwrap();
+        let bob = TenantId::new("bob").unwrap();
+        let alice_workflow = todoist_workflow(&context, alice.clone(), "2671355").await;
+        todoist_workflow(&context, bob.clone(), "9900001").await;
+        let app = app!(context);
+
+        let body = serde_json::json!({
+            "event_name": "item:completed",
+            "user_id": "2671355",
+            "event_data": { "content": "Buy milk" },
+        })
+        .to_string();
+        let mut mac = Hmac::<Sha256>::new_from_slice(TODOIST_SECRET.as_bytes()).unwrap();
+        mac.update(body.as_bytes());
+        let signature =
+            base64::engine::general_purpose::STANDARD.encode(mac.finalize().into_bytes());
+
+        let request = test::TestRequest::post()
+            .uri("/webhooks/todoist")
+            .insert_header(("X-Todoist-Hmac-SHA256", signature))
+            .insert_header(("X-Todoist-Delivery-ID", "delivery-1"))
+            .set_payload(body)
+            .to_request();
+
+        // Exactly 200: Todoist treats any other status as a failed delivery,
+        // and disables the webhook after three of them.
+        assert_eq!(
+            test::call_service(&app, request).await.status(),
+            StatusCode::OK,
+        );
+
+        let alice_jobs = context
+            .tenant(alice)
+            .queue()
+            .peek::<_, crate::webhooks::WebhookDelivery>("webhooks/todoist", 10)
+            .await
+            .unwrap();
+        let bob_jobs = context
+            .tenant(bob)
+            .queue()
+            .peek::<_, crate::webhooks::WebhookDelivery>("webhooks/todoist", 10)
+            .await
+            .unwrap();
+
+        assert_eq!(alice_jobs.len(), 1);
+        assert_eq!(alice_jobs[0].payload.workflow, alice_workflow.id);
+        assert!(
+            bob_jobs.is_empty(),
+            "another account's workflow must not receive the delivery"
+        );
+    }
+
+    /// An address nothing is registered at is a 404 rather than an accepted
+    /// delivery that goes nowhere.
+    #[actix_web::test]
+    async fn a_delivery_for_a_service_we_do_not_serve_is_refused() {
+        let context = context().await;
+        let app = app!(context);
+
+        assert_eq!(post!(app, "/webhooks/gitlab"), StatusCode::NOT_FOUND);
     }
 
     #[actix_web::test]

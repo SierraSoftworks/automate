@@ -92,7 +92,12 @@ impl TodoistClient {
 
         let token = match store.open(&connection)? {
             ConnectionSecret::ApiKey { key } => key,
-            ConnectionSecret::OAuth2 { access_token, .. } => access_token,
+            // Renewed here rather than on a timer, because a Todoist access
+            // token only lasts an hour and an installation that files one task
+            // a day would otherwise reach for an expired one on every run.
+            secret @ ConnectionSecret::OAuth2 { .. } => {
+                crate::integrations::todoist::access_token(services, &connection, secret).await?
+            }
             other => {
                 return Err(human_errors::system(
                     format!(
@@ -396,7 +401,10 @@ macro_rules! todoist_target_fields {
             "Todoist account",
             automate_api::FieldKind::Connection {
                 provider: $crate::publishers::TODOIST_PROVIDER.to_string(),
-                connection_kind: Some(automate_api::ConnectionKind::ApiKey),
+                // Left open rather than pinned to one kind: an account may be
+                // linked through the Todoist app or by an API token imported
+                // from an older configuration, and either can file a task.
+                connection_kind: None,
             },
         )
         .with_help("Which linked account the tasks are created in.")

@@ -1,13 +1,19 @@
 use std::borrow::Cow;
+use std::collections::HashSet;
 use std::fmt::Display;
 
 use hmac::{Hmac, KeyInit, Mac};
 
+use automate_api::ConnectionId;
+
+use crate::connections::{ConnectionSecret, ConnectionStore};
 use crate::jobs::{
     GitHubAttentionConfig, GitHubAttentionWorkflow, GitHubAutoMergeConfig, GitHubAutoMergeWorkflow,
     GitHubNotificationsRefreshWorkflow,
 };
 use crate::prelude::*;
+use crate::services::AppServices;
+use crate::webhooks::WebhookSource;
 
 type HmacSha256 = Hmac<Sha256>;
 
@@ -221,11 +227,7 @@ impl GitHubWebhook {
     }
 
     fn header<'a>(event: &'a WebhookEvent, name: &str) -> Option<&'a str> {
-        event
-            .headers
-            .iter()
-            .find(|(key, _)| key.eq_ignore_ascii_case(name))
-            .map(|(_, value)| value.as_str())
+        event.header(name)
     }
 
     async fn track_installation(
@@ -265,6 +267,88 @@ impl GitHubWebhook {
 
 crate::register_job!(GitHubWebhook);
 crate::register_workflow_type!(GitHubWebhook);
+crate::register_webhook_source!(GitHubWebhook);
+
+#[async_trait::async_trait]
+impl WebhookSource for GitHubWebhook {
+    fn id(&self) -> &'static str {
+        "github"
+    }
+
+    fn workflow(&self) -> &'static str {
+        <Self as crate::workflows::ConfigurableWorkflow>::type_id()
+    }
+
+    fn secret(&self, config: &Config) -> Option<String> {
+        config
+            .connections
+            .github
+            .app
+            .as_ref()
+            .map(|app| app.webhook_secret.clone())
+            .filter(|secret| !secret.is_empty())
+    }
+
+    fn verify(&self, secret: &str, event: &WebhookEvent) -> Result<(), human_errors::Error> {
+        let signature = event.header("x-hub-signature-256").ok_or_else(|| {
+            human_errors::user(
+                "The delivery did not carry an X-Hub-Signature-256 header.",
+                &["Ensure that only GitHub webhooks are sent to this endpoint."],
+            )
+        })?;
+
+        Self::verify_signature(secret, &event.body, signature)
+    }
+
+    fn delivery_header(&self) -> &'static str {
+        "x-github-delivery"
+    }
+
+    /// A ping, and anything else GitHub sends that is not about an installation,
+    /// names no account and is accepted without being routed.
+    fn account(&self, event: &WebhookEvent, payload: &serde_json::Value) -> Option<String> {
+        if event.header("x-github-event") == Some("ping") {
+            return None;
+        }
+
+        payload
+            .get("installation")
+            .and_then(|installation| installation.get("id"))
+            .and_then(serde_json::Value::as_u64)
+            .map(|id| id.to_string())
+    }
+
+    /// Matched on the installation inside the credential rather than on anything
+    /// the connection records, because that is the only place it is held.
+    async fn connections(
+        &self,
+        account: &str,
+        store: &ConnectionStore<AppServices>,
+    ) -> Result<HashSet<ConnectionId>, human_errors::Error> {
+        let Ok(installation_id) = account.parse::<u64>() else {
+            return Ok(HashSet::new());
+        };
+
+        Ok(store
+            .list_for_provider(crate::integrations::github_app::GITHUB_PROVIDER)
+            .await?
+            .into_iter()
+            .filter(|connection| {
+                matches!(
+                    store.open(connection),
+                    Ok(ConnectionSecret::GitHubApp { installation_id: stored }) if stored == installation_id
+                )
+            })
+            .map(|connection| connection.id)
+            .collect())
+    }
+
+    fn selects(&self, config: &serde_json::Value) -> Option<ConnectionId> {
+        serde_json::from_value::<GitHubWebhookConfig>(config.clone())
+            .ok()
+            .and_then(|config| config.connection)
+    }
+}
 
 impl crate::workflows::ConfigurableWorkflow for GitHubWebhook {
     type ConfigType = GitHubWebhookConfig;
