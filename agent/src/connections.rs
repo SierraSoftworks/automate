@@ -647,6 +647,24 @@ pub async fn import_configured_credentials<S: Services>(
         .await?;
     }
 
+    if let Some(api_key) = config
+        .connections
+        .ynab
+        .api_key
+        .as_deref()
+        .map(str::trim)
+        .filter(|key| !key.is_empty())
+    {
+        imported += import_api_key(
+            &store,
+            crate::integrations::ynab::YNAB_PROVIDER,
+            "YNAB",
+            api_key,
+            &tenant,
+        )
+        .await?;
+    }
+
     Ok(imported)
 }
 
@@ -1209,6 +1227,33 @@ mod tests {
         assert!(matches!(
             store.open(pat).unwrap(),
             ConnectionSecret::ApiKey { key } if key == "legacy-github-pat"
+        ));
+    }
+
+    #[tokio::test]
+    async fn a_configured_ynab_token_is_imported_once() {
+        let context = AppContext::new_mock(|config| {
+            config.connections.ynab.api_key = Some("legacy-ynab-pat".into());
+        })
+        .await
+        .unwrap();
+
+        assert_eq!(
+            import_configured_credentials(context.tenant(alice()), alice())
+                .await
+                .unwrap(),
+            1
+        );
+
+        let store = ConnectionStore::new(context.tenant(alice()), alice());
+        let connections = store
+            .list_for_provider(crate::integrations::ynab::YNAB_PROVIDER)
+            .await
+            .unwrap();
+        assert_eq!(connections.len(), 1);
+        assert!(matches!(
+            store.open(&connections[0]).unwrap(),
+            ConnectionSecret::ApiKey { key } if key == "legacy-ynab-pat"
         ));
     }
 

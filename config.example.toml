@@ -76,8 +76,25 @@ api_key = "${{ env.TODOIST_API_KEY }}"
 # acl = 'true'
 
 [connections.ynab]
-# A YNAB Personal Access Token, created from your YNAB account settings.
+# Superseded by per-account connections, which each user manages themselves.
+# This is imported once on start-up into the account a single-user installation
+# runs as, after which you can delete this section.
 api_key = "${{ env.YNAB_API_KEY }}"
+
+# The YNAB OAuth application each person connects their own account through, so
+# the agent acts on their behalf rather than through one shared personal access
+# token. Register it at https://app.ynab.com/settings/developer and set its
+# redirect URI to
+# https://your-automate-host/integrations/ynab/setup/callback.
+#
+# The application is created in Restricted Mode, which caps it at 25 accounts
+# other than its owner's; that is plenty for a private installation.
+# [connections.ynab.app]
+# client_id = "${{ env.YNAB_CLIENT_ID }}"
+# client_secret = "${{ env.YNAB_CLIENT_SECRET }}"
+# Who may use the connect wizard, evaluated exactly like the OAuth providers'
+# acl. Admin-gated when omitted.
+# acl = 'true'
 
 [connections.alphavantage]
 # An AlphaVantage API key, used by the YNAB stocks workflow to fetch stock
