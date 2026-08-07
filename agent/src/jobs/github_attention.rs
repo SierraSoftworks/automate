@@ -144,6 +144,9 @@ impl GitHubAttentionWorkflow {
                 event.severity.as_deref().unwrap_or("Unknown"),
                 event.repository
             ),
+            GitHubAttentionKind::Closure => {
+                format!("{actor} closed {}#{}.", event.repository, event.number)
+            }
         };
 
         let link = match event.comment_url.as_deref() {
@@ -168,7 +171,7 @@ impl GitHubAttentionWorkflow {
 
     fn priority(event: &GitHubAttentionEvent) -> i32 {
         match event.kind {
-            GitHubAttentionKind::Comment => 2,
+            GitHubAttentionKind::Comment | GitHubAttentionKind::Closure => 2,
             GitHubAttentionKind::Assignment => 3,
             GitHubAttentionKind::SecurityAlert => {
                 match event.severity.as_deref().unwrap_or_default() {
@@ -201,12 +204,19 @@ impl Job for GitHubAttentionWorkflow {
         let job = &job.event;
 
         let filter = match job.kind {
-            GitHubAttentionKind::Comment => &attention.comments,
-            GitHubAttentionKind::Assignment => &attention.assignments,
-            GitHubAttentionKind::SecurityAlert => &attention.security_alerts,
+            GitHubAttentionKind::Comment => Some(&attention.comments),
+            GitHubAttentionKind::Assignment => Some(&attention.assignments),
+            GitHubAttentionKind::SecurityAlert => Some(&attention.security_alerts),
+            // A closure only ever retires a task we already track, and whichever
+            // filter raised that task is not the one that would match here — so
+            // asking any of them would leave the task standing after the issue
+            // was dealt with.
+            GitHubAttentionKind::Closure => None,
         };
 
-        if !filter.matches(job)? {
+        if let Some(filter) = filter
+            && !filter.matches(job)?
+        {
             info!("{job} did not match the attention filter; ignoring.");
             return Ok(());
         }
@@ -440,6 +450,40 @@ mod tests {
             completions[0].key,
             "github/attention/example/repo/dependabot_alert/3"
         );
+    }
+
+    #[tokio::test]
+    async fn closing_an_issue_completes_its_task_whatever_the_filters_say() {
+        // The task may have been raised by any of the three filters, and a
+        // closure matches none of them — asking one would leave the task
+        // standing after the issue had been dealt with.
+        let config = GitHubAttentionConfig::default();
+        let services = services_with(config.clone()).await;
+
+        let mut event = comment("dependabot[bot]");
+        event.kind = GitHubAttentionKind::Closure;
+        event.event = "issues".to_string();
+        event.action = "closed".to_string();
+        event.resolved = true;
+
+        GitHubAttentionWorkflow
+            .handle(
+                JobContext::new(services.clone(), chrono::Utc::now(), None, None),
+                &task(event, config.clone()),
+            )
+            .await
+            .expect("a closed issue should complete its task");
+
+        assert!(upserts(&services).await.is_empty());
+
+        let completions = services
+            .queue()
+            .peek::<_, serde_json::Value>(TodoistCompleteTask::partition(), 10)
+            .await
+            .expect("peek the Todoist completion queue");
+
+        assert_eq!(completions.len(), 1);
+        assert_eq!(completions[0].key, "github/attention/example/repo#7");
     }
 
     #[test]
