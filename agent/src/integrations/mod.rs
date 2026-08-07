@@ -20,6 +20,7 @@ pub mod github_app;
 mod oauth2;
 mod state;
 pub mod todoist;
+pub mod ynab;
 
 pub use state::PendingAuthorizations;
 

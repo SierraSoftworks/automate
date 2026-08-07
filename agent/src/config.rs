@@ -429,9 +429,45 @@ pub struct GitHubAppConfig {
 
 #[derive(Default, Clone, Deserialize)]
 pub struct YnabConfig {
-    /// The YNAB Personal Access Token used to authenticate with the YNAB API.
+    /// The YNAB Personal Access Token an installation used to share.
+    ///
+    /// Superseded by per-account connections. Kept only so that an existing
+    /// configuration file still loads and can be imported once on start-up; see
+    /// [`crate::connections::import_configured_credentials`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub api_key: Option<String>,
+
+    /// The YNAB OAuth application each person connects their own account
+    /// through, so the agent acts on their behalf rather than through one
+    /// shared personal access token.
+    #[serde(default)]
+    pub app: Option<YnabAppConfig>,
+}
+
+#[derive(Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct YnabAppConfig {
+    /// The application's Client ID, from YNAB's Developer Settings page.
+    pub client_id: String,
+
+    /// The application's Client Secret, from the same page.
+    pub client_secret: String,
+
+    /// Where the YNAB web app lives, which is both where an authorisation is
+    /// approved and where tokens are issued. Only worth setting to point the
+    /// agent at a stand-in for it.
+    #[serde(default)]
+    pub app_url: Option<String>,
+
+    /// Where YNAB's API lives. Only worth setting to point the agent at a
+    /// stand-in for it.
+    #[serde(default)]
+    pub api_url: Option<String>,
+
+    /// Who may run the connect wizard. Evaluated exactly like the OAuth2
+    /// providers' `acl`, and admin-gated when omitted.
+    #[serde(default)]
+    pub acl: Option<Filter>,
 }
 
 #[derive(Default, Clone, Deserialize)]

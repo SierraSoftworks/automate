@@ -4,7 +4,11 @@ use std::fmt::Display;
 use rust_ynab::{Account, ClearedStatus, Client, NewTransaction, PlanId, ServerKnowledge};
 use uuid::Uuid;
 
+use automate_api::ConnectionId;
+
+use crate::connections::{ConnectionSecret, ConnectionStore};
 use crate::db::StateKey;
+use crate::integrations::ynab::YNAB_PROVIDER;
 use crate::parsers::parse_key_value_pairs;
 use crate::prelude::*;
 use crate::services::AlphaVantageClient;
@@ -16,6 +20,16 @@ const STATE_PARTITION: &str = "ynab/stocks/state";
 pub struct YnabStocksConfig {
     /// The YNAB budget (plan) whose stock accounts should be synchronised.
     pub budget: Uuid,
+
+    /// Which linked YNAB account to work in.
+    ///
+    /// Optional, because the common case is one linked account and making
+    /// somebody name it would be noise — and because a workflow stored before
+    /// connections existed does not have one. When it is left out and there is
+    /// exactly one, that one is used; when there are several, the ambiguity is
+    /// reported rather than guessed at.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub connection: Option<ConnectionId>,
 }
 
 impl Display for YnabStocksConfig {
@@ -76,14 +90,16 @@ Accounts with no such directive, and closed accounts, are left alone entirely.
 
 ## What this needs configured
 
-Two credentials, both set on the installation rather than here:
+**YNAB account** is the linked account this works in. Connect one under
+Connections, either by authorising the YNAB app (recommended — the grant is
+renewed automatically and you can revoke it from YNAB) or by pasting a personal
+access token. Either way it needs write access, since this records
+transactions.
 
-- `connections.ynab.api_key` — a YNAB personal access token, created from your
-  YNAB account settings. It needs write access, since this records
-  transactions.
-- `connections.alphavantage.api_key` — used for quotes and exchange rates. A
-  free key is available from
-  [AlphaVantage](https://www.alphavantage.co/support/#api-key).
+AlphaVantage is still set on the installation rather than here:
+`connections.alphavantage.api_key`, used for quotes and exchange rates. A free
+key is available from
+[AlphaVantage](https://www.alphavantage.co/support/#api-key).
 
 ## Scheduling
 
@@ -126,18 +142,116 @@ impl crate::workflows::ConfigurableWorkflow for YnabStocksWorkflow {
             trigger: WorkflowTrigger::Cron {
                 default_schedule: "@daily".to_string(),
             },
-            fields: [FieldDescriptor::new(
-                crate::config_path!(YnabStocksConfig: budget),
-                "Budget",
-                FieldKind::Text {
-                    placeholder: Some("00000000-0000-0000-0000-000000000000".into()),
-                },
-            )
-            .with_help("The identifier of the YNAB budget, which appears in its URL.")
-            .required()]
-            .into_iter()
-            .collect(),
+            fields: vec![
+                FieldDescriptor::new(
+                    crate::config_path!(YnabStocksConfig: connection),
+                    "YNAB account",
+                    FieldKind::Connection {
+                        provider: YNAB_PROVIDER.to_string(),
+                        // Left open rather than pinned to one kind: an account
+                        // may be linked through the YNAB app or by a personal
+                        // access token, and either can record a transaction.
+                        connection_kind: None,
+                    },
+                )
+                .with_help("Which linked account the budget lives in.")
+                .required(),
+                FieldDescriptor::new(
+                    crate::config_path!(YnabStocksConfig: budget),
+                    "Budget",
+                    FieldKind::Text {
+                        placeholder: Some("00000000-0000-0000-0000-000000000000".into()),
+                    },
+                )
+                .with_help("The identifier of the YNAB budget, which appears in its URL.")
+                .required(),
+            ],
         }
+    }
+}
+
+/// Builds a YNAB client for the account a workflow names.
+///
+/// Mirrors [`crate::publishers::TodoistClient::connect`]: the workflow carries a
+/// connection identifier rather than a credential, and the credential is opened
+/// — and, for a grant, renewed — here.
+async fn connect(
+    services: &(impl Services + Send + Sync + 'static),
+    selected: Option<ConnectionId>,
+) -> Result<Client, human_errors::Error> {
+    let store = ConnectionStore::for_services(services);
+
+    let connection = match selected {
+        Some(id) => store.get(id).await?.ok_or_else(|| {
+            human_errors::user(
+                format!("This workflow uses a YNAB account ('{id}') that is no longer connected."),
+                &["Reconnect the account, or point this workflow at a different one."],
+            )
+        })?,
+        None => {
+            let mut linked = store.list_for_provider(YNAB_PROVIDER).await?;
+
+            match linked.len() {
+                1 => linked.remove(0),
+                0 => {
+                    return Err(human_errors::user(
+                        "No YNAB account is connected.",
+                        &["Connect your YNAB account before running workflows that use it."],
+                    ));
+                }
+                // Picking one would record somebody's transactions in the wrong
+                // budget, which is worse than refusing to guess.
+                _ => {
+                    return Err(human_errors::user(
+                        "Several YNAB accounts are connected, so we cannot tell which this workflow should use.",
+                        &["Choose the account this workflow should use."],
+                    ));
+                }
+            }
+        }
+    };
+
+    if connection.provider != YNAB_PROVIDER {
+        return Err(human_errors::user(
+            format!(
+                "The connection '{}' is not a YNAB connection.",
+                connection.id
+            ),
+            &["Choose a YNAB account for this workflow."],
+        ));
+    }
+
+    let token = match store.open(&connection)? {
+        ConnectionSecret::ApiKey { key } => key,
+        // Renewed here rather than on a timer, because a YNAB access token only
+        // lasts two hours and a daily run would otherwise always reach for an
+        // expired one.
+        secret @ ConnectionSecret::OAuth2 { .. } => {
+            crate::integrations::ynab::access_token(services, &connection, secret).await?
+        }
+        other => {
+            return Err(human_errors::system(
+                format!(
+                    "The connection '{}' holds a {} credential, which cannot be used with YNAB.",
+                    connection.id,
+                    other.kind().as_str()
+                ),
+                &["Reconnect the account."],
+            ));
+        }
+    };
+
+    let client = Client::new(token).wrap_user_err(
+        "We could not initialise the YNAB API client.",
+        &["Check that the linked YNAB account's credential is valid."],
+    )?;
+
+    match crate::integrations::ynab::api_url(&services.config()) {
+        Some(url) => client.with_base_url(url).wrap_user_err(
+            "The configured YNAB API URL is not a valid URL.",
+            &["Check `api_url` in your [connections.ynab.app] section."],
+        ),
+        None => Ok(client),
     }
 }
 
@@ -199,20 +313,7 @@ impl Job for YnabStocksWorkflow {
         let services = ctx.services();
         let config = services.config();
 
-        let api_key = config.connections.ynab.api_key.as_deref().ok_or_else(|| {
-            human_errors::user(
-                "No YNAB API key has been configured.",
-                &[
-                    "Set `connections.ynab.api_key` in your configuration file (for example via the YNAB_API_KEY environment variable).",
-                    "Create a Personal Access Token from your YNAB account settings.",
-                ],
-            )
-        })?;
-
-        let client = Client::new(api_key).wrap_user_err(
-            "We could not initialise the YNAB API client.",
-            &["Check that your YNAB Personal Access Token is valid."],
-        )?;
+        let client = connect(services, job.connection).await?;
 
         let alphavantage_api_key =
             config.connections.alphavantage.api_key.as_deref().ok_or_else(|| {
@@ -499,6 +600,75 @@ fn parse_currency_value(input: &str) -> Option<(Option<String>, f64)> {
 mod tests {
     use super::*;
     use rstest::rstest;
+
+    use crate::services::AppContext;
+
+    fn alice() -> TenantId {
+        TenantId::new("alice").unwrap()
+    }
+
+    async fn link(context: &AppContext, name: &str) -> ConnectionId {
+        ConnectionStore::new(context.tenant(alice()), alice())
+            .create(
+                YNAB_PROVIDER,
+                name,
+                Some(name.to_string()),
+                ConnectionSecret::ApiKey {
+                    key: format!("token-{name}"),
+                },
+            )
+            .await
+            .unwrap()
+            .id
+    }
+
+    /// A workflow stored before connections existed does not name an account,
+    /// and with exactly one linked there is nothing to ask about.
+    #[tokio::test]
+    async fn a_single_linked_account_does_not_have_to_be_named() {
+        let context = AppContext::new_mock(|_| {}).await.unwrap();
+        link(&context, "personal").await;
+
+        connect(&context.tenant(alice()), None)
+            .await
+            .expect("the only linked account should be used");
+    }
+
+    /// Guessing would record transactions in somebody else's budget, which is
+    /// worse than refusing.
+    #[tokio::test]
+    async fn several_linked_accounts_are_reported_rather_than_guessed_between() {
+        let context = AppContext::new_mock(|_| {}).await.unwrap();
+        link(&context, "personal").await;
+        link(&context, "joint").await;
+
+        let err = connect(&context.tenant(alice()), None)
+            .await
+            .expect_err("an ambiguous choice should be reported");
+        assert!(err.is(human_errors::Kind::User), "{err}");
+    }
+
+    /// A connection belonging to another service cannot be pressed into use
+    /// here, even though its credential would deserialise.
+    #[tokio::test]
+    async fn a_connection_for_another_service_is_refused() {
+        let context = AppContext::new_mock(|_| {}).await.unwrap();
+        let id = ConnectionStore::new(context.tenant(alice()), alice())
+            .create(
+                "todoist",
+                "Todoist",
+                None,
+                ConnectionSecret::ApiKey { key: "nope".into() },
+            )
+            .await
+            .unwrap()
+            .id;
+
+        let err = connect(&context.tenant(alice()), Some(id))
+            .await
+            .expect_err("a Todoist connection is not a YNAB account");
+        assert!(err.is(human_errors::Kind::User), "{err}");
+    }
 
     /// Sorts holdings by symbol so assertions don't depend on the
     /// non-deterministic ordering produced by the underlying hash map.
