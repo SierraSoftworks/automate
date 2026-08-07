@@ -85,7 +85,7 @@ pub async fn deliver(
     // Parsed before anything is read, so a body is never taken from a caller who
     // has not presented a well-formed token.
     let Ok(token) = token.parse::<automate_api::WebhookToken>() else {
-        return refuse("the address is not one we could have issued", &context);
+        return refuse("the address is not one we could have issued");
     };
 
     let system = context.tenant(automate_api::TenantId::system());
@@ -93,7 +93,7 @@ pub async fn deliver(
 
     let route = match index.lookup(&token).await {
         Ok(Some(route)) => route,
-        Ok(None) => return refuse("the address is not one we have issued", &context),
+        Ok(None) => return refuse("the address is not one we have issued"),
         Err(err) => {
             error!(error = %err, "Failed to look up a webhook token: {err}");
             return actix_web::HttpResponse::InternalServerError().finish();
@@ -109,7 +109,7 @@ pub async fn deliver(
     let record = match store.find(route.workflow).await {
         Ok(Some(record)) => record,
         Ok(None) => {
-            return refuse("the workflow this address belonged to is gone", &context);
+            return refuse("the workflow this address belonged to is gone");
         }
         Err(err) => {
             error!(error = %err, "Failed to load a webhook workflow: {err}");
@@ -127,10 +127,7 @@ pub async fn deliver(
         .unwrap_or(false);
 
     if !directly_addressed {
-        return refuse(
-            "the workflow no longer accepts deliveries at this address",
-            &context,
-        );
+        return refuse("the workflow no longer accepts deliveries at this address");
     }
 
     match store.webhook_token(&record) {
@@ -147,7 +144,7 @@ pub async fn deliver(
             )
             .await;
 
-            return refuse("the address does not match the workflow it names", &context);
+            return refuse("the address does not match the workflow it names");
         }
         Err(err) => {
             error!(error = %err, "Failed to read a workflow's webhook token: {err}");
@@ -258,21 +255,16 @@ async fn audit(
 /// identical from outside. Telling them apart would let somebody sort guesses
 /// into "wrong" and "used to be right", and the second pile is a map.
 ///
-/// The refusal is recorded in the telemetry stream rather than the audit log.
-/// The audit log belongs to an account and we do not know whose this would be;
-/// writing it to a shared one would let an anonymous endpoint fill a table the
-/// whole installation reads. Telemetry has neither problem, and it is where
-/// somebody debugging "the provider says it is sending and nothing arrives"
-/// will actually look — which is the case this exists to make visible.
-fn refuse(reason: &'static str, services: &crate::services::AppContext) -> actix_web::HttpResponse {
+/// The refusal is logged rather than written to the audit log. The audit log
+/// belongs to an account and we do not know whose this would be; writing it to
+/// a shared one would let an anonymous endpoint fill a table the whole
+/// installation reads. Logs remain available to somebody debugging "the
+/// provider says it is sending and nothing arrives" without generating an
+/// analytics event for each request.
+fn refuse(reason: &'static str) -> actix_web::HttpResponse {
     warn!(
         webhook.refused = reason,
         "Refused a webhook delivery: {reason}.",
-    );
-
-    services.session().record_event(
-        "webhook/refused",
-        [("reason".to_string(), reason.to_string())].into(),
     );
 
     refused_response()
