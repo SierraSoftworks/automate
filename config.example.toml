@@ -84,12 +84,6 @@
 # acl. Admin-gated when omitted.
 # acl = 'true'
 
-[connections.alphavantage]
-# An AlphaVantage API key, used by the YNAB stocks workflow to fetch stock
-# quotes and currency exchange rates. Claim a free key from
-# https://www.alphavantage.co/support/#api-key.
-api_key = "${{ env.ALPHAVANTAGE_API_KEY }}"
-
 [oauth2.spotify]
 name = "Spotify"
 # `jobs` is no longer needed and is ignored if present. Completing an

@@ -145,9 +145,6 @@ pub struct ConnectionConfigs {
 
     #[serde(default)]
     pub ynab: YnabConfig,
-
-    #[serde(default)]
-    pub alphavantage: AlphaVantageConfig,
 }
 
 #[derive(Clone, Deserialize)]
@@ -435,13 +432,6 @@ pub struct TodoistAppConfig {
 
 fn default_todoist_scopes() -> Vec<String> {
     vec!["data:read_write".to_string()]
-}
-
-#[derive(Default, Clone, Deserialize)]
-pub struct AlphaVantageConfig {
-    /// The AlphaVantage API key used to fetch stock quotes and exchange rates.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub api_key: Option<String>,
 }
 
 #[cfg(test)]
