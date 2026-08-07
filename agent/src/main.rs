@@ -18,7 +18,6 @@ mod web;
 mod webhook_index;
 mod webhook_payload;
 mod webhooks;
-mod workflow_migration;
 mod workflow_store;
 mod workflow_toml;
 mod workflows;
@@ -134,18 +133,6 @@ async fn run(args: Args, session: Arc<Session>) -> Result<(), human_errors::Erro
         crypto::SecretStore::load(&config.web.auth, std::path::Path::new(&database_path))?;
 
     let context = services::AppContext::new(config, db, secrets, session.clone());
-
-    // Credentials configured before connections existed are imported once, so an
-    // upgrade does not silently stop workflows publishing until the operator
-    // recreates them by hand.
-    let local = automate_api::TenantId::local();
-    connections::import_configured_credentials(context.tenant(local.clone()), local.clone())
-        .await?;
-
-    // GitHub App installations recorded before they were connections are brought
-    // across for the same reason, and because there is no wizard left for the
-    // operator to run: GitHub already considers the App installed.
-    integrations::github_app::import_installations_as_connections(&context.tenant(local)).await?;
 
     (
         crate::web::run_web_server(context.clone()),

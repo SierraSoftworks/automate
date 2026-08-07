@@ -156,11 +156,7 @@ impl GitHubNotificationsCollector {
             .header("X-GitHub-Api-Version", "2022-11-28")
             .header("Accept", "application/vnd.github+json");
 
-        if let Some(api_key) =
-            self.api_key
-                .as_ref()
-                .or(services.config().connections.github.api_key.as_ref())
-        {
+        if let Some(api_key) = self.api_key.as_ref() {
             request = request.bearer_auth(api_key);
         }
 

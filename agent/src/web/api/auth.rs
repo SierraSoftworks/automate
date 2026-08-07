@@ -210,26 +210,11 @@ mod tests {
         };
     }
 
-    /// Signing in has to work whichever block the provider was written under.
-    ///
-    /// `[web.auth]` supersedes `[web.admin]`, and `WebConfig::oidc` is what
-    /// reconciles the two. These endpoints read the field directly instead, so
-    /// moving a working configuration to the new block — which is what the
-    /// upgrade notes tell people to do — turned every one of them into "sign-in
-    /// is not configured" while the middleware went on believing it was. That is
-    /// the whole login flow, so all three are checked rather than just the one
-    /// somebody noticed.
-    #[rstest::rstest]
-    #[case::under_the_current_block(true)]
-    #[case::under_the_legacy_block(false)]
+    /// Every endpoint in the login flow reads the provider from `[web.auth]`.
     #[actix_web::test]
-    async fn signing_in_is_offered_wherever_the_provider_is_configured(#[case] current: bool) {
-        let context = AppContext::new_mock(move |config| {
-            if current {
-                config.web.auth.oidc = Some(provider());
-            } else {
-                config.web.admin.oidc = Some(provider());
-            }
+    async fn signing_in_is_offered_when_the_provider_is_configured() {
+        let context = AppContext::new_mock(|config| {
+            config.web.auth.oidc = Some(provider());
         })
         .await
         .unwrap();

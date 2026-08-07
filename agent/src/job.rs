@@ -344,24 +344,6 @@ impl JobHost {
             handler.setup(setup_services.clone()).await?;
         }
 
-        // Move the workflows the configuration file still describes into the
-        // database, once, before anything compares the two. Done for the local
-        // tenant alone because the file describes a single installation rather
-        // than any particular person's workflows.
-        //
-        // Logged and carried on with rather than taken as fatal, for the same
-        // reason the reconciliation below is: an installation whose migration
-        // fails should still run the workflows it already has stored.
-        if let Err(err) =
-            crate::workflow_migration::import_configured_workflows(&setup_services).await
-        {
-            error!(
-                error = %err,
-                "Failed to move the workflows in your configuration file into the database; they may not run until this is fixed: {err}",
-            );
-            setup_services.session().record_human_error(&err);
-        }
-
         // Bring every tenant's schedules into line with the workflows they have
         // stored. Unlike the setup above this is a comparison rather than a
         // push, so it also removes the schedules of workflows that were deleted
@@ -372,19 +354,6 @@ impl JobHost {
         // nobody's workflows to run.
         for tenant in context.database().tenants().await? {
             let services = context.tenant(tenant.clone());
-
-            // Before the comparison, so that a Spotify account linked under the
-            // old implicit scheme has a record for the reconciler to arm.
-            if let Err(err) =
-                crate::workflow_migration::adopt_spotify_yearly_playlists(&services).await
-            {
-                error!(
-                    tenant = %tenant,
-                    error = %err,
-                    "Failed to create workflows for a tenant's linked Spotify accounts; their yearly playlists may stop being filled until this is fixed: {err}",
-                );
-                services.session().record_human_error(&err);
-            }
 
             if let Err(err) = crate::jobs::CronJob::reconcile(&services).await {
                 error!(

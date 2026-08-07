@@ -4,7 +4,6 @@ use oauth2::CsrfToken;
 use serde_json::{Map, Value};
 
 use automate_api::ConnectionId;
-use chrono::{DateTime, Utc};
 
 use super::{
     Connection, Integration, IntegrationContext, IntegrationInfo, SetupComplete, SetupRedirect,
@@ -13,14 +12,6 @@ use crate::config::Config;
 use crate::connections::{ConnectionSecret, ConnectionStore};
 use crate::prelude::*;
 use crate::services::{GitHubAppClient, GitHubInstallation};
-use crate::workflow_migration::MIGRATIONS_PARTITION;
-
-/// The kv partition which used to record which accounts had installed the App.
-///
-/// It exists only for [`import_installations_as_connections`] to drain. Nothing
-/// writes to it any more: an installation is a connection, and the account type
-/// that used to justify a second record now lives in that connection's metadata.
-const LEGACY_INSTALLATIONS_PARTITION: &str = "github/installations";
 
 /// The metadata key holding whether the account an App is installed on is a
 /// `User` or an `Organization`.
@@ -43,23 +34,9 @@ pub const ACCOUNT_TYPE: &str = "account_type";
 /// the connection layer owns.
 pub const GITHUB_PROVIDER: &str = "github";
 
-/// The marker saying this tenant's pre-existing installations have been brought
-/// across as connections.
-pub const INSTALLATIONS_AS_CONNECTIONS: &str = "github-installations-as-connections";
-
 pub struct GitHubAppIntegration;
 
 crate::register_integration!(GitHubAppIntegration);
-
-/// What was written down when the import happened.
-///
-/// Neither field is read; they are here so somebody looking at the database
-/// afterwards can tell what ran and when, which a bare `true` would not.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct ImportMarker {
-    at: DateTime<Utc>,
-    imported: usize,
-}
 
 /// What GitHub told us about the account, in the form a connection keeps it.
 fn account_metadata(installation: &GitHubInstallation) -> Map<String, Value> {
@@ -74,23 +51,6 @@ fn account_metadata(installation: &GitHubInstallation) -> Map<String, Value> {
 /// Keyed on the account rather than the installation id, because reinstalling an
 /// App issues a fresh id for the same account and the newer one should replace
 /// the old rather than accumulate beside it.
-///
-/// # Why there is only one record
-///
-/// There used to be two: a registry entry holding the facts GitHub reports —
-/// the id, the account, whether it is a user or an organisation — and a
-/// connection saying Automate was meant to use it. The split existed for one
-/// reason, that a connection had nowhere to put the account type, and it cost
-/// the usual price of holding one thing twice: the integrations page read one
-/// copy, the connections page and every picker read the other, and nothing
-/// stopped them disagreeing.
-///
-/// The account type now lives in the connection's metadata, so the connection
-/// says everything the registry did and the registry is gone. The
-/// `installation_id` inside the sealed credential is rewritten here every time
-/// an installation is recorded, so a reinstall — a fresh id for the same account
-/// — updates the connection in place rather than leaving it pointing at an id
-/// GitHub has forgotten.
 pub async fn record_installation(
     installation: &GitHubInstallation,
     services: &(impl Services + Send + Sync + 'static),
@@ -101,10 +61,6 @@ pub async fn record_installation(
 }
 
 /// Creates, or refreshes, the connection standing for an installation.
-///
-/// Matched on the account for the same reason the old registry was keyed on it:
-/// somebody who reinstalls expects the account they linked to still be there,
-/// rather than to acquire a second entry they cannot tell from the first.
 async fn link_installation(
     installation: &GitHubInstallation,
     services: &(impl Services + Send + Sync + 'static),
@@ -118,14 +74,7 @@ async fn link_installation(
         .find_by_account(GITHUB_PROVIDER, &installation.account)
         .await?
     {
-        // Replacing the credential also clears the status, which is what we
-        // want: an installation GitHub has just told us about works, whatever
-        // the connection was doing the last time somebody used it.
         store.update_secret(existing.id, secret).await?;
-
-        // GitHub restates the account type on every delivery, so this is also
-        // how an account that has been converted from a user to an organisation
-        // stops being described as the wrong thing.
         store
             .update_metadata(existing.id, account_metadata(installation))
             .await?;
@@ -160,11 +109,6 @@ async fn link_installation(
 }
 
 /// Forgets an account's installation.
-///
-/// The connection is the whole record, so removing it is all there is to do: an
-/// installation GitHub has taken away cannot mint a token, and leaving the
-/// connection behind would only offer somebody a choice which fails the moment
-/// they pick it.
 pub async fn forget_installation(
     account: &str,
     services: &(impl Services + Send + Sync + 'static),
@@ -182,13 +126,7 @@ pub async fn forget_installation(
     Ok(())
 }
 
-/// The connection standing for a particular installation, if this account holds
-/// one.
-///
-/// The installation id is inside the sealed credential rather than on the
-/// record, so this is a scan rather than a lookup. An account holds a handful of
-/// GitHub connections, which is cheaper than keeping a second copy of the id
-/// beside the credential for the two to disagree about.
+/// The connection standing for a particular installation, if this account holds one.
 async fn connection_for_installation<S: Services>(
     store: &ConnectionStore<S>,
     installation_id: u64,
@@ -204,155 +142,6 @@ async fn connection_for_installation<S: Services>(
     }
 
     Ok(None)
-}
-
-/// Brings installations recorded before they were connections across.
-///
-/// An account which installed the App before connections existed has a registry
-/// entry and no connection, so the picker on its GitHub workflow has nothing to
-/// offer — and there is no wizard left for the person to run, because from
-/// GitHub's point of view the App is already installed. They would be stuck. So
-/// the old registry is walked once, at start-up, and the missing connections are
-/// made.
-///
-/// # Why the old entries are removed
-///
-/// This is the last thing that reads that partition, so anything it still holds
-/// has to end up on the connection before it goes — the account type in
-/// particular, which is the fact the second record existed for. Once that is
-/// carried across the old copy is deleted, because a stale duplicate nobody
-/// reads is exactly the thing somebody eventually reads by mistake.
-///
-/// An account which already had a connection is not skipped outright for the
-/// same reason: its connection predates metadata, so the account type is still
-/// only in the old partition and has to be moved before the entry is dropped.
-///
-/// # Why a marker as well as a per-installation check
-///
-/// The point of the marker is that the registry stops being a source of
-/// connections once this has run. From then on [`record_installation`] is the
-/// only thing that creates one, which is a single path somebody can follow; a
-/// scan that kept reading the registry at every start would be a second one,
-/// quietly second-guessing whatever the person has since done in the browser.
-/// The per-installation check is kept beside the marker so that losing it — an
-/// instance restored from a backup taken before it was written, say — cannot
-/// produce duplicates.
-///
-/// # Why one failure does not stop the rest
-///
-/// An instance with several linked accounts should not lose all of them to
-/// whichever one is broken, so a failure is logged against its account and the
-/// walk continues. The marker is only written when every installation made it,
-/// leaving a transient failure to be retried on the next start rather than
-/// recorded as done.
-#[instrument(
-    "integrations.github_app.import_installations",
-    skip(services),
-    err(Display)
-)]
-pub async fn import_installations_as_connections(
-    services: &(impl Services + Send + Sync + 'static),
-) -> Result<usize, human_errors::Error> {
-    if services
-        .kv()
-        .get::<ImportMarker>(MIGRATIONS_PARTITION, INSTALLATIONS_AS_CONNECTIONS)
-        .await?
-        .is_some()
-    {
-        return Ok(0);
-    }
-
-    let installations = services
-        .kv()
-        .list::<GitHubInstallation>(LEGACY_INSTALLATIONS_PARTITION)
-        .await?;
-
-    let store = ConnectionStore::for_services(services);
-
-    // Read once rather than per installation, so the cost of the walk does not
-    // grow with the square of how many accounts somebody has linked.
-    let already_linked: HashMap<String, ConnectionId> = store
-        .list_for_provider(GITHUB_PROVIDER)
-        .await?
-        .into_iter()
-        .filter_map(|connection| Some((connection.account?, connection.id)))
-        .collect();
-
-    let mut imported = 0;
-    let mut failed = 0;
-
-    for (key, installation) in installations {
-        let account = installation.account.clone();
-
-        // Grouped so that the old entry is only dropped once everything it held
-        // has landed on a connection, and so a failure anywhere in that leaves
-        // the entry to be retried on the next start.
-        let outcome = async {
-            let created = match already_linked.get(&account) {
-                Some(&id) => {
-                    store
-                        .update_metadata(id, account_metadata(&installation))
-                        .await?;
-                    None
-                }
-                None => Some(link_installation(&installation, services).await?),
-            };
-
-            services
-                .kv()
-                .remove(LEGACY_INSTALLATIONS_PARTITION, key)
-                .await?;
-
-            Ok::<_, human_errors::Error>(created)
-        }
-        .await;
-
-        match outcome {
-            Ok(Some(id)) => {
-                imported += 1;
-
-                warn!(
-                    connection.id = %id,
-                    "Imported the GitHub App installation on '{account}' as a connection, \
-                     so your GitHub workflows can be pointed at it."
-                );
-            }
-            Ok(None) => {
-                debug!(
-                    "Carried the GitHub App installation on '{account}' onto the connection \
-                     that already stood for it."
-                );
-            }
-            Err(err) => {
-                failed += 1;
-
-                warn!(
-                    error = %err,
-                    "Failed to import the GitHub App installation on '{account}' as a connection; \
-                     it will be retried the next time the agent starts."
-                );
-            }
-        }
-    }
-
-    if failed == 0 {
-        // Written even when there was nothing to import, so an installation that
-        // has never used the GitHub App does not re-scan for one at every start
-        // for the rest of its life.
-        services
-            .kv()
-            .set(
-                MIGRATIONS_PARTITION,
-                INSTALLATIONS_AS_CONNECTIONS,
-                ImportMarker {
-                    at: Utc::now(),
-                    imported,
-                },
-            )
-            .await?;
-    }
-
-    Ok(imported)
 }
 
 impl GitHubAppIntegration {
@@ -659,28 +448,6 @@ mod tests {
         }
     }
 
-    /// The state an instance which upgraded across this change is actually in:
-    /// an entry in the partition that no longer exists.
-    async fn seed_legacy_registry(services: &TestServices, installation: &GitHubInstallation) {
-        services
-            .kv()
-            .set(
-                LEGACY_INSTALLATIONS_PARTITION,
-                installation.account.clone(),
-                installation.clone(),
-            )
-            .await
-            .expect("seed the old installation registry");
-    }
-
-    async fn legacy_registry(services: &TestServices) -> Vec<(String, GitHubInstallation)> {
-        services
-            .kv()
-            .list::<GitHubInstallation>(LEGACY_INSTALLATIONS_PARTITION)
-            .await
-            .expect("read the old installation registry")
-    }
-
     async fn linked(services: &TestServices) -> Vec<crate::connections::Connection> {
         ConnectionStore::for_services(services)
             .list_for_provider(GITHUB_PROVIDER)
@@ -838,196 +605,6 @@ mod tests {
             ConnectionSecret::GitHubApp { installation_id } => assert_eq!(installation_id, 99),
             other => panic!("expected a GitHub App credential, got {other:?}"),
         }
-    }
-
-    /// Somebody who installed the App before this existed cannot link it by hand:
-    /// GitHub already considers it installed, so there is no wizard left to run.
-    /// The import is the only way they get a connection.
-    #[tokio::test]
-    async fn the_import_brings_pre_existing_installations_across() {
-        let services = services().await;
-
-        seed_legacy_registry(&services, &installation(1, "notheotherben")).await;
-        seed_legacy_registry(&services, &installation(2, "SierraSoftworks")).await;
-
-        assert_eq!(
-            import_installations_as_connections(&services)
-                .await
-                .expect("import the installations"),
-            2
-        );
-
-        let store = ConnectionStore::for_services(&services);
-        let mut accounts: Vec<String> = linked(&services)
-            .await
-            .into_iter()
-            .filter_map(|connection| connection.account)
-            .collect();
-        accounts.sort();
-        assert_eq!(accounts, vec!["SierraSoftworks", "notheotherben"]);
-
-        // The imported credentials have to be usable, not merely present.
-        for connection in linked(&services).await {
-            assert!(matches!(
-                store.open(&connection).expect("open the credential"),
-                ConnectionSecret::GitHubApp { .. }
-            ));
-        }
-    }
-
-    /// The account type is the one thing the old partition held that a
-    /// connection could not, so an import that dropped it would be trading a
-    /// duplicate for a loss.
-    #[tokio::test]
-    async fn the_import_carries_the_account_type_onto_the_connection() {
-        let services = services().await;
-
-        seed_legacy_registry(
-            &services,
-            &GitHubInstallation {
-                id: 1,
-                account: "notheotherben".into(),
-                account_type: "User".into(),
-            },
-        )
-        .await;
-
-        import_installations_as_connections(&services)
-            .await
-            .expect("import the installations");
-
-        assert_eq!(account_type(&linked(&services).await[0]), Some("User"));
-    }
-
-    /// An instance that upgraded in two steps already has the connection, so the
-    /// account type is still only in the old partition. Skipping such an account
-    /// outright would drop the fact on the floor when the partition goes.
-    #[tokio::test]
-    async fn the_import_carries_the_account_type_onto_a_connection_that_already_existed() {
-        let services = services().await;
-        let store = ConnectionStore::for_services(&services);
-
-        // A connection as an agent from before metadata wrote it: no account
-        // type on it at all.
-        store
-            .create(
-                GITHUB_PROVIDER,
-                "notheotherben",
-                Some("notheotherben".into()),
-                ConnectionSecret::GitHubApp { installation_id: 1 },
-            )
-            .await
-            .expect("link the account the old way");
-
-        seed_legacy_registry(
-            &services,
-            &GitHubInstallation {
-                id: 1,
-                account: "notheotherben".into(),
-                account_type: "User".into(),
-            },
-        )
-        .await;
-
-        assert_eq!(
-            import_installations_as_connections(&services)
-                .await
-                .expect("import the installations"),
-            0,
-            "there was nothing new to link"
-        );
-
-        assert_eq!(linked(&services).await.len(), 1);
-        assert_eq!(account_type(&linked(&services).await[0]), Some("User"));
-        assert!(legacy_registry(&services).await.is_empty());
-    }
-
-    /// A duplicate nobody reads is the thing somebody eventually reads by
-    /// mistake, so the old copy has to go once everything on it has landed.
-    #[tokio::test]
-    async fn the_import_empties_the_old_partition() {
-        let services = services().await;
-
-        seed_legacy_registry(&services, &installation(1, "notheotherben")).await;
-        seed_legacy_registry(&services, &installation(2, "SierraSoftworks")).await;
-
-        import_installations_as_connections(&services)
-            .await
-            .expect("import the installations");
-
-        assert!(
-            legacy_registry(&services).await.is_empty(),
-            "the old registry must not outlive the import that drained it"
-        );
-    }
-
-    #[tokio::test]
-    async fn the_import_can_be_run_again_without_duplicating_anything() {
-        let services = services().await;
-
-        seed_legacy_registry(&services, &installation(1, "notheotherben")).await;
-
-        assert_eq!(
-            import_installations_as_connections(&services)
-                .await
-                .expect("import the installations"),
-            1
-        );
-        assert_eq!(
-            import_installations_as_connections(&services)
-                .await
-                .expect("import the installations again"),
-            0
-        );
-        assert_eq!(linked(&services).await.len(), 1);
-    }
-
-    /// Belt and braces for the case the marker cannot cover: an instance restored
-    /// from a backup taken before the marker was written would walk the old
-    /// registry again, and must not end up with two connections to the same
-    /// account.
-    #[tokio::test]
-    async fn the_import_makes_no_duplicates_when_its_marker_is_missing() {
-        let services = services().await;
-
-        record_installation(&installation(42, "SierraSoftworks"), &services)
-            .await
-            .expect("record the installation");
-        seed_legacy_registry(&services, &installation(42, "SierraSoftworks")).await;
-
-        assert_eq!(
-            import_installations_as_connections(&services)
-                .await
-                .expect("import the installations"),
-            0
-        );
-        assert_eq!(linked(&services).await.len(), 1);
-    }
-
-    /// Once the import has run, `record_installation` is the only thing that
-    /// creates a GitHub connection. A start-up scan that kept reading the old
-    /// registry would be a second path doing it, quietly second-guessing whatever
-    /// the person has since done in the browser.
-    #[tokio::test]
-    async fn the_import_stops_reading_the_old_registry_once_it_has_run() {
-        let services = services().await;
-
-        assert_eq!(
-            import_installations_as_connections(&services)
-                .await
-                .expect("import with nothing to import"),
-            0
-        );
-
-        seed_legacy_registry(&services, &installation(42, "SierraSoftworks")).await;
-
-        assert_eq!(
-            import_installations_as_connections(&services)
-                .await
-                .expect("import after the marker was written"),
-            0
-        );
-        assert!(linked(&services).await.is_empty());
     }
 
     /// The whole point of collapsing the two records: the integrations page and

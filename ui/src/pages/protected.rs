@@ -27,7 +27,7 @@ pub fn protected(props: &ProtectedProps) -> Html {
                 kind={AlertKind::Error}
                 title="Access denied"
                 message="Your request was not permitted by the admin access-control policy. \
-                    If this is unexpected, check the agent's `[web.admin]` acl configuration."
+                    If this is unexpected, check the agent's `[web.auth]` ACL configuration."
             />
         },
         AuthStatus::Error(msg) => {

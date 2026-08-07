@@ -153,15 +153,14 @@ pub fn public_wizard_outcome<S: Services>(
     wizard_acl: Option<&Filter>,
 ) -> PublicWizardOutcome {
     let config = services.config();
-    let admin = &config.web.admin;
 
     let acl = match wizard_acl {
         Some(acl) => acl,
         None => {
-            if admin.oidc.is_some() {
+            if config.web.oidc().is_some() {
                 return PublicWizardOutcome::AdminOnly;
             }
-            &admin.acl
+            config.web.admin_acl()
         }
     };
 

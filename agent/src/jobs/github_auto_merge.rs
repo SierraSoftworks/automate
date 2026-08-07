@@ -214,11 +214,8 @@ impl GitHubAutoMergeWorkflow {
 
     /// The credential management calls are made with.
     ///
-    /// Prefers an App installation token, so the approval and merge are
-    /// attributed to the App and limited to the repositories that installation
-    /// covers. Falls back to the personal access token when the App is not
-    /// configured, or when [`Self::acting_installation`] could not establish an
-    /// installation to mint one for.
+    /// Uses an App installation token, so the approval and merge are attributed
+    /// to the App and limited to the repositories that installation covers.
     async fn management_token(
         installation: Option<u64>,
         services: &(impl Services + Send + Sync + 'static),
@@ -234,7 +231,7 @@ impl GitHubAutoMergeWorkflow {
             ));
         }
 
-        Ok(config.connections.github.api_key.clone())
+        Ok(None)
     }
 
     /// Raises a reminder to turn on the repository's "Allow auto-merge"
