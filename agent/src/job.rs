@@ -409,10 +409,6 @@ impl JobHost {
                             item.partition,
                             item.payload
                         );
-                        services.session().record_event(
-                            "job::missing-handler",
-                            [("partition".to_string(), item.partition.clone())].into(),
-                        );
                         if let Err(err) = services
                             .queue()
                             .complete(item.partition.clone(), item)
