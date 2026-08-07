@@ -51,6 +51,30 @@
 # runs as, after which you can delete this section.
 api_key = "${{ env.TODOIST_API_KEY }}"
 
+# The Todoist OAuth application each person connects their own account through,
+# so tasks are created as them rather than through one shared token. Register it
+# at https://app.todoist.com/app_console/ and set its OAuth redirect URL to
+# https://your-automate-host/integrations/todoist/setup/callback.
+#
+# The same client secret is what Todoist signs webhook deliveries with, so
+# configuring this also enables POST /webhooks/todoist. Set that as the app's
+# webhook callback URL (Todoist requires HTTPS with no port) and tick the events
+# you want; deliveries arrive for each user who has authorised the app, and are
+# routed to whichever of their workflows selected that account.
+# [connections.todoist.app]
+# client_id = "${{ env.TODOIST_CLIENT_ID }}"
+# client_secret = "${{ env.TODOIST_CLIENT_SECRET }}"
+# The key deliveries are checked against. Todoist has no separate webhook
+# secret — it signs with the client secret — so this is the same value under
+# another name, for when you keep one variable per purpose. Leave it out and
+# the client secret above is used. Anything else rejects every delivery.
+# webhook_secret = "${{ env.TODOIST_WEBHOOK_SECRET }}"
+# What to ask for. Sent comma-separated, as Todoist expects.
+# scopes = ["data:read_write"]
+# Who may use the connect wizard, evaluated exactly like the OAuth providers'
+# acl. Admin-gated when omitted.
+# acl = 'true'
+
 [connections.ynab]
 # A YNAB Personal Access Token, created from your YNAB account settings.
 api_key = "${{ env.YNAB_API_KEY }}"

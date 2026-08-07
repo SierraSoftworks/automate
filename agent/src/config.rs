@@ -138,13 +138,8 @@ impl AuditConfig {
 
 #[derive(Default, Clone, Deserialize)]
 pub struct ConnectionConfigs {
-    /// The Todoist credential an installation used to share.
-    ///
-    /// Superseded by per-account connections. Kept only so that an existing
-    /// configuration file still loads and can be imported once on start-up; see
-    /// [`crate::connections::import_configured_credentials`].
     #[serde(default)]
-    pub todoist: LegacyApiKey,
+    pub todoist: TodoistConfig,
 
     #[serde(default)]
     pub github: GitHubConfig,
@@ -439,11 +434,61 @@ pub struct YnabConfig {
     pub api_key: Option<String>,
 }
 
-/// A credential that used to live in the configuration file.
 #[derive(Default, Clone, Deserialize)]
-pub struct LegacyApiKey {
+pub struct TodoistConfig {
+    /// The Todoist credential an installation used to share.
+    ///
+    /// Superseded by per-account connections. Kept only so that an existing
+    /// configuration file still loads and can be imported once on start-up; see
+    /// [`crate::connections::import_configured_credentials`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub api_key: Option<String>,
+
+    /// The Todoist OAuth application each person connects their own account
+    /// through, so the agent acts on their behalf rather than through one
+    /// shared token.
+    #[serde(default)]
+    pub app: Option<TodoistAppConfig>,
+}
+
+#[derive(Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TodoistAppConfig {
+    /// The app's Client ID, from the Todoist App Management Console.
+    pub client_id: String,
+
+    /// The app's Client Secret. This doubles as the key Todoist signs webhook
+    /// deliveries with, so the same value gates both halves of the integration.
+    pub client_secret: String,
+
+    /// The key webhook deliveries are checked against, when it is held apart
+    /// from the client secret.
+    ///
+    /// Todoist has no separate webhook secret — it signs with the client secret
+    /// — so this is the same value under another name, and exists because an
+    /// operator may keep one variable per purpose (as the GitHub App does) and
+    /// would otherwise have nowhere to put it. Setting it to anything other
+    /// than the client secret rejects every delivery.
+    #[serde(default)]
+    pub webhook_secret: Option<String>,
+
+    /// The permissions to request. Todoist sends these comma-separated.
+    #[serde(default = "default_todoist_scopes")]
+    pub scopes: Vec<String>,
+
+    /// Where Todoist's API lives. Only worth setting to point the agent at a
+    /// stand-in for it.
+    #[serde(default)]
+    pub api_url: Option<String>,
+
+    /// Who may run the connect wizard. Evaluated exactly like the OAuth2
+    /// providers' `acl`, and admin-gated when omitted.
+    #[serde(default)]
+    pub acl: Option<Filter>,
+}
+
+fn default_todoist_scopes() -> Vec<String> {
+    vec!["data:read_write".to_string()]
 }
 
 #[derive(Default, Clone, Deserialize)]

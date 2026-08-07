@@ -219,7 +219,10 @@ The project uses GitHub Actions for CI/CD:
 1. Create a new module in `src/webhooks/`
 2. Implement signature verification if required
 3. Add configuration struct in `src/config.rs`
-4. Register the webhook route in the web server
+4. For a service with one shared address (a GitHub App, a Todoist app),
+   implement `webhooks::WebhookSource` and `register_webhook_source!`. The
+   `/webhooks/{source}` route, signature check, tenant fan-out and queueing are
+   shared in `src/webhooks/routing.rs`; do not add a route or a handler.
 5. Add example configuration to `config.example.toml`
 6. Add tests using wiremock for HTTP mocking
 

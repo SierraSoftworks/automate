@@ -8,12 +8,14 @@ mod github;
 mod grafana;
 mod grey;
 mod honeycomb;
+mod routing;
 mod sentry;
 mod tailscale;
 mod terraform;
+mod todoist;
 
 pub use github::{GitHubAttentionEvent, GitHubAttentionKind, GitHubPullRequestEvent};
-pub(crate) use github::{GitHubWebhook, GitHubWebhookConfig};
+pub use routing::{Delivered, WebhookSource, WebhookSourceRegistration, route, source};
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct WebhookEvent {
@@ -86,5 +88,13 @@ impl WebhookEvent {
             "Failed to parse webhook event payload as the expected type.",
             &["Make sure the sender of the webhook is sending the expected payload format."],
         )
+    }
+
+    /// A header, matched without regard to case as HTTP requires (RFC 7230).
+    pub fn header(&self, name: &str) -> Option<&str> {
+        self.headers
+            .iter()
+            .find(|(key, _)| key.eq_ignore_ascii_case(name))
+            .map(|(_, value)| value.as_str())
     }
 }

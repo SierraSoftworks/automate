@@ -127,6 +127,25 @@ once on start-up into the account a single-user installation runs as, so
 your workflows keep publishing. Once that has happened you can delete the
 section. The import never overwrites a connection you have since replaced.
 
+### Todoist
+
+Register a Todoist app at <https://app.todoist.com/app_console/>, point its
+OAuth redirect URL at `https://your-host/integrations/todoist/setup/callback`,
+and put its credentials in `[connections.todoist.app]`. Each person then
+connects their own Todoist account from the connections page, and the agent
+acts as them rather than through one shared token.
+
+The same client secret is what Todoist signs webhooks with, so configuring
+the app also enables `POST /webhooks/todoist`. Set that as the app's webhook
+callback URL — Todoist requires HTTPS with no port — and the **Todoist**
+workflow type can react to items being completed, comments being added,
+projects being archived, and so on, as they happen. Deliveries are routed by
+the Todoist account they name, so each person's events only reach their own
+workflows.
+
+Access tokens issued to a new Todoist app last an hour and are renewed on
+demand, immediately before the token is used, rather than on a schedule.
+
 ### Encryption of stored credentials
 
 API tokens, OAuth refresh tokens and webhook signing secrets are
