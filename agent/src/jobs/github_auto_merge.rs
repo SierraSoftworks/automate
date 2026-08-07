@@ -32,6 +32,12 @@ pub struct GitHubAutoMergeTask {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub connection: Option<ConnectionId>,
 
+    /// Where the reminders this raises are filed, taken from the workflow that
+    /// dispatched it. Defaulted so a message queued before this field existed
+    /// still deserialises.
+    #[serde(default)]
+    pub todoist: TodoistTarget,
+
     pub event: GitHubPullRequestEvent,
 }
 
@@ -80,11 +86,6 @@ pub struct GitHubAutoMergeConfig {
 
     #[serde(default = "default_approval_message")]
     pub approval_message: String,
-
-    /// Where the reminders to turn on a repository's "Allow auto-merge" setting
-    /// are filed.
-    #[serde(default)]
-    pub todoist: TodoistTarget,
 }
 
 impl Default for GitHubAutoMergeConfig {
@@ -94,7 +95,6 @@ impl Default for GitHubAutoMergeConfig {
             filter: default_auto_merge_filter(),
             approve: false,
             approval_message: default_approval_message(),
-            todoist: TodoistTarget::default(),
         }
     }
 }
@@ -245,7 +245,7 @@ impl GitHubAutoMergeWorkflow {
     /// unchanged upsert which Todoist is never told about.
     async fn request_repository_configuration(
         event: &GitHubPullRequestEvent,
-        config: &GitHubAutoMergeConfig,
+        todoist: &TodoistTarget,
         services: &(impl Services + Send + Sync + 'static),
     ) -> Result<(), human_errors::Error> {
         let repository = &event.repository.full_name;
@@ -261,7 +261,7 @@ impl GitHubAutoMergeWorkflow {
                     "Auto-merge could not be enabled on a pull request because {repository} does not allow it.\n\nTurn on **Allow auto-merge** under https://github.com/{repository}/settings."
                 )),
                 priority: Some(2),
-                config: config.todoist.clone(),
+                config: todoist.clone(),
                 ..Default::default()
             },
             Some(unique_key.into()),
@@ -277,7 +277,7 @@ impl GitHubAutoMergeWorkflow {
     /// which also files reminders ends up with one task for it rather than two.
     async fn request_manual_merge(
         event: &GitHubPullRequestEvent,
-        config: &GitHubAutoMergeConfig,
+        todoist: &TodoistTarget,
         services: &(impl Services + Send + Sync + 'static),
     ) -> Result<(), human_errors::Error> {
         let repository = &event.repository.full_name;
@@ -294,7 +294,7 @@ impl GitHubAutoMergeWorkflow {
                     "Auto-merge is not available on {repository}, so this pull request needs merging by hand once its checks have passed."
                 )),
                 priority: Some(2),
-                config: config.todoist.clone(),
+                config: todoist.clone(),
                 ..Default::default()
             },
             Some(unique_key.into()),
@@ -322,6 +322,7 @@ impl Job for GitHubAutoMergeWorkflow {
         let services = ctx.services();
         let auto_merge = &job.config;
         let connection = job.connection;
+        let todoist = &job.todoist;
         let job = &job.event;
 
         if !auto_merge.filter.matches(job)? {
@@ -375,13 +376,13 @@ impl Job for GitHubAutoMergeWorkflow {
                         "Auto-merge is not allowed on the private repository {}; raising a reminder to merge pull request {job} by hand.",
                         job.repository.full_name
                     );
-                    Self::request_manual_merge(job, auto_merge, services).await?;
+                    Self::request_manual_merge(job, todoist, services).await?;
                 } else {
                     warn!(
                         "Auto-merge is not allowed on {}; raising a reminder to enable it.",
                         job.repository.full_name
                     );
-                    Self::request_repository_configuration(job, auto_merge, services).await?;
+                    Self::request_repository_configuration(job, todoist, services).await?;
                 }
             }
             AutoMergeOutcome::Declined(reason) => {
@@ -591,7 +592,7 @@ mod tests {
         let services = crate::testing::mock_services()
             .await
             .expect("build mock services");
-        let config = GitHubAutoMergeConfig::default();
+        let todoist = TodoistTarget::default();
 
         let first = event("opened", "dependabot[bot]");
         let mut second = event("opened", "dependabot[bot]");
@@ -601,7 +602,7 @@ mod tests {
         for pull_request in [&first, &second] {
             GitHubAutoMergeWorkflow::request_repository_configuration(
                 pull_request,
-                &config,
+                &todoist,
                 &services,
             )
             .await
@@ -635,7 +636,7 @@ mod tests {
         let services = crate::testing::mock_services()
             .await
             .expect("build mock services");
-        let config = GitHubAutoMergeConfig::default();
+        let todoist = TodoistTarget::default();
 
         let mut first = event("opened", "dependabot[bot]");
         first.repository.private = true;
@@ -645,7 +646,7 @@ mod tests {
         second.pull_request.html_url = "https://github.com/example/repo/pull/2".to_string();
 
         for pull_request in [&first, &second] {
-            GitHubAutoMergeWorkflow::request_manual_merge(pull_request, &config, &services)
+            GitHubAutoMergeWorkflow::request_manual_merge(pull_request, &todoist, &services)
                 .await
                 .expect("the reminder should be raised");
         }
@@ -685,6 +686,7 @@ mod tests {
                 &GitHubAutoMergeTask {
                     config: GitHubAutoMergeConfig::default(),
                     connection: None,
+                    todoist: TodoistTarget::default(),
                     event: event("opened", "notheotherben"),
                 },
             )
@@ -745,6 +747,7 @@ mod tests {
                 &GitHubAutoMergeTask {
                     config: GitHubAutoMergeConfig::default(),
                     connection: Some(connection),
+                    todoist: TodoistTarget::default(),
                     event: delivered_for(99),
                 },
             )

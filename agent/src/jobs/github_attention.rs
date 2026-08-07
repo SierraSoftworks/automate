@@ -29,6 +29,13 @@ pub fn subject_key(repository: &str, number: u64) -> String {
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct GitHubAttentionTask {
     pub config: GitHubAttentionConfig,
+
+    /// Where the reminders this raises are filed, taken from the workflow that
+    /// dispatched it. Defaulted so a message queued before this field existed
+    /// still deserialises.
+    #[serde(default)]
+    pub todoist: TodoistTarget,
+
     pub event: GitHubAttentionEvent,
 }
 
@@ -80,9 +87,6 @@ pub struct GitHubAttentionConfig {
     /// them.
     #[serde(default)]
     pub security_alerts: Filter,
-
-    #[serde(default)]
-    pub todoist: TodoistTarget,
 }
 
 impl Default for GitHubAttentionConfig {
@@ -92,7 +96,6 @@ impl Default for GitHubAttentionConfig {
             comments: default_comment_filter(),
             assignments: default_assignment_filter(),
             security_alerts: Filter::default(),
-            todoist: TodoistTarget::default(),
         }
     }
 }
@@ -201,6 +204,7 @@ impl Job for GitHubAttentionWorkflow {
     ) -> Result<(), human_errors::Error> {
         let services = ctx.services();
         let attention = &job.config;
+        let todoist = &job.todoist;
         let job = &job.event;
 
         let filter = match job.kind {
@@ -228,7 +232,7 @@ impl Job for GitHubAttentionWorkflow {
                 #[allow(clippy::needless_update)]
                 TodoistCompleteTaskPayload {
                     unique_key: unique_key.clone(),
-                    config: attention.todoist.clone(),
+                    config: todoist.clone(),
                     ..Default::default()
                 },
                 Some(unique_key.into()),
@@ -243,7 +247,7 @@ impl Job for GitHubAttentionWorkflow {
                     description: Some(Self::description(job)),
                     due: TodoistDueDate::DateTime(ctx.scheduled_at()),
                     priority: Some(Self::priority(job)),
-                    config: attention.todoist.clone(),
+                    config: todoist.clone(),
                     ..Default::default()
                 },
                 Some(unique_key.into()),
@@ -282,7 +286,11 @@ mod tests {
 
     /// Pairs an event with the settings the workflow it arrived for holds.
     fn task(event: GitHubAttentionEvent, config: GitHubAttentionConfig) -> GitHubAttentionTask {
-        GitHubAttentionTask { config, event }
+        GitHubAttentionTask {
+            config,
+            todoist: TodoistTarget::default(),
+            event,
+        }
     }
 
     async fn services_with(

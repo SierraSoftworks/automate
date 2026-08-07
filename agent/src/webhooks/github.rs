@@ -99,6 +99,16 @@ pub struct GitHubWebhookConfig {
     /// `auto_merge`.
     #[serde(default)]
     pub attention: GitHubAttentionConfig,
+
+    /// Where every task this workflow raises is filed.
+    ///
+    /// One target for the whole workflow rather than one per section, because
+    /// the two sections deliberately converge: an auto-merge reminder about a
+    /// private repository's pull request shares its key with the attention task
+    /// for the same pull request, and two keys pointing at different projects
+    /// could not collapse onto one task.
+    #[serde(default)]
+    pub todoist: crate::publishers::TodoistTarget,
 }
 
 impl Display for GitHubWebhookConfig {
@@ -181,6 +191,15 @@ event, each matching on `kind`, `event`, `action`, `resolved`, `repository`,
 Comments and assignments on the same issue or pull request collapse onto one
 task, so a busy thread does not become a wall of them. Security alerts get one
 task each, because each needs its own fix.
+
+## Where the tasks go
+
+**Todoist account**, **Project** and **Section** say where everything this
+workflow raises is filed — both the reminders above and the auto-merge ones. It
+is one target rather than one per section on purpose: an auto-merge reminder
+about a private repository's pull request is the same task as the attention
+reminder for it, and they can only collapse onto one task if they are filed in
+the same place.
 "#;
 
 impl GitHubWebhook {
@@ -402,6 +421,11 @@ impl crate::workflows::ConfigurableWorkflow for GitHubWebhook {
             .into_iter()
             .chain(Self::auto_merge_fields())
             .chain(Self::attention_fields())
+            .chain(crate::todoist_target_fields!(
+                GitHubWebhookConfig,
+                project = Some("Hobbies"),
+                section = Some("Open Source")
+            ))
             .collect(),
         }
     }
@@ -607,6 +631,7 @@ impl Job for GitHubWebhook {
                     // its token from what its owner chose rather than from what
                     // the delivery claims to be.
                     connection: config.connection,
+                    todoist: config.todoist.clone(),
                     event: pull_request,
                 },
                 delivery.clone(),
@@ -624,6 +649,7 @@ impl Job for GitHubWebhook {
                     GitHubAttentionWorkflow::dispatch(
                         crate::jobs::GitHubAttentionTask {
                             config: config.attention.clone(),
+                            todoist: config.todoist.clone(),
                             event: attention,
                         },
                         delivery,
@@ -1799,6 +1825,77 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn both_kinds_of_task_are_filed_where_the_workflow_says() {
+        // Until the form asked for it there was no target to carry, so every
+        // task went to whichever Todoist account happened to be the only one
+        // linked. Both queues have to carry the workflow's own choice, and it
+        // has to be the same choice: an auto-merge reminder about a private
+        // repository's pull request shares its key with the attention task for
+        // that pull request.
+        let services = crate::services::ServicesContainer::new_mock()
+            .await
+            .expect("build mock services");
+        let connection = automate_api::ConnectionId::from_entropy(0xD00D);
+
+        let workflow = WorkflowStore::new(&services)
+            .with_index(&services)
+            .create(WorkflowDraft {
+                type_id: "github".into(),
+                config: serde_json::json!({
+                    "name": "SierraSoftworks",
+                    "auto_merge": on(),
+                    "attention": on(),
+                    "todoist": {
+                        "connection": connection.to_string(),
+                        "project": "Hobbies",
+                        "section": "Open Source",
+                    },
+                }),
+                schedule: None,
+                enabled: true,
+            })
+            .await
+            .expect("store the workflow")
+            .id;
+
+        run(
+            &services,
+            &event(
+                workflow,
+                &[
+                    ("X-GitHub-Event", "pull_request"),
+                    ("X-Hub-Signature-256", &sign("secret", BODY)),
+                ],
+            ),
+        )
+        .await
+        .expect("the pull request should dispatch");
+
+        run(
+            &services,
+            &event_of(
+                workflow,
+                COMMENT_BODY,
+                &[
+                    ("X-GitHub-Event", "issue_comment"),
+                    ("X-Hub-Signature-256", &sign("secret", COMMENT_BODY)),
+                ],
+            ),
+        )
+        .await
+        .expect("the comment should dispatch");
+
+        let expected = crate::publishers::TodoistTarget {
+            connection: Some(connection),
+            project: Some("Hobbies".to_string()),
+            section: Some("Open Source".to_string()),
+        };
+
+        assert_eq!(auto_merge_tasks(&services).await[0].todoist, expected);
+        assert_eq!(attention_tasks(&services).await[0].todoist, expected);
+    }
+
+    #[tokio::test]
     async fn unsupported_events_are_ignored() {
         let (services, workflow) = services_with("secret", on(), on()).await;
         let job = event(
@@ -2042,17 +2139,21 @@ mod tests {
                 "attention.comments",
                 "attention.assignments",
                 "attention.security_alerts",
+                "todoist.connection",
+                "todoist.project",
+                "todoist.section",
             ],
         );
     }
 
     #[test]
-    fn the_installation_is_the_only_thing_besides_a_name_a_workflow_must_be_told() {
+    fn the_installation_and_the_todoist_account_are_what_a_workflow_must_be_told() {
         // Which installation a workflow serves cannot be inferred from a
         // delivery we have not yet decided to trust, and installing the App is
         // now what puts an account in the picker, so insisting on it is a
-        // question somebody can actually answer. Everything else has a sensible
-        // starting point.
+        // question somebody can actually answer. The Todoist account is asked
+        // for on the same terms as it is by every other workflow that files
+        // tasks. Everything else has a sensible starting point.
         use crate::workflows::ConfigurableWorkflow;
 
         let required: Vec<String> = GitHubWebhook::descriptor()
@@ -2062,7 +2163,7 @@ mod tests {
             .map(|field| field.name)
             .collect();
 
-        assert_eq!(required, vec!["name", "connection"]);
+        assert_eq!(required, vec!["name", "connection", "todoist.connection"]);
     }
 
     #[test]
