@@ -302,8 +302,8 @@ mod tests {
             config.connections.todoist.app = Some(crate::config::TodoistAppConfig {
                 client_id: "todoist-client".into(),
                 client_secret: "todoist-client-secret".into(),
-                // Held apart from the client secret here, so the tests exercise
-                // the key deliveries are actually checked against.
+                // Deliberately not the client secret: Todoist signs with the
+                // app's Verification Token, and the two are different values.
                 webhook_secret: Some(TODOIST_SECRET.into()),
                 scopes: vec!["data:read_write".into()],
                 api_url: None,
@@ -314,7 +314,7 @@ mod tests {
         .unwrap()
     }
 
-    const TODOIST_SECRET: &str = "todoist-client-secret";
+    const TODOIST_SECRET: &str = "todoist-verification-token";
 
     macro_rules! app {
         ($context:expr) => {

@@ -457,18 +457,17 @@ pub struct TodoistAppConfig {
     /// The app's Client ID, from the Todoist App Management Console.
     pub client_id: String,
 
-    /// The app's Client Secret. This doubles as the key Todoist signs webhook
-    /// deliveries with, so the same value gates both halves of the integration.
+    /// The app's Client Secret, from the Todoist App Management Console.
     pub client_secret: String,
 
-    /// The key webhook deliveries are checked against, when it is held apart
-    /// from the client secret.
+    /// The app's **Verification Token**, also from the App Management Console,
+    /// which is what Todoist signs webhook deliveries with.
     ///
-    /// Todoist has no separate webhook secret — it signs with the client secret
-    /// — so this is the same value under another name, and exists because an
-    /// operator may keep one variable per purpose (as the GitHub App does) and
-    /// would otherwise have nowhere to put it. Setting it to anything other
-    /// than the client secret rejects every delivery.
+    /// A different value from the client secret, despite what Todoist's API
+    /// reference says, so the two cannot be used interchangeably. Optional
+    /// because the OAuth half of the integration works without it; deliveries
+    /// are refused until it is set, since there would be nothing to check them
+    /// against.
     #[serde(default)]
     pub webhook_secret: Option<String>,
 
