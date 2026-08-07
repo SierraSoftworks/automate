@@ -151,6 +151,11 @@ review.
 Auto-merge writes to your repositories, so it needs the GitHub App installed on
 the account that owns them, named by **GitHub installation**.
 
+When a repository does not allow auto-merge, a Todoist task asks you to turn on
+its **Allow auto-merge** setting — unless the repository is private, where the
+setting may not be available at all, in which case the task asks you to merge
+that pull request by hand instead.
+
 ## Reminders
 
 **File reminders** is the switch. Below it are three filters, one per kind of

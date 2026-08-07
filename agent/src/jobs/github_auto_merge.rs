@@ -1,6 +1,7 @@
 use automate_api::ConnectionId;
 
 use crate::connections::{ConnectionSecret, ConnectionStore};
+use crate::jobs::subject_key;
 use crate::prelude::*;
 use crate::publishers::TodoistTarget;
 use crate::publishers::{TodoistUpsertTask, TodoistUpsertTaskPayload};
@@ -268,6 +269,39 @@ impl GitHubAutoMergeWorkflow {
         )
         .await
     }
+
+    /// Raises a reminder to merge this pull request by hand.
+    ///
+    /// Keyed and titled the way [`crate::jobs::GitHubAttentionWorkflow`] and the
+    /// notifications collector key and title the same pull request, so a repository
+    /// which also files reminders ends up with one task for it rather than two.
+    async fn request_manual_merge(
+        event: &GitHubPullRequestEvent,
+        config: &GitHubAutoMergeConfig,
+        services: &(impl Services + Send + Sync + 'static),
+    ) -> Result<(), human_errors::Error> {
+        let repository = &event.repository.full_name;
+        let unique_key = subject_key(repository, event.number);
+
+        TodoistUpsertTask::dispatch(
+            TodoistUpsertTaskPayload {
+                unique_key: unique_key.clone(),
+                title: format!(
+                    "[**{repository}#{}**]({}): {}",
+                    event.number, event.pull_request.html_url, event.pull_request.title
+                ),
+                description: Some(format!(
+                    "Auto-merge is not available on {repository}, so this pull request needs merging by hand once its checks have passed."
+                )),
+                priority: Some(2),
+                config: config.todoist.clone(),
+                ..Default::default()
+            },
+            Some(unique_key.into()),
+            services,
+        )
+        .await
+    }
 }
 
 crate::register_job!(GitHubAutoMergeWorkflow);
@@ -332,11 +366,23 @@ impl Job for GitHubAutoMergeWorkflow {
                 info!("Enabled auto-merge on pull request {job}.");
             }
             AutoMergeOutcome::NotAllowed => {
-                warn!(
-                    "Auto-merge is not allowed on {}; raising a reminder to enable it.",
-                    job.repository.full_name
-                );
-                Self::request_repository_configuration(job, auto_merge, services).await?;
+                // A private repository on a plan without auto-merge cannot turn
+                // the setting on at all, so asking its owner to would be a task
+                // they could never complete; the pull request is what needs a
+                // person instead.
+                if job.repository.private {
+                    warn!(
+                        "Auto-merge is not allowed on the private repository {}; raising a reminder to merge pull request {job} by hand.",
+                        job.repository.full_name
+                    );
+                    Self::request_manual_merge(job, auto_merge, services).await?;
+                } else {
+                    warn!(
+                        "Auto-merge is not allowed on {}; raising a reminder to enable it.",
+                        job.repository.full_name
+                    );
+                    Self::request_repository_configuration(job, auto_merge, services).await?;
+                }
             }
             AutoMergeOutcome::Declined(reason) => {
                 warn!("Auto-merge could not be enabled on pull request {job}: {reason}");
@@ -577,6 +623,53 @@ mod tests {
         assert_eq!(
             reminders[0].payload.title,
             "[**example/repo**](https://github.com/example/repo/settings): Enable auto-merge"
+        );
+    }
+
+    /// A private repository cannot necessarily turn auto-merge on at all, so the
+    /// reminder is about the pull request rather than the repository's settings —
+    /// and it is keyed the way the attention path keys the same pull request, so
+    /// the two converge on one task instead of raising a second one.
+    #[tokio::test]
+    async fn private_repositories_are_reminded_about_the_pull_request() {
+        let services = crate::testing::mock_services()
+            .await
+            .expect("build mock services");
+        let config = GitHubAutoMergeConfig::default();
+
+        let mut first = event("opened", "dependabot[bot]");
+        first.repository.private = true;
+
+        let mut second = first.clone();
+        second.number = 2;
+        second.pull_request.html_url = "https://github.com/example/repo/pull/2".to_string();
+
+        for pull_request in [&first, &second] {
+            GitHubAutoMergeWorkflow::request_manual_merge(pull_request, &config, &services)
+                .await
+                .expect("the reminder should be raised");
+        }
+
+        let reminders = services
+            .queue()
+            .peek::<_, TodoistUpsertTaskPayload>(TodoistUpsertTask::partition(), 10)
+            .await
+            .expect("peek the Todoist upsert queue");
+
+        let keys: Vec<_> = reminders.iter().map(|r| r.key.as_str()).collect();
+        assert_eq!(
+            keys,
+            vec![
+                "github/attention/example/repo#1",
+                "github/attention/example/repo#2"
+            ],
+            "each pull request needs merging on its own, and shares its key with the attention path"
+        );
+
+        assert_eq!(
+            reminders[0].payload.title,
+            "[**example/repo#1**](https://github.com/example/repo/pull/1): Bump serde",
+            "the title must match the one the attention path renders for the same subject"
         );
     }
 
