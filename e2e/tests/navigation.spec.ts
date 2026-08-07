@@ -98,6 +98,21 @@ for (const { path, title, action } of [
   });
 }
 
+for (const { path, action } of [
+  { path: "/admin/workflows?demo", action: "Add Workflow" },
+  { path: "/admin/connections?demo", action: "Add Connection" },
+  { path: "/admin/activity?demo", action: "Refresh" },
+  { path: "/admin?demo", action: "Refresh" },
+]) {
+  test(`${path} uses a primary toolbar action`, async ({ page }) => {
+    await gotoApp(page, path);
+
+    await expect(page.locator(".page-toolbar").getByRole("button", { name: action })).toHaveClass(
+      /\bbtn--primary\b/,
+    );
+  });
+}
+
 test("a hard refresh on a deep link lands on the same page it was showing", async ({ page }) => {
   // Client-side routes do not exist on the server, so a refresh asks the agent
   // for `/admin/workflows` directly. The SPA fallback has to answer with
