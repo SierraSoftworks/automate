@@ -1,11 +1,13 @@
 use std::collections::HashMap;
 
 use super::{
-    Connection, Integration, IntegrationContext, IntegrationInfo, SetupComplete, SetupRedirect,
+    Connection, Integration, IntegrationContext, IntegrationInfo, RefreshOutcome, SetupComplete,
+    SetupRedirect,
 };
 use crate::config::Config;
 use crate::connections::{ConnectionSecret, ConnectionStore};
 use crate::prelude::*;
+use crate::services::AppServices;
 
 pub struct OAuth2Integration;
 
@@ -200,6 +202,17 @@ impl Integration for OAuth2Integration {
 
         Ok(())
     }
+
+    async fn refresh(
+        &self,
+        connection: &crate::connections::Connection,
+        services: &AppServices,
+    ) -> Result<RefreshOutcome, human_errors::Error> {
+        match crate::connections::renew_oauth2(connection, services).await? {
+            Some(_) => Ok(RefreshOutcome::Current),
+            None => Ok(RefreshOutcome::NeedsReauthorization),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -207,14 +220,22 @@ mod tests {
     use super::*;
     use crate::services::AppContext;
     use crate::web::OAuth2Config;
-    use automate_api::ConnectionId;
+    use automate_api::{ConnectionId, ConnectionStatus};
+    use chrono::{Duration, Utc};
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
 
     fn alice() -> TenantId {
         TenantId::new("alice").unwrap()
     }
 
     async fn context() -> AppContext {
-        AppContext::new_mock(|config| {
+        context_at("https://accounts.spotify.com/api/token".to_string()).await
+    }
+
+    /// A context whose Spotify token exchanges are addressed at `token_url`.
+    async fn context_at(token_url: String) -> AppContext {
+        AppContext::new_mock(move |config| {
             config.oauth2.insert(
                 "spotify".to_string(),
                 OAuth2Config {
@@ -224,7 +245,7 @@ mod tests {
                     client_id: "client".to_string(),
                     client_secret: "secret".to_string(),
                     auth_url: "https://accounts.spotify.com/authorize".to_string(),
-                    token_url: "https://accounts.spotify.com/api/token".to_string(),
+                    token_url: token_url.clone(),
                     scopes: vec![],
                     todoist: Default::default(),
                 },
@@ -244,6 +265,22 @@ mod tests {
 
     /// Links an account directly, standing in for a completed authorisation.
     async fn connect(context: &AppContext, tenant: TenantId, account: &str) -> ConnectionId {
+        connect_expiring(
+            context,
+            tenant,
+            account,
+            "2030-01-01T00:00:00Z".parse().unwrap(),
+        )
+        .await
+    }
+
+    /// Links an account whose access token runs out at `expires_at`.
+    async fn connect_expiring(
+        context: &AppContext,
+        tenant: TenantId,
+        account: &str,
+        expires_at: chrono::DateTime<Utc>,
+    ) -> ConnectionId {
         let store = ConnectionStore::new(context.tenant(tenant.clone()), tenant);
 
         store
@@ -254,7 +291,7 @@ mod tests {
                 ConnectionSecret::OAuth2 {
                     access_token: "access-tYqR9".into(),
                     refresh_token: "refresh-Kx3Lm".into(),
-                    expires_at: "2030-01-01T00:00:00Z".parse().unwrap(),
+                    expires_at,
                 },
             )
             .await
@@ -387,6 +424,101 @@ mod tests {
                 .disconnect("todoist", &id.to_string(), ctx(&context, alice()))
                 .await
                 .is_err()
+        );
+    }
+
+    /// What the background sweep is for: a grant approaching expiry is renewed
+    /// and the rotated pair stored, so the workflow that runs next finds an
+    /// access token it can use as it stands — and the refresh token has been
+    /// exercised, which is what stops the provider dropping it for disuse.
+    #[tokio::test]
+    async fn an_expiring_grant_is_renewed_and_the_rotated_pair_is_stored() {
+        let spotify = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/api/token"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "access_token": "access-2",
+                "refresh_token": "refresh-2",
+                "expires_in": 3600,
+                "token_type": "bearer",
+            })))
+            .mount(&spotify)
+            .await;
+
+        let context = context_at(format!("{}/api/token", spotify.uri())).await;
+        let id = connect_expiring(
+            &context,
+            alice(),
+            "alice-personal",
+            Utc::now() + Duration::minutes(1),
+        )
+        .await;
+
+        let services = context.tenant(alice());
+        let store = ConnectionStore::new(services.clone(), alice());
+        let connection = store.get(id).await.unwrap().unwrap();
+
+        assert!(matches!(
+            OAuth2Integration
+                .refresh(&connection, &services)
+                .await
+                .unwrap(),
+            RefreshOutcome::Current
+        ));
+
+        let renewed = store.get(id).await.unwrap().unwrap();
+        match store.open(&renewed).unwrap() {
+            ConnectionSecret::OAuth2 {
+                access_token,
+                refresh_token,
+                ..
+            } => {
+                assert_eq!(access_token, "access-2");
+                assert_eq!(refresh_token, "refresh-2");
+            }
+            other => panic!("expected an oauth2 grant, got {other:?}"),
+        }
+    }
+
+    /// A refresh token the provider has revoked cannot be recovered by trying
+    /// again, so the connection is marked and the sweep reports it rather than
+    /// failing — only the person who granted it can put it right.
+    #[tokio::test]
+    async fn a_revoked_grant_marks_the_connection_for_reauthorization() {
+        let spotify = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/api/token"))
+            .respond_with(
+                ResponseTemplate::new(400)
+                    .set_body_json(serde_json::json!({ "error": "invalid_grant" })),
+            )
+            .mount(&spotify)
+            .await;
+
+        let context = context_at(format!("{}/api/token", spotify.uri())).await;
+        let id = connect_expiring(
+            &context,
+            alice(),
+            "alice-personal",
+            Utc::now() + Duration::minutes(1),
+        )
+        .await;
+
+        let services = context.tenant(alice());
+        let store = ConnectionStore::new(services.clone(), alice());
+        let connection = store.get(id).await.unwrap().unwrap();
+
+        assert!(matches!(
+            OAuth2Integration
+                .refresh(&connection, &services)
+                .await
+                .unwrap(),
+            RefreshOutcome::NeedsReauthorization
+        ));
+
+        assert_eq!(
+            store.get(id).await.unwrap().unwrap().status,
+            ConnectionStatus::NeedsReauthorization
         );
     }
 

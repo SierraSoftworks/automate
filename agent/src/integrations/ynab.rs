@@ -28,11 +28,13 @@ use serde_json::{Map, Value};
 use automate_api::{ConnectionId, ConnectionStatus};
 
 use super::{
-    Connection, Integration, IntegrationContext, IntegrationInfo, SetupComplete, SetupRedirect,
+    Connection, Integration, IntegrationContext, IntegrationInfo, RefreshOutcome, SetupComplete,
+    SetupRedirect,
 };
 use crate::config::{Config, YnabAppConfig};
-use crate::connections::{ConnectionSecret, ConnectionStore};
+use crate::connections::{ConnectionSecret, ConnectionStore, RENEW_BEFORE};
 use crate::prelude::*;
+use crate::services::AppServices;
 
 /// The provider name under which YNAB accounts are linked.
 pub const YNAB_PROVIDER: &str = "ynab";
@@ -49,13 +51,6 @@ const API_URL: &str = "https://api.ynab.com/v1";
 /// not even an email address — the only thing distinguishing one linked account
 /// from another.
 pub const ACCOUNT_USER: &str = "user";
-
-/// How long before expiry a token is renewed.
-///
-/// YNAB's access tokens last two hours, and a run that starts just inside the
-/// window would otherwise make its first call with a token that expires
-/// mid-run.
-const RENEW_BEFORE: Duration = Duration::minutes(5);
 
 /// How long an access token lasts when YNAB does not say.
 const DEFAULT_LIFETIME: i64 = 7200;
@@ -183,21 +178,20 @@ async fn exchange(
         .map(Grant::Issued)
 }
 
-/// Renews a grant that is about to expire, storing the rotated credential.
+/// Renews a grant that is close to expiring, storing the rotated credential.
 ///
-/// Returns the access token to use. A grant with no refresh token cannot be
-/// renewed and is returned as-is; the stored token may still have life in it,
-/// and refusing to use it would turn a missing configuration into a run that
-/// cannot happen.
-pub async fn access_token(
+/// A grant with no refresh token cannot be renewed and is reported as not due;
+/// the stored token may still have life in it, and treating that as a failure
+/// would turn a missing configuration into a run that cannot happen.
+async fn renew(
     services: &impl Services,
     connection: &crate::connections::Connection,
     secret: ConnectionSecret,
-) -> Result<String, human_errors::Error> {
+) -> Result<Renewal, human_errors::Error> {
     let ConnectionSecret::OAuth2 {
-        access_token,
         refresh_token,
         expires_at,
+        ..
     } = secret
     else {
         return Err(human_errors::system(
@@ -210,12 +204,12 @@ pub async fn access_token(
     };
 
     if refresh_token.is_empty() || expires_at > Utc::now() + RENEW_BEFORE {
-        return Ok(access_token);
+        return Ok(Renewal::NotDue);
     }
 
     let config = services.config();
     let Some(app) = app(&config) else {
-        return Ok(access_token);
+        return Ok(Renewal::NotDue);
     };
 
     let store = ConnectionStore::for_services(services);
@@ -241,10 +235,7 @@ pub async fn access_token(
                 .set_status(connection.id, ConnectionStatus::NeedsReauthorization)
                 .await?;
 
-            return Err(human_errors::user(
-                format!("YNAB will no longer accept this account's authorization ({reason})."),
-                &["Reconnect your YNAB account from the connections page."],
-            ));
+            return Ok(Renewal::Rejected(reason));
         }
     };
 
@@ -256,7 +247,53 @@ pub async fn access_token(
 
     debug!(connection.id = %connection.id, "Renewed the YNAB access token.");
 
-    Ok(renewed)
+    Ok(Renewal::Renewed(renewed))
+}
+
+/// What became of a grant offered for renewal.
+enum Renewal {
+    /// Not close enough to expiry to renew, or holding nothing to renew with.
+    NotDue,
+
+    /// Renewed, and the rotated pair stored. Carries the new access token.
+    Renewed(String),
+
+    /// YNAB will not honour this authorization again. The connection has been
+    /// marked; the reason is YNAB's own wording.
+    Rejected(String),
+}
+
+/// The access token to use for this connection, renewed first if it is due.
+///
+/// Workflows reach a grant through here rather than refreshing one themselves.
+/// In the ordinary case the background sweep in [`crate::connection_refresh`]
+/// has already renewed it and this returns what is stored; the renewal remains
+/// as the thing that covers a grant which became due between two sweeps.
+pub async fn access_token(
+    services: &impl Services,
+    connection: &crate::connections::Connection,
+    secret: ConnectionSecret,
+) -> Result<String, human_errors::Error> {
+    let ConnectionSecret::OAuth2 { access_token, .. } = &secret else {
+        return Err(human_errors::system(
+            format!(
+                "The connection '{}' does not hold a YNAB OAuth grant.",
+                connection.id
+            ),
+            &["Reconnect the account."],
+        ));
+    };
+
+    let stored = access_token.clone();
+
+    match renew(services, connection, secret).await? {
+        Renewal::NotDue => Ok(stored),
+        Renewal::Renewed(access_token) => Ok(access_token),
+        Renewal::Rejected(reason) => Err(human_errors::user(
+            format!("YNAB will no longer accept this account's authorization ({reason})."),
+            &["Reconnect your YNAB account from the connections page."],
+        )),
+    }
 }
 
 impl YnabAppIntegration {
@@ -493,6 +530,25 @@ impl Integration for YnabAppIntegration {
                 format!("There is no YNAB connection named '{connection}'."),
                 &["It may already have been removed."],
             )),
+        }
+    }
+
+    async fn refresh(
+        &self,
+        connection: &crate::connections::Connection,
+        services: &AppServices,
+    ) -> Result<RefreshOutcome, human_errors::Error> {
+        let secret = ConnectionStore::for_services(services).open(connection)?;
+
+        match renew(services, connection, secret).await? {
+            Renewal::NotDue | Renewal::Renewed(_) => Ok(RefreshOutcome::Current),
+            Renewal::Rejected(reason) => {
+                warn!(
+                    connection.id = %connection.id,
+                    "YNAB will no longer accept a stored authorization ({reason})."
+                );
+                Ok(RefreshOutcome::NeedsReauthorization)
+            }
         }
     }
 }

@@ -271,7 +271,7 @@ impl OAuth2RefreshToken {
     }
 
     pub fn needs_refresh(&self) -> bool {
-        chrono::Utc::now() + chrono::Duration::minutes(5) >= self.expires_at
+        chrono::Utc::now() + crate::connections::RENEW_BEFORE >= self.expires_at
     }
 
     pub fn access_token(&self) -> &str {

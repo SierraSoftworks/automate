@@ -94,6 +94,18 @@ impl IntegrationContext<'_> {
     }
 }
 
+/// What became of a connection's credential when it was offered for renewal.
+pub enum RefreshOutcome {
+    /// The credential is current: either it was renewed, or it was not yet due
+    /// — or it is not the kind of credential that expires.
+    Current,
+
+    /// The provider will not honour this grant again. The connection has been
+    /// marked as needing re-authorisation by the integration that discovered
+    /// it, so only the person who granted it can put it right.
+    NeedsReauthorization,
+}
+
 #[async_trait::async_trait]
 pub trait Integration: Send + Sync {
     /// Every integration of this kind configured on this instance.
@@ -149,6 +161,29 @@ pub trait Integration: Send + Sync {
             format!("The '{id}' integration cannot be disconnected from Automate."),
             &["Remove the connection from the provider's own settings instead."],
         ))
+    }
+
+    /// Renews the credential a connection holds, ahead of the moment a workflow
+    /// needs it.
+    ///
+    /// Called by [`crate::connection_refresh`] for every stored connection
+    /// approaching its expiry. Doing it on a schedule keeps the stored access
+    /// token usable as it stands, and — because a refresh token nobody
+    /// exercises is one a provider may eventually drop — keeps the grant behind
+    /// it alive through quiet periods.
+    ///
+    /// There is no `id` parameter, unlike the rest of this trait: an
+    /// integration serving several instances is reached through the connection
+    /// it is being asked about, which already names the one it belongs to.
+    ///
+    /// Defaults to leaving the connection alone, for credentials that do not
+    /// expire.
+    async fn refresh(
+        &self,
+        _connection: &crate::connections::Connection,
+        _services: &AppServices,
+    ) -> Result<RefreshOutcome, human_errors::Error> {
+        Ok(RefreshOutcome::Current)
     }
 }
 

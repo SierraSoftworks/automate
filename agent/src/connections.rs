@@ -45,6 +45,20 @@ pub const CONNECTIONS_PARTITION: &str = "connections";
 /// loop.
 const ID_ATTEMPTS: usize = 8;
 
+/// How long before an access token expires the grant behind it is renewed.
+///
+/// One window for every provider, because the thing it has to stay ahead of is
+/// the same for all of them: [`crate::connection_refresh`] sweeps on a shorter
+/// interval than this, so a grant is always renewed before a workflow could
+/// meet it expired. That is what lets a workflow use the access token it finds
+/// stored rather than arranging a refresh of its own.
+///
+/// Widening it also costs nothing an installation would notice — a token
+/// exchange every hour or so per connection — and buys the thing this exists
+/// for: a refresh token that is exercised regularly enough that a provider
+/// never drops it for disuse.
+pub const RENEW_BEFORE: chrono::TimeDelta = chrono::TimeDelta::minutes(30);
+
 /// The credential a connection holds.
 ///
 /// Only ever seen in plaintext between [`ConnectionStore::open`] and the client
@@ -554,23 +568,45 @@ pub async fn resolve_oauth2_token(
         ));
     }
 
+    renew_oauth2(&connection, services).await
+}
+
+/// Renews the grant a connection holds when it is due, storing the result.
+///
+/// Shared by the workflows that resolve a connection on their way to using it
+/// and by the background sweep that keeps grants current, so that a token
+/// obtained on demand and one obtained on a schedule are obtained the same way.
+///
+/// Returns `Ok(None)` when the provider will not honour the grant again: the
+/// connection has been marked and a re-authorization reminder raised by then.
+pub async fn renew_oauth2(
+    connection: &Connection,
+    services: &(impl Services + Send + Sync + 'static),
+) -> Result<Option<OAuth2RefreshToken>, human_errors::Error> {
+    let store = ConnectionStore::for_services(services);
+
     let ConnectionSecret::OAuth2 {
         access_token,
         refresh_token,
         expires_at,
-    } = store.open(&connection)?
+    } = store.open(connection)?
     else {
         return Err(human_errors::user(
-            format!("The selected {provider} connection does not hold an authorization grant."),
+            format!(
+                "The selected {} connection does not hold an authorization grant.",
+                connection.provider
+            ),
             &["Reconnect the account."],
         ));
     };
 
     let stored = OAuth2RefreshToken::new(access_token, refresh_token, expires_at);
 
-    let Some(token) = crate::web::refresh_or_notify(provider, &stored, services).await? else {
+    let Some(token) =
+        crate::web::refresh_or_notify(&connection.provider, &stored, services).await?
+    else {
         store
-            .set_status(id, ConnectionStatus::NeedsReauthorization)
+            .set_status(connection.id, ConnectionStatus::NeedsReauthorization)
             .await?;
         return Ok(None);
     };
@@ -580,7 +616,7 @@ pub async fn resolve_oauth2_token(
     if token.access_token() != stored.access_token() {
         store
             .update_secret(
-                id,
+                connection.id,
                 ConnectionSecret::OAuth2 {
                     access_token: token.access_token().to_string(),
                     refresh_token: token.refresh_token().to_string(),
