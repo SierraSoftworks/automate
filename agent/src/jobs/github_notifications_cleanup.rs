@@ -3,7 +3,10 @@ use std::fmt::Display;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    collectors::{GitHubNotificationsCollector, IncrementalCollector},
+    collectors::{
+        GitHubNotificationsCollector, GitHubNotificationsSubject, GitHubSubjectInformation,
+        IncrementalCollector,
+    },
     db::StateKey,
     prelude::*,
 };
@@ -25,6 +28,24 @@ impl Display for GitHubNotificationsCleanupConfig {
 
 #[derive(Clone)]
 pub struct GitHubNotificationsCleanupWorkflow;
+
+impl GitHubNotificationsCleanupWorkflow {
+    /// Whether this notification is one we can prove is finished with.
+    ///
+    /// Two conditions, and both are about not dismissing something a person
+    /// still needs to read. The subject has to be an issue or a pull request,
+    /// because that is the only thing GitHub gives an open/closed state and
+    /// this workflow only promises to act on those. And that state has to say
+    /// closed or merged, rather than merely failing to say open: releases,
+    /// commits and anything whose payload we model imperfectly all arrive with
+    /// no state at all, and "we could not tell" is not "it is done".
+    fn is_finished(
+        subject: &GitHubNotificationsSubject,
+        information: Option<&GitHubSubjectInformation>,
+    ) -> bool {
+        subject.issue_reference().is_some() && information.is_some_and(|i| i.is_resolved())
+    }
+}
 
 crate::register_job!(GitHubNotificationsCleanupWorkflow);
 crate::register_workflow_type!(GitHubNotificationsCleanupWorkflow);
@@ -143,11 +164,18 @@ impl Job for GitHubNotificationsCleanupWorkflow {
                 continue;
             }
 
-            if let Some(subject) = collector
+            // Asked before the subject is fetched, so a repository full of
+            // releases and pushes does not cost a request each just to be
+            // ignored.
+            if notification.subject.issue_reference().is_none() {
+                continue;
+            }
+
+            let information = collector
                 .get_subject(&notification.subject, services)
-                .await?
-                && !subject.is_open()
-            {
+                .await?;
+
+            if Self::is_finished(&notification.subject, information.as_ref()) {
                 collector.mark_as_done(&notification.id, services).await?;
             }
         }
@@ -160,6 +188,65 @@ impl Job for GitHubNotificationsCleanupWorkflow {
 mod tests {
     use super::*;
     use crate::workflows::ConfigurableWorkflow;
+
+    fn subject(type_: &str, url: Option<&str>) -> GitHubNotificationsSubject {
+        GitHubNotificationsSubject {
+            title: "Bump serde".into(),
+            type_: type_.into(),
+            url: url.map(str::to_string),
+            latest_comment_url: None,
+        }
+    }
+
+    fn information(body: serde_json::Value) -> GitHubSubjectInformation {
+        serde_json::from_value(body).expect("the sample subject should deserialize")
+    }
+
+    const PULL_REQUEST: &str = "https://api.github.com/repos/example/repo/pulls/1";
+
+    #[test]
+    fn an_open_pull_request_is_left_alone() {
+        assert!(!GitHubNotificationsCleanupWorkflow::is_finished(
+            &subject("PullRequest", Some(PULL_REQUEST)),
+            Some(&information(serde_json::json!({ "state": "open" }))),
+        ));
+    }
+
+    #[test]
+    fn a_closed_pull_request_is_finished() {
+        assert!(GitHubNotificationsCleanupWorkflow::is_finished(
+            &subject("PullRequest", Some(PULL_REQUEST)),
+            Some(&information(serde_json::json!({ "state": "closed" }))),
+        ));
+    }
+
+    /// The case this workflow used to get wrong. Every field of
+    /// [`GitHubSubjectInformation`] is optional, so a response carrying no
+    /// `state` deserializes happily and used to be read as "not open", which
+    /// dismissed the notification for a pull request nobody had touched.
+    #[test]
+    fn a_pull_request_we_could_not_read_a_state_from_is_left_alone() {
+        assert!(!GitHubNotificationsCleanupWorkflow::is_finished(
+            &subject("PullRequest", Some(PULL_REQUEST)),
+            Some(&information(serde_json::json!({ "body": "Bumps serde" }))),
+        ));
+    }
+
+    #[test]
+    fn subjects_which_are_not_issues_or_pull_requests_are_left_alone() {
+        assert!(!GitHubNotificationsCleanupWorkflow::is_finished(
+            &subject(
+                "Release",
+                Some("https://api.github.com/repos/example/repo/releases/1")
+            ),
+            Some(&information(serde_json::json!({ "tag_name": "v1.0.0" }))),
+        ));
+
+        assert!(!GitHubNotificationsCleanupWorkflow::is_finished(
+            &subject("CheckSuite", None),
+            None,
+        ));
+    }
 
     #[test]
     fn cleanup_is_a_scheduled_workflow_requiring_a_github_pat() {

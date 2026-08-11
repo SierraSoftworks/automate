@@ -144,15 +144,16 @@ impl GitHubNotificationsWorkflow {
             }
 
             if let Some(subject) = collector.get_subject(&item.subject, &services).await? {
-                if !subject.is_open() {
+                if subject.is_resolved() {
                     // Closing the subject bumps its notification thread, so a
                     // webhook-triggered collection resolves it within seconds
                     // rather than waiting for the delayed re-check below.
                     self.resolve(collector, &item, job, &services).await?;
-                } else if subject
-                    .user
-                    .as_ref()
-                    .is_some_and(|u| u.login == "dependabot[bot]")
+                } else if subject.is_open()
+                    && subject
+                        .user
+                        .as_ref()
+                        .is_some_and(|u| u.login == "dependabot[bot]")
                 {
                     // Schedule an auto-close task to resolve this notification later if the PR is auto-merged
 
@@ -311,25 +312,21 @@ impl Job for GitHubNotificationsWorkflow {
             let subject = collector.get_subject(&event.subject, services).await?;
 
             match subject {
-                None => {
-                    TodoistUpsertTask::dispatch(
-                        self.build_task(event, job, None),
-                        Some(event.id.clone().into()),
-                        services,
-                    )
-                    .await?
-                }
-                Some(subject) if subject.is_open() => {
-                    TodoistUpsertTask::dispatch(
-                        self.build_task(event, job, Some(subject)),
-                        Some(event.id.clone().into()),
-                        services,
-                    )
-                    .await?
-                }
-                _ => {
-                    // Closed/Resolved/Merged/etc., mark as done
+                // Closed or merged, so the thread and the task tracking it are
+                // both retired.
+                Some(subject) if subject.is_resolved() => {
                     self.resolve(&collector, event, job, services).await?;
+                }
+                // Still open, or a subject we could not read a state from, in
+                // which case it stays in the inbox as a task rather than being
+                // dismissed on a guess.
+                subject => {
+                    TodoistUpsertTask::dispatch(
+                        self.build_task(event, job, subject),
+                        Some(event.id.clone().into()),
+                        services,
+                    )
+                    .await?
                 }
             }
 
