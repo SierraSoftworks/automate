@@ -63,12 +63,26 @@ impl GitHubClient {
 
         if !response.errors.is_empty() {
             let reason = response.error_summary();
+            let reason_lower = reason.to_lowercase();
 
             // GitHub reports a repository without the "Allow auto-merge"
             // setting as "Pull request Auto merge is not allowed for this
             // repository".
-            if reason.to_lowercase().contains("auto merge is not allowed") {
+            if reason_lower.contains("auto merge is not allowed") {
                 return Ok(AutoMergeOutcome::NotAllowed);
+            }
+
+            // "Pull request Pull request is in clean status" means there is
+            // nothing left for a scheduled merge to wait on, and GitHub will not
+            // schedule one that would fire immediately. Common on a repository
+            // with no required status checks, which is why auto-merge looked
+            // like it was never running.
+            if reason_lower.contains("clean status") {
+                return Ok(AutoMergeOutcome::Mergeable);
+            }
+
+            if is_forbidden(&reason_lower) {
+                return Ok(AutoMergeOutcome::Forbidden);
             }
 
             return Ok(AutoMergeOutcome::Declined(reason));
@@ -87,6 +101,46 @@ impl GitHubClient {
                 "GitHub did not report an auto-merge request on the pull request.".to_string(),
             ))
         }
+    }
+
+    /// Merges a pull request outright, returning `false` when GitHub declines.
+    ///
+    /// Only used when [`AutoMergeOutcome::Mergeable`] says a scheduled merge was
+    /// refused for having nothing to wait on. Branch protection is still applied
+    /// by GitHub, so this cannot merge anything auto-merge would have held back.
+    #[instrument("services.github.merge_pull_request", skip(self), err(Display))]
+    pub async fn merge_pull_request(
+        &self,
+        pull_request_id: &str,
+    ) -> Result<bool, human_errors::Error> {
+        let response: GraphQlResponse<MergePullRequestData> = self
+            .graphql(
+                "mergePullRequest",
+                r#"mutation MergePullRequest($pullRequest: ID!) {
+                    mergePullRequest(input: { pullRequestId: $pullRequest }) {
+                        pullRequest {
+                            merged
+                        }
+                    }
+                }"#,
+                serde_json::json!({ "pullRequest": pull_request_id }),
+            )
+            .await?;
+
+        if !response.errors.is_empty() {
+            let reason = response.error_summary();
+            warn!(
+                "GitHub declined to merge pull request '{pull_request_id}': {reason}{}",
+                forbidden_advice(&reason)
+            );
+            return Ok(false);
+        }
+
+        Ok(response
+            .data
+            .and_then(|d| d.merge_pull_request)
+            .and_then(|m| m.pull_request)
+            .is_some_and(|pr| pr.merged))
     }
 
     /// Submits an approving review on a pull request, returning `false` when
@@ -121,10 +175,10 @@ impl GitHubClient {
             .await?;
 
         if !response.errors.is_empty() {
+            let reason = response.error_summary();
             warn!(
-                "GitHub declined to approve pull request '{}': {}",
-                pull_request_id,
-                response.error_summary()
+                "GitHub declined to approve pull request '{pull_request_id}': {reason}{}",
+                forbidden_advice(&reason)
             );
             return Ok(false);
         }
@@ -195,10 +249,42 @@ impl GitHubClient {
     }
 }
 
+/// Whether GitHub refused because the App installation may not touch the thing
+/// being addressed.
+///
+/// Spelled "Resource not accessible by integration", and it covers three
+/// situations a person has to fix by hand: the permission was never granted,
+/// it was added to the App after this account installed it and nobody has
+/// accepted the change, or the repository is not one the installation covers.
+fn is_forbidden(reason: &str) -> bool {
+    reason
+        .to_lowercase()
+        .contains("not accessible by integration")
+}
+
+/// What to append to a refusal which turns out to be about permissions, since
+/// GitHub's own wording says nothing about what to do next.
+fn forbidden_advice(reason: &str) -> &'static str {
+    if is_forbidden(reason) {
+        " Give the App installation Read & write access to Pull requests and Contents, and check that it covers this repository."
+    } else {
+        ""
+    }
+}
+
 /// The result of asking GitHub to enable auto-merge on a pull request.
 #[derive(Debug, PartialEq, Eq)]
 pub enum AutoMergeOutcome {
     Enabled,
+
+    /// The pull request has nothing left to wait for, so GitHub refused to
+    /// schedule a merge for it. Auto-merge would have merged it on the spot, so
+    /// merging it directly is the same outcome by the only route left.
+    Mergeable,
+
+    /// The App installation may not act on this repository, which no amount of
+    /// retrying will change.
+    Forbidden,
 
     /// The repository does not have its "Allow auto-merge" setting turned on,
     /// which is a repository-level problem rather than a per-pull-request one.
@@ -254,6 +340,24 @@ struct AutoMergePullRequest {
 struct AutoMergeRequest {
     #[serde(rename = "enabledAt")]
     enabled_at: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct MergePullRequestData {
+    #[serde(rename = "mergePullRequest")]
+    merge_pull_request: Option<MergePullRequestPayload>,
+}
+
+#[derive(Deserialize)]
+struct MergePullRequestPayload {
+    #[serde(rename = "pullRequest")]
+    pull_request: Option<MergedPullRequest>,
+}
+
+#[derive(Deserialize)]
+struct MergedPullRequest {
+    #[serde(default)]
+    merged: bool,
 }
 
 #[derive(Deserialize)]
@@ -320,6 +424,102 @@ mod tests {
                 .await
                 .expect("the mutation should succeed"),
             AutoMergeOutcome::Enabled
+        );
+    }
+
+    /// A repository with no required status checks leaves every pull request in
+    /// "clean status", which GitHub refuses to schedule a merge for. Reading
+    /// that as a plain refusal is what made auto-merge look like it never ran.
+    #[tokio::test]
+    async fn enable_auto_merge_detects_a_pull_request_with_nothing_to_wait_for() {
+        let server = MockServer::start().await;
+
+        Mock::given(method("POST"))
+            .and(path("/graphql"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "data": null,
+                "errors": [{ "message": "Pull request Pull request is in clean status" }]
+            })))
+            .mount(&server)
+            .await;
+
+        let client = mock_client(&server).await;
+        assert_eq!(
+            client
+                .enable_auto_merge("PR_node_id")
+                .await
+                .expect("a GraphQL error should not be raised as a retryable failure"),
+            AutoMergeOutcome::Mergeable
+        );
+    }
+
+    /// GitHub says only "Resource not accessible by integration", which is the
+    /// same wording whether a permission is missing or the repository is not
+    /// one the installation covers. Either way retrying will never fix it, so
+    /// it has to be told apart from a refusal about the pull request itself.
+    #[tokio::test]
+    async fn enable_auto_merge_detects_an_installation_without_the_access_it_needs() {
+        let server = MockServer::start().await;
+
+        Mock::given(method("POST"))
+            .and(path("/graphql"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "data": null,
+                "errors": [{ "message": "Resource not accessible by integration" }]
+            })))
+            .mount(&server)
+            .await;
+
+        let client = mock_client(&server).await;
+        assert_eq!(
+            client
+                .enable_auto_merge("PR_node_id")
+                .await
+                .expect("a GraphQL error should not be raised as a retryable failure"),
+            AutoMergeOutcome::Forbidden
+        );
+    }
+
+    #[tokio::test]
+    async fn merge_pull_request_reports_whether_it_merged() {
+        let server = MockServer::start().await;
+
+        Mock::given(method("POST"))
+            .and(path("/graphql"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "data": { "mergePullRequest": { "pullRequest": { "merged": true } } }
+            })))
+            .mount(&server)
+            .await;
+
+        let client = mock_client(&server).await;
+        assert!(
+            client
+                .merge_pull_request("PR_node_id")
+                .await
+                .expect("the mutation should succeed")
+        );
+    }
+
+    #[tokio::test]
+    async fn merge_pull_request_reports_a_refusal_without_raising() {
+        let server = MockServer::start().await;
+
+        Mock::given(method("POST"))
+            .and(path("/graphql"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "data": null,
+                "errors": [{ "message": "Pull request is not mergeable" }]
+            })))
+            .mount(&server)
+            .await;
+
+        let client = mock_client(&server).await;
+        assert!(
+            !client
+                .merge_pull_request("PR_node_id")
+                .await
+                .expect("a GraphQL error should not be raised as a retryable failure")
         );
     }
 

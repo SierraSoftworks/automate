@@ -267,6 +267,53 @@ impl GitHubAutoMergeWorkflow {
         .await
     }
 
+    /// Raises a reminder that the App installation may not act on this
+    /// repository.
+    ///
+    /// Keyed on the account rather than the repository, because the permissions
+    /// belong to the installation: one task covers every repository under it,
+    /// and a Dependabot morning across twenty repositories does not become
+    /// twenty copies of the same instruction.
+    async fn request_installation_permissions(
+        event: &GitHubPullRequestEvent,
+        todoist: &TodoistTarget,
+        services: &(impl Services + Send + Sync + 'static),
+    ) -> Result<(), human_errors::Error> {
+        let account = &event.repository.owner.login;
+        let repository = &event.repository.full_name;
+        let unique_key = format!("github/auto-merge/permissions/{account}");
+
+        let review = services
+            .config()
+            .connections
+            .github
+            .app
+            .as_ref()
+            .map(|app| {
+                format!(
+                    "\n\nReview it at https://github.com/apps/{}/installations/new.",
+                    app.slug
+                )
+            })
+            .unwrap_or_default();
+
+        TodoistUpsertTask::dispatch(
+            TodoistUpsertTaskPayload {
+                unique_key: unique_key.clone(),
+                title: format!("[**{account}**](https://github.com/{account}): Grant the GitHub App the access it needs"),
+                description: Some(format!(
+                    "GitHub answered \"Resource not accessible by integration\" when acting on a pull request in {repository}.\n\nThe installation on **{account}** needs **Read & write** access to **Pull requests** and **Contents**, and needs to cover {repository}. A permission added after the App was installed also has to be accepted before it takes effect.{review}"
+                )),
+                priority: Some(3),
+                config: todoist.clone(),
+                ..Default::default()
+            },
+            Some(unique_key.into()),
+            services,
+        )
+        .await
+    }
+
     /// Raises a reminder to merge this pull request by hand.
     ///
     /// Keyed and titled the way [`crate::jobs::GitHubAttentionWorkflow`] and the
@@ -362,6 +409,22 @@ impl Job for GitHubAutoMergeWorkflow {
         match client.enable_auto_merge(&job.pull_request.node_id).await? {
             AutoMergeOutcome::Enabled => {
                 info!("Enabled auto-merge on pull request {job}.");
+            }
+            AutoMergeOutcome::Mergeable => {
+                if client.merge_pull_request(&job.pull_request.node_id).await? {
+                    info!("Merged pull request {job}, which had nothing left to wait for.");
+                } else {
+                    warn!(
+                        "Pull request {job} could neither have auto-merge enabled nor be merged."
+                    );
+                }
+            }
+            AutoMergeOutcome::Forbidden => {
+                warn!(
+                    "The GitHub App installation on {} may not act on {}; raising a reminder to review its access.",
+                    job.repository.owner.login, job.repository.full_name
+                );
+                Self::request_installation_permissions(job, todoist, services).await?;
             }
             AutoMergeOutcome::NotAllowed => {
                 // A private repository on a plan without auto-merge cannot turn
