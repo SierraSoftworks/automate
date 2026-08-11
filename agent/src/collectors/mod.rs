@@ -14,7 +14,9 @@ pub use differential::{Diff, DifferentialCollector};
 pub use incremental::IncrementalCollector;
 
 pub use calendar::CalendarCollector;
-pub use github_notifications::{GitHubNotificationsCollector, GitHubSubjectInformation};
+pub use github_notifications::{
+    GitHubNotificationsCollector, GitHubNotificationsSubject, GitHubSubjectInformation,
+};
 pub use github_releases::GitHubReleasesCollector;
 #[allow(dead_code)]
 pub use rss::RssCollector;

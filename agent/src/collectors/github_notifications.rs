@@ -434,6 +434,13 @@ pub enum GitHubNotificationsSubjectState {
     Open,
     Closed,
     Merged,
+
+    /// A spelling we do not model. `state` is not exclusive to issues and pull
+    /// requests — a check suite is `completed`, a discussion being converted is
+    /// `converting` — and an unmodelled value used to fail the deserialisation,
+    /// which took the whole run down with it.
+    #[serde(other)]
+    Unknown,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -463,6 +470,20 @@ impl GitHubSubjectInformation {
     /// as resolved.
     pub fn is_open(&self) -> bool {
         self.state == Some(GitHubNotificationsSubjectState::Open)
+    }
+
+    /// Returns `true` only when GitHub said the subject is closed or merged.
+    ///
+    /// Deliberately not `!is_open()`. Every field of this struct is optional, so
+    /// *any* JSON object deserialises into it with `state: None` — a release, a
+    /// commit, a payload whose shape we guessed wrong. Treating that as "this is
+    /// finished" is how an open pull request's notification gets dismissed, so
+    /// anything destructive asks this question instead.
+    pub fn is_resolved(&self) -> bool {
+        matches!(
+            self.state,
+            Some(GitHubNotificationsSubjectState::Closed | GitHubNotificationsSubjectState::Merged)
+        )
     }
 }
 
@@ -754,6 +775,37 @@ mod tests {
 
         assert_eq!(subject.state, Some(GitHubNotificationsSubjectState::Closed));
         assert!(!subject.is_open());
+        assert!(subject.is_resolved());
+    }
+
+    /// GitHub uses `state` for more than issues and pull requests, and an
+    /// unmodelled spelling used to fail the deserialization outright — which
+    /// took down whichever run happened to meet it.
+    #[test]
+    fn test_subject_information_tolerates_an_unmodelled_state() {
+        let subject: GitHubSubjectInformation = serde_json::from_str(r#"{ "state": "completed" }"#)
+            .expect("an unmodelled state should still deserialize");
+
+        assert_eq!(
+            subject.state,
+            Some(GitHubNotificationsSubjectState::Unknown)
+        );
+        assert!(!subject.is_open());
+        assert!(
+            !subject.is_resolved(),
+            "a state we cannot read is not a subject we know is finished"
+        );
+    }
+
+    /// Every field here is optional, so any JSON object deserializes. Nothing
+    /// destructive may read that as "closed".
+    #[test]
+    fn test_subject_information_without_a_state_is_neither_open_nor_resolved() {
+        let subject: GitHubSubjectInformation = serde_json::from_str(r#"{ "body": "Notes" }"#)
+            .expect("a stateless subject should deserialize");
+
+        assert!(!subject.is_open());
+        assert!(!subject.is_resolved());
     }
 
     #[test]
