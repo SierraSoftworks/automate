@@ -391,6 +391,11 @@ impl JobHost {
         // any tenant could enqueue into is the wrong shape for that.
         tasks.spawn(Self::prune_audit_log(context.clone()));
 
+        // Likewise, and for the same reason: every account's stored grants have
+        // to be renewed whether or not that account's workflows are running, or
+        // a quiet week is enough for a provider to drop the refresh token.
+        tasks.spawn(crate::connection_refresh::run(context.clone()));
+
         loop {
             // Reap completed job tasks so the set does not grow without bound.
             while tasks.try_join_next().is_some() {}
