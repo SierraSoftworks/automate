@@ -143,6 +143,54 @@ impl GitHubClient {
             .is_some_and(|pr| pr.merged))
     }
 
+    /// Whether the identity this client authenticates as has already left a
+    /// standing approval on the pull request.
+    ///
+    /// GitHub accepts a second approving review from the same actor and adds it
+    /// to the timeline, so a workflow whose filter matches more than the opening
+    /// event would otherwise pile up identical approvals. A review which was
+    /// later dismissed reports `DISMISSED` rather than `APPROVED`, so it counts
+    /// as no approval and gets replaced.
+    #[instrument("services.github.already_approved", skip(self), err(Display))]
+    pub async fn already_approved(
+        &self,
+        pull_request_id: &str,
+    ) -> Result<bool, human_errors::Error> {
+        let response: GraphQlResponse<ViewerReviewData> = self
+            .graphql(
+                "viewerLatestReview",
+                r#"query ViewerLatestReview($pullRequest: ID!) {
+                    node(id: $pullRequest) {
+                        ... on PullRequest {
+                            viewerLatestReview {
+                                state
+                            }
+                        }
+                    }
+                }"#,
+                serde_json::json!({ "pullRequest": pull_request_id }),
+            )
+            .await?;
+
+        if !response.errors.is_empty() {
+            // Answered as "not approved", so a failure to read our own review
+            // costs a duplicate approval at worst rather than stopping the
+            // auto-merge it precedes.
+            let reason = response.error_summary();
+            warn!(
+                "Could not read our own review of pull request '{pull_request_id}': {reason}{}",
+                forbidden_advice(&reason)
+            );
+            return Ok(false);
+        }
+
+        Ok(response
+            .data
+            .and_then(|d| d.node)
+            .and_then(|pull_request| pull_request.viewer_latest_review)
+            .is_some_and(|review| review.state == "APPROVED"))
+    }
+
     /// Submits an approving review on a pull request, returning `false` when
     /// GitHub declines the review (for example because the token's user has
     /// already reviewed it, or cannot approve their own pull request).
@@ -361,6 +409,22 @@ struct MergedPullRequest {
 }
 
 #[derive(Deserialize)]
+struct ViewerReviewData {
+    node: Option<ViewerReviewPullRequest>,
+}
+
+#[derive(Deserialize)]
+struct ViewerReviewPullRequest {
+    #[serde(rename = "viewerLatestReview")]
+    viewer_latest_review: Option<ViewerReview>,
+}
+
+#[derive(Deserialize)]
+struct ViewerReview {
+    state: String,
+}
+
+#[derive(Deserialize)]
 struct AddPullRequestReviewData {
     #[serde(rename = "addPullRequestReview")]
     add_pull_request_review: Option<AddPullRequestReviewPayload>,
@@ -477,6 +541,84 @@ mod tests {
                 .await
                 .expect("a GraphQL error should not be raised as a retryable failure"),
             AutoMergeOutcome::Forbidden
+        );
+    }
+
+    /// The states `viewerLatestReview` can report, and whether each one means
+    /// the pull request already carries a standing approval from us. A review
+    /// which was dismissed does not, so it gets replaced.
+    #[rstest::rstest]
+    #[case("APPROVED", true)]
+    #[case("DISMISSED", false)]
+    #[case("CHANGES_REQUESTED", false)]
+    #[case("COMMENTED", false)]
+    #[tokio::test]
+    async fn already_approved_only_counts_a_standing_approval(
+        #[case] state: &str,
+        #[case] expected: bool,
+    ) {
+        let server = MockServer::start().await;
+
+        Mock::given(method("POST"))
+            .and(path("/graphql"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "data": { "node": { "viewerLatestReview": { "state": state } } }
+            })))
+            .mount(&server)
+            .await;
+
+        let client = mock_client(&server).await;
+        assert_eq!(
+            client
+                .already_approved("PR_node_id")
+                .await
+                .expect("the query should succeed"),
+            expected
+        );
+    }
+
+    #[tokio::test]
+    async fn already_approved_says_no_when_we_have_never_reviewed_it() {
+        let server = MockServer::start().await;
+
+        Mock::given(method("POST"))
+            .and(path("/graphql"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "data": { "node": { "viewerLatestReview": null } }
+            })))
+            .mount(&server)
+            .await;
+
+        let client = mock_client(&server).await;
+        assert!(
+            !client
+                .already_approved("PR_node_id")
+                .await
+                .expect("the query should succeed")
+        );
+    }
+
+    /// Failing to read our own review must not stop the auto-merge it precedes,
+    /// so it answers "not approved" and costs a duplicate review at worst.
+    #[tokio::test]
+    async fn already_approved_says_no_when_it_cannot_tell() {
+        let server = MockServer::start().await;
+
+        Mock::given(method("POST"))
+            .and(path("/graphql"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "data": null,
+                "errors": [{ "message": "Resource not accessible by integration" }]
+            })))
+            .mount(&server)
+            .await;
+
+        let client = mock_client(&server).await;
+        assert!(
+            !client
+                .already_approved("PR_node_id")
+                .await
+                .expect("a GraphQL error should not be raised as a retryable failure")
         );
     }
 

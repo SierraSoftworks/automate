@@ -398,12 +398,17 @@ impl Job for GitHubAutoMergeWorkflow {
 
         let client = GitHubClient::new(services.http_client(), token);
 
-        if auto_merge.approve
-            && !client
+        if auto_merge.approve {
+            if client.already_approved(&job.pull_request.node_id).await? {
+                debug!("Pull request {job} already carries our approval; leaving it alone.");
+            } else if !client
                 .approve_pull_request(&job.pull_request.node_id, &auto_merge.approval_message)
                 .await?
-        {
-            warn!("Could not approve pull request {job}; continuing to enable auto-merge anyway.");
+            {
+                warn!(
+                    "Could not approve pull request {job}; continuing to enable auto-merge anyway."
+                );
+            }
         }
 
         match client.enable_auto_merge(&job.pull_request.node_id).await? {
