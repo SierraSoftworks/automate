@@ -145,12 +145,12 @@ acts as them rather than through one shared token.
 
 To receive events, set the app's webhook callback URL to
 `https://your-host/webhooks/todoist` — Todoist requires HTTPS with no port —
-and put the app's **Verification Token** in `webhook_secret`. That is what
-Todoist signs deliveries with, and it is a different value from the client
-secret, so deliveries are refused until it is set. The **Todoist** workflow
-type can then react to items being completed, comments being added, projects
-being archived, and so on, as they happen. Deliveries are routed by the Todoist
-account they name, so each person's events only reach their own workflows.
+and configure `client_secret`. Todoist uses the Client Secret as the webhook
+HMAC key; the Verification Token shown in the App Management Console is not
+used for webhook signatures. The **Todoist** workflow type can then react to
+items being completed, comments being added, projects being archived, and so
+on, as they happen. Deliveries are routed by the Todoist account they name, so
+each person's events only reach their own workflows.
 
 Access tokens issued to a new Todoist app last an hour and are renewed on
 demand, immediately before the token is used, rather than on a schedule.

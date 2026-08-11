@@ -404,16 +404,10 @@ pub struct TodoistAppConfig {
     /// The app's Client Secret, from the Todoist App Management Console.
     pub client_secret: String,
 
-    /// The app's **Verification Token**, also from the App Management Console,
-    /// which is what Todoist signs webhook deliveries with.
-    ///
-    /// A different value from the client secret, despite what Todoist's API
-    /// reference says, so the two cannot be used interchangeably. Optional
-    /// because the OAuth half of the integration works without it; deliveries
-    /// are refused until it is set, since there would be nothing to check them
-    /// against.
-    #[serde(default)]
-    pub webhook_secret: Option<String>,
+    /// Deprecated compatibility input. Todoist signs webhook deliveries with
+    /// `client_secret`; this value is ignored.
+    #[serde(default, rename = "webhook_secret")]
+    pub _webhook_secret: Option<String>,
 
     /// The permissions to request. Todoist sends these comma-separated.
     #[serde(default = "default_todoist_scopes")]

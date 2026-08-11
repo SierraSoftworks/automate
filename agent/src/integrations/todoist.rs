@@ -588,7 +588,7 @@ mod tests {
             config.connections.todoist.app = Some(TodoistAppConfig {
                 client_id: "client".to_string(),
                 client_secret: "secret".to_string(),
-                webhook_secret: None,
+                _webhook_secret: None,
                 scopes: vec!["data:read_write".to_string()],
                 api_url: api_url.clone(),
                 acl: None,

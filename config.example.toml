@@ -58,11 +58,8 @@
 # [connections.todoist.app]
 # client_id = "${{ env.TODOIST_CLIENT_ID }}"
 # client_secret = "${{ env.TODOIST_CLIENT_SECRET }}"
-# The app's Verification Token, shown in the App Management Console alongside
-# the client secret. Todoist signs webhook deliveries with it, and it is a
-# different value from the client secret. Leave it out and deliveries are
-# refused, since there is then nothing to check them against.
-# webhook_secret = "${{ env.TODOIST_WEBHOOK_SECRET }}"
+# Todoist signs webhook deliveries with client_secret; the Verification Token
+# shown in the App Management Console is not used for webhook HMACs.
 # What to ask for. Sent comma-separated, as Todoist expects.
 # scopes = ["data:read_write"]
 # Who may use the connect wizard, evaluated exactly like the OAuth providers'
