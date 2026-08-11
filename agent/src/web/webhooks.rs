@@ -293,10 +293,9 @@ mod tests {
                 Some(crate::testing::github_app("https://api.github.com"));
             config.connections.todoist.app = Some(crate::config::TodoistAppConfig {
                 client_id: "todoist-client".into(),
-                client_secret: "todoist-client-secret".into(),
-                // Deliberately not the client secret: Todoist signs with the
-                // app's Verification Token, and the two are different values.
-                webhook_secret: Some(TODOIST_SECRET.into()),
+                client_secret: TODOIST_CLIENT_SECRET.into(),
+                // Accepted for compatibility, but not used as the signing key.
+                _webhook_secret: Some("todoist-verification-token".into()),
                 scopes: vec!["data:read_write".into()],
                 api_url: None,
                 acl: None,
@@ -306,7 +305,7 @@ mod tests {
         .unwrap()
     }
 
-    const TODOIST_SECRET: &str = "todoist-verification-token";
+    const TODOIST_CLIENT_SECRET: &str = "todoist-client-secret";
 
     macro_rules! app {
         ($context:expr) => {
@@ -550,7 +549,7 @@ mod tests {
             "event_data": { "content": "Buy milk" },
         })
         .to_string();
-        let mut mac = Hmac::<Sha256>::new_from_slice(TODOIST_SECRET.as_bytes()).unwrap();
+        let mut mac = Hmac::<Sha256>::new_from_slice(TODOIST_CLIENT_SECRET.as_bytes()).unwrap();
         mac.update(body.as_bytes());
         let signature =
             base64::engine::general_purpose::STANDARD.encode(mac.finalize().into_bytes());

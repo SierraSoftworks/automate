@@ -98,7 +98,7 @@ pub struct TodoistWebhook;
 impl TodoistWebhook {
     /// Verifies the `X-Todoist-Hmac-SHA256` header, which Todoist populates
     /// with the base64-encoded HMAC-SHA256 of the raw request body, keyed with
-    /// the app's Verification Token.
+    /// the app's Client Secret.
     ///
     /// Note the two differences from GitHub's otherwise identical scheme: the
     /// digest is base64 rather than hex, and it is unprefixed. Both are easy to
@@ -118,8 +118,8 @@ impl TodoistWebhook {
             ])?;
 
         let mut mac = HmacSha256::new_from_slice(secret.as_bytes()).wrap_user_err(
-            "Failed to create an HMAC instance with the configured verification token.",
-            &["Ensure that connections.todoist.app.webhook_secret is configured."],
+            "Failed to create an HMAC instance with the configured client secret.",
+            &["Ensure that connections.todoist.app.client_secret is configured."],
         )?;
 
         mac.update(body.as_bytes());
@@ -128,7 +128,7 @@ impl TodoistWebhook {
         mac.verify_slice(&expected).wrap_user_err(
             "Webhook signature verification failed (signatures did not match).".to_string(),
             &[
-                "Ensure that connections.todoist.app.webhook_secret matches the Verification Token of the app that owns this webhook, which is not the same value as its Client Secret.",
+                "Ensure that connections.todoist.app.client_secret matches the Client Secret of the app that owns this webhook.",
             ],
         )?;
 
@@ -175,14 +175,10 @@ impl WebhookSource for TodoistWebhook {
         <Self as crate::workflows::ConfigurableWorkflow>::type_id()
     }
 
-    /// Deliveries are signed with the app's Verification Token, which is a
-    /// different value from its client secret. Without it there is nothing to
-    /// check a delivery against, so the endpoint reports itself unavailable
-    /// rather than accepting whatever arrives.
+    /// Todoist signs deliveries with the app's Client Secret.
     fn secret(&self, config: &Config) -> Option<String> {
-        crate::integrations::todoist::app(config)?
-            .webhook_secret
-            .clone()
+        crate::integrations::todoist::app(config)
+            .map(|app| app.client_secret.clone())
             .filter(|secret| !secret.is_empty())
     }
 
@@ -536,8 +532,8 @@ mod tests {
         let context = crate::services::AppContext::new_mock(move |config| {
             config.connections.todoist.app = Some(crate::config::TodoistAppConfig {
                 client_id: "client".into(),
-                client_secret: SECRET.into(),
-                webhook_secret: webhook_secret.clone(),
+                client_secret: "client-secret".into(),
+                _webhook_secret: webhook_secret.clone(),
                 scopes: vec!["data:read_write".into()],
                 api_url: None,
                 acl: None,
@@ -549,22 +545,12 @@ mod tests {
         TodoistWebhook.secret(&context.config())
     }
 
-    /// The OAuth half of the integration works without a verification token,
-    /// but there is then nothing to check a delivery against — and answering as
-    /// though there were would accept anything that found the address.
     #[tokio::test]
-    async fn deliveries_are_refused_until_a_verification_token_is_set() {
-        assert_eq!(signing_key(None).await, None);
-        assert_eq!(signing_key(Some("")).await, None);
-    }
-
-    /// Todoist signs with the app's Verification Token, which is a different
-    /// value from its client secret.
-    #[tokio::test]
-    async fn the_verification_token_is_what_deliveries_are_checked_against() {
+    async fn the_client_secret_is_used_even_when_a_verification_token_is_configured() {
+        assert_eq!(signing_key(None).await.as_deref(), Some("client-secret"));
         assert_eq!(
             signing_key(Some("verification-token")).await.as_deref(),
-            Some("verification-token")
+            Some("client-secret")
         );
     }
 }
