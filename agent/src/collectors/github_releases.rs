@@ -237,7 +237,7 @@ impl IncrementalCollector for GitHubReleasesCollector {
         let releases: Vec<GitHubReleaseItem> = response.json().await.wrap_user_err(
             format!(
                 "Failed to read the content of the GitHub Releases from URL '{}'.",
-                &self.api_url
+                self.api_url
             ),
             &[
                 "Check that the URL is correct and that the server is reachable.",

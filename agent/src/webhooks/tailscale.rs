@@ -654,7 +654,7 @@ mod tests {
         let batch = format!(
             "[{},{}]",
             &POLICY_UPDATE[1..POLICY_UPDATE.len() - 1],
-            &POLICY_UPDATE[1..POLICY_UPDATE.len() - 1].replace("policyUpdate", "nodeCreated"),
+            POLICY_UPDATE[1..POLICY_UPDATE.len() - 1].replace("policyUpdate", "nodeCreated"),
         );
 
         run(&services, &delivery(workflow, &batch)).await.unwrap();

@@ -94,7 +94,7 @@ impl OAuth2Config {
             .request_async(http_client)
             .await
             .wrap_user_err(
-                format!("Failed to obtain OAuth access token for {}.", &self.name),
+                format!("Failed to obtain OAuth access token for {}.", self.name),
                 &[
                     "Ensure that your OAuth client credentials are correct.",
                     "Check your network connection.",
@@ -154,7 +154,7 @@ impl OAuth2Config {
             // as transient so the job retries and the failure reaches Sentry.
             Err(err) => {
                 return Err(err).wrap_system_err(
-                    format!("Failed to refresh OAuth access token for {}.", &self.name),
+                    format!("Failed to refresh OAuth access token for {}.", self.name),
                     &[
                         "Ensure that your OAuth credentials are correct.",
                         "Check your network connection.",

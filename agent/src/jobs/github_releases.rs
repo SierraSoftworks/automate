@@ -211,7 +211,7 @@ impl Job for GitHubReleasesWorkflow {
                 TodoistCreateTaskPayload {
                     title: format!(
                         "[github:{}]({}): Released {} ({})",
-                        &job.repository, &item.html_url, item.name, item.tag_name
+                        job.repository, item.html_url, item.name, item.tag_name
                     ),
                     description: item.body.map(|body| {
                         crate::parsers::html_to_markdown(

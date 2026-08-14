@@ -130,21 +130,17 @@ impl<'a> Parser<'a> {
                         self.advance();
                     }
                 }
-                Some('}') => {
-                    if self.peek_ahead(1) == Some('}') {
-                        if depth == 1 {
-                            // Found the closing }}
-                            let expr_end = self.pos;
-                            self.advance(); // consume first '}'
-                            self.advance(); // consume second '}'
-                            return Ok(&self.input[expr_start..expr_end]);
-                        } else {
-                            depth -= 1;
-                            self.advance(); // consume first '}'
-                            self.advance(); // consume second '}'
-                        }
+                Some('}') if self.peek_ahead(1) == Some('}') => {
+                    if depth == 1 {
+                        // Found the closing }}
+                        let expr_end = self.pos;
+                        self.advance(); // consume first '}'
+                        self.advance(); // consume second '}'
+                        return Ok(&self.input[expr_start..expr_end]);
                     } else {
-                        self.advance();
+                        depth -= 1;
+                        self.advance(); // consume first '}'
+                        self.advance(); // consume second '}'
                     }
                 }
                 _ => {
