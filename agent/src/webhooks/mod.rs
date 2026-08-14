@@ -8,6 +8,7 @@ mod github;
 mod grafana;
 mod grey;
 mod honeycomb;
+mod miniflux;
 mod routing;
 mod sentry;
 mod tailscale;
