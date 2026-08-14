@@ -143,7 +143,7 @@ impl Job for XkcdWorkflow {
 
             TodoistCreateTask::dispatch(
                 TodoistCreateTaskPayload {
-                    title: format!("[XKCD]({}): {}", &item.url, item.title),
+                    title: format!("[XKCD]({}): {}", item.url, item.title),
                     description: item.image_url.map(|url| {
                         format!(
                             "![XKCD]({})\n\n*{}*",

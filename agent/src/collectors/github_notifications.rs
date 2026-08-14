@@ -256,7 +256,7 @@ impl IncrementalCollector for GitHubNotificationsCollector {
         let notifications: Vec<GitHubNotificationsItem> = response.json().await.wrap_system_err(
             format!(
                 "Failed to read the content of the GitHub notifications list from URL '{}'.",
-                &self.api_url
+                self.api_url
             ),
             &[
                 "This usually means GitHub's response format differs from the model we expect.",

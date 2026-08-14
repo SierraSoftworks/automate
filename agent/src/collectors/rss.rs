@@ -78,7 +78,7 @@ impl IncrementalCollector for RssCollector {
         }
 
         let response = request.send().await.wrap_user_err(
-            format!("Failed to fetch RSS feed from URL '{}'.", &self.feed_url),
+            format!("Failed to fetch RSS feed from URL '{}'.", self.feed_url),
             &[
                 "Check that the URL is correct and that the server is reachable.",
                 "Check that your network connection is working properly.",
@@ -102,7 +102,7 @@ impl IncrementalCollector for RssCollector {
         let response = response.error_for_status().wrap_user_err(
             format!(
                 "We received an unexpected error response from URL '{}'.",
-                &self.feed_url
+                self.feed_url
             ),
             &["Check that the URL is correct and that the server is reachable."],
         )?;
@@ -122,7 +122,7 @@ impl IncrementalCollector for RssCollector {
         let content = response.bytes().await.wrap_user_err(
             format!(
                 "Failed to read the content of the RSS feed from URL '{}'.",
-                &self.feed_url
+                self.feed_url
             ),
             &[
                 "Check that the URL is correct and that the server is reachable.",
