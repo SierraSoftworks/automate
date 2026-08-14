@@ -67,6 +67,12 @@ const RESOLVING_ACTIONS: &[&str] = &[
     "unassigned",
 ];
 
+/// The `alert.state` values which mean the alert still wants dealing with.
+/// Dependabot and code scanning call this `open`; secret scanning also uses
+/// `open`, and everything else (`dismissed`, `auto_dismissed`, `fixed`,
+/// `resolved`) describes an alert somebody has already seen off.
+const ACTIVE_ALERT_STATES: &[&str] = &["open", "reopened", "auto_reopened"];
+
 /// What one person asked us to do with deliveries from a GitHub App installation.
 #[derive(Clone, Default, Serialize, Deserialize)]
 pub struct GitHubWebhookConfig {
@@ -961,7 +967,11 @@ impl GitHubAttentionEvent {
                 kind: GitHubAttentionKind::SecurityAlert,
                 event: event_type.to_string(),
                 action: payload.action.clone(),
-                resolved: RESOLVING_ACTIONS.contains(&payload.action.as_str()),
+                // The action alone is not enough: GitHub re-delivers alerts
+                // with active-sounding actions (`created`, `reintroduced`,
+                // `appeared_in_branch`) for alerts which are already dismissed
+                // or fixed, so the alert's own state has the final say.
+                resolved: RESOLVING_ACTIONS.contains(&payload.action.as_str()) || !alert.is_active(),
                 repository: payload.repository.full_name.clone(),
                 repository_owner: payload.repository.owner.login.clone(),
                 repository_name: payload.repository.name.clone(),
@@ -1074,6 +1084,8 @@ struct GitHubComment {
 struct GitHubAlert {
     number: u64,
     #[serde(default)]
+    state: Option<String>,
+    #[serde(default)]
     html_url: Option<String>,
     #[serde(default)]
     security_advisory: Option<GitHubAdvisory>,
@@ -1088,6 +1100,15 @@ struct GitHubAlert {
 }
 
 impl GitHubAlert {
+    /// Whether the alert still stands. A payload without a state is assumed
+    /// active, so an unfamiliar alert shape keeps raising tasks rather than
+    /// silently retiring them.
+    fn is_active(&self) -> bool {
+        self.state
+            .as_deref()
+            .is_none_or(|state| ACTIVE_ALERT_STATES.contains(&state))
+    }
+
     fn summary(&self) -> String {
         if let Some(advisory) = self.security_advisory.as_ref() {
             return match self.dependency.as_ref().and_then(|d| d.package.as_ref()) {
@@ -1619,6 +1640,70 @@ mod tests {
 
         assert_eq!(parsed.title, "Query built from user-controlled sources");
         assert_eq!(parsed.severity.as_deref(), Some("error"));
+    }
+
+    #[rstest]
+    #[case::dependabot_dismissed("dependabot_alert", "created", "dismissed", true)]
+    #[case::dependabot_auto_dismissed("dependabot_alert", "reintroduced", "auto_dismissed", true)]
+    #[case::dependabot_fixed("dependabot_alert", "created", "fixed", true)]
+    #[case::code_scanning_dismissed("code_scanning_alert", "appeared_in_branch", "dismissed", true)]
+    #[case::secret_scanning_resolved("secret_scanning_alert", "created", "resolved", true)]
+    #[case::dependabot_open("dependabot_alert", "created", "open", false)]
+    #[case::code_scanning_reopened("code_scanning_alert", "reopened", "open", false)]
+    fn an_alert_that_is_no_longer_open_retires_its_task(
+        #[case] event_type: &str,
+        #[case] action: &str,
+        #[case] state: &str,
+        #[case] resolved: bool,
+    ) {
+        // GitHub re-delivers alerts with actions that sound like new activity
+        // even when the alert has already been dealt with, which is what was
+        // filing reminders for security alerts nobody needed to look at.
+        let job = payload(serde_json::json!({
+            "action": action,
+            "alert": {
+                "number": 12,
+                "state": state,
+                "html_url": "https://github.com/example/repo/security/dependabot/12",
+                "security_advisory": { "summary": "Denial of service", "severity": "high" },
+            },
+            "repository": {
+                "name": "repo",
+                "full_name": "example/repo",
+                "owner": { "login": "example" },
+            },
+        }));
+
+        let parsed = GitHubAttentionEvent::parse(event_type, &job)
+            .expect("the alert should parse")
+            .expect("the alert should normalise");
+
+        assert_eq!(parsed.resolved, resolved);
+    }
+
+    #[test]
+    fn an_alert_without_a_state_is_still_treated_as_open() {
+        // An unfamiliar alert shape should keep raising reminders rather than
+        // silently retiring them.
+        let job = payload(serde_json::json!({
+            "action": "created",
+            "alert": {
+                "number": 12,
+                "security_advisory": { "summary": "Denial of service", "severity": "high" },
+            },
+            "repository": {
+                "name": "repo",
+                "full_name": "example/repo",
+                "owner": { "login": "example" },
+            },
+        }));
+
+        assert!(
+            !GitHubAttentionEvent::parse("dependabot_alert", &job)
+                .expect("the alert should parse")
+                .expect("the alert should normalise")
+                .resolved
+        );
     }
 
     #[tokio::test]
