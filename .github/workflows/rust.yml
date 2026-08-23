@@ -258,7 +258,6 @@ jobs:
             run_on: windows-latest
             target: x86_64-pc-windows-msvc
             extension: .exe
-            builder: cargo
             cargo-flags: "-p automate"
 
           # Linux builds
@@ -267,29 +266,27 @@ jobs:
             os: linux
             target: x86_64-unknown-linux-musl
             test: true
-            builder: cargo
             cargo-flags: "-p automate --features openssl-vendored"
             setup: |
               sudo apt update && sudo apt install -y musl-tools
           - arch: "arm64"
             os: linux
-            run_on: ubuntu-latest
+            run_on: ubuntu-24.04-arm
             target: aarch64-unknown-linux-musl
-            builder: cross
             cargo-flags: "-p automate --features openssl-vendored"
+            setup: |
+              sudo apt update && sudo apt install -y musl-tools
 
           # Apple MacOS builds
           - arch: amd64
             run_on: macos-latest
             os: darwin
             target: x86_64-apple-darwin
-            builder: cargo
             cargo-flags: "-p automate --features openssl-vendored"
           - arch: arm64
             run_on: macos-latest
             os: darwin
             target: aarch64-apple-darwin
-            builder: cargo
             cargo-flags: "-p automate --features openssl-vendored"
 
     steps:
@@ -308,17 +305,9 @@ jobs:
           components: llvm-tools-preview
 
       - name: Install protoc
-        if: matrix.builder != 'cross'
         uses: SierraSoftworks/setup-protoc@v3.0.1
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Install Cross
-        if: matrix.builder == 'cross'
-        shell: bash
-        run: |
-          curl -L --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/cargo-bins/cargo-binstall/main/install-from-binstall-release.sh | bash
-          cargo binstall --no-confirm cross
 
       - name: Setup Cache
         uses: Swatinem/rust-cache@v2
@@ -338,17 +327,7 @@ jobs:
           path: ui/dist
 
       - name: cargo build
-        run: ${{ matrix.builder }} build --release --target ${{ matrix.target }} ${{ matrix.cargo-flags }}
-
-      # cross runs the compiler inside a Docker container as root, so the
-      # registry downloads and build artifacts it writes into the cached
-      # directories end up owned by root. Swatinem/rust-cache's save step runs
-      # as the unprivileged runner user and cannot prune root-owned files,
-      # which causes the cache save to fail and the cross build to never be
-      # cached. Reclaim ownership so the cache can be persisted.
-      - name: Reclaim cache ownership from cross
-        if: matrix.builder == 'cross'
-        run: sudo chown -R "$(id -u):$(id -g)" "$HOME/.cargo" target
+        run: cargo build --release --target ${{ matrix.target }} ${{ matrix.cargo-flags }}
 
       - name: Upload GitHub Release Artifacts
         uses: SierraSoftworks/gh-releases@v1.0.10
