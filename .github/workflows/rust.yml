@@ -242,13 +242,10 @@ jobs:
     name: ${{ matrix.os }}-${{ matrix.arch }}-release
     runs-on: ${{ matrix.run_on }}
 
-    # id-token lets the symbols action authenticate to the symbol server with
-    # this workflow's OIDC identity; contents stays writable for the release
-    # asset upload (an explicit permissions block replaces the defaults).
     permissions:
+      actions: read
       contents: write
       id-token: write
-
     needs:
       - deduplicate
       - version
