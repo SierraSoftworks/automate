@@ -361,17 +361,34 @@ on it. Grey debounces recovery internally for five minutes, and that five
 minutes is discounted before this comparison, so the duration you are setting a
 threshold against is real impact rather than Grey's settling window.
 
+## Grey's own nodes
+
+A clustered Grey also reports on itself. Its nodes decide a probe's health by
+quorum, so one node with a bad uplink cannot raise an alert alone; instead Grey
+sends a `node.state_changed` event (`entity.type == "node"`, named by the node
+identifier) when a node is **degraded** (a quorum of its probes fail from its
+vantage point while the cluster reads them passing) or **silent** (it has
+stopped recording samples). These are handled like any other monitor: one task
+per node, listing the probes it disagrees on, raised and recovered through the
+same waiting periods. Every node in the cluster reports every node, so the
+delivery still arrives when the affected node is the one that cannot send it;
+repeated deliveries of the same transition collapse onto the one task.
+
 ## Choosing which monitors to act on
 
 The filter runs against each state change and can match on `event`,
-`entity.type`, `entity.name`, `state.current`, `state.previous`,
-`state.healthy`, `state.was_healthy` and `state.availability`. A monitor's own
-tags are available as `tags.<name>` (or `entity.tags.<name>`), which is usually
-the most useful of the lot:
+`entity.type` (`probe`, `cron` or `node`), `entity.name`, `state.current`,
+`state.previous`, `state.healthy`, `state.was_healthy` and
+`state.availability`. A monitor's own tags are available as `tags.<name>` (or
+`entity.tags.<name>`), which is usually the most useful of the lot:
 
 ```
 entity.type == "probe" && tags.environment == "production"
 ```
+
+Node events carry no tags, so a filter on tags alone excludes them; add
+`|| entity.type == "node"` to keep them, or use `entity.type != "node"` to route
+them to a separate workflow.
 
 Leave it empty to act on every change Grey reports. Be careful narrowing it
 after the fact: a filter that admits the unhealthy event but rejects the
@@ -495,7 +512,7 @@ impl crate::workflows::ConfigurableWorkflow for GreyWebhook {
                     },
                 )
                 .with_help(
-                    "Only act on the state changes matching this, such as entity.type == \"probe\". A monitor's own tags are available as tags.<name>. Leave it empty to act on every change.",
+                    "Only act on the state changes matching this, such as entity.type == \"probe\" (or \"cron\" / \"node\" for Grey's own nodes). A monitor's own tags are available as tags.<name>. Leave it empty to act on every change.",
                 ),
             ]
             .into_iter()
@@ -714,11 +731,11 @@ impl Job for GreyWebhook {
     }
 }
 
-/// A Grey `probe.state_changed` / `cron.state_changed` webhook payload.
+/// A Grey `probe.state_changed` / `cron.state_changed` / `node.state_changed` webhook payload.
 ///
 /// This mirrors the wire shape of `grey_api::WebhookEvent` (see Grey's `docs/guide/webhooks.md`),
-/// carrying only the fields we read. The full `probe`/`cron` snapshots are kept as raw JSON so we
-/// can surface a little extra context without coupling to Grey's internal types.
+/// carrying only the fields we read. The full `probe`/`cron`/`node` snapshots are kept as raw JSON
+/// so we can surface a little extra context without coupling to Grey's internal types.
 #[allow(dead_code)]
 #[derive(Deserialize)]
 struct GreyWebhookEvent {
@@ -733,6 +750,8 @@ struct GreyWebhookEvent {
     probe: Option<serde_json::Value>,
     #[serde(default)]
     cron: Option<serde_json::Value>,
+    #[serde(default)]
+    node: Option<serde_json::Value>,
 }
 
 #[derive(Deserialize)]
@@ -882,8 +901,13 @@ impl GreyWebhookEvent {
     }
 
     /// The most recent failure detail from the embedded snapshot: the latest probe history bucket's
-    /// message, or a cron's last check-in. Returns `None` when nothing useful is available.
+    /// message, a cron's last check-in, or the probes a node disagrees with its cluster on. Returns
+    /// `None` when nothing useful is available.
     fn failure_detail(&self) -> Option<String> {
+        if let Some(node) = &self.node {
+            return Self::node_detail(node);
+        }
+
         if let Some(probe) = &self.probe {
             let message = probe
                 .get("history")?
@@ -920,13 +944,61 @@ impl GreyWebhookEvent {
         None
     }
 
+    /// Summarises a `node.state_changed` snapshot: how many of the node's probes disagree with the
+    /// cluster (a degraded node), or when it was last heard from (a silent one), naming the
+    /// disagreeing probes so the operator knows what that node is seeing.
+    fn node_detail(node: &serde_json::Value) -> Option<String> {
+        let count = |key: &str| node.get(key).and_then(|v| v.as_u64());
+        let mut disagreeing: Vec<&str> = node
+            .get("probes")
+            .and_then(|p| p.as_object())
+            .map(|probes| {
+                probes
+                    .iter()
+                    .filter(|(_, view)| {
+                        view.get("failing").and_then(|v| v.as_bool()) == Some(true)
+                            && view.get("cluster_failing").and_then(|v| v.as_bool()) == Some(false)
+                    })
+                    .map(|(name, _)| name.as_str())
+                    .collect()
+            })
+            .unwrap_or_default();
+        disagreeing.sort_unstable();
+
+        match node.get("status").and_then(|s| s.as_str()) {
+            Some("silent") => {
+                let last = node.get("last_updated").and_then(|v| v.as_str());
+                Some(match last {
+                    Some(last) => format!("no samples recorded since {last}"),
+                    None => "no samples recorded".to_string(),
+                })
+            }
+            _ => {
+                let (count, total) = (count("disagreeing")?, count("total")?);
+                let mut detail =
+                    format!("{count} of {total} probes fail from this node but not from the cluster");
+                if !disagreeing.is_empty() {
+                    let names = disagreeing
+                        .iter()
+                        .map(|name| format!("`{name}`"))
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    detail.push_str(&format!(": {names}"));
+                }
+                Some(detail)
+            }
+        }
+    }
+
     /// The Todoist priority for an unhealthy monitor, escalating the most disruptive states.
     fn priority(&self) -> i32 {
         match self.state.current.as_str() {
             // Probe down, cron failed, or a run that never started are the most urgent.
             "failing" | "failed" | "missing" => 4,
-            // An overrunning ("stuck") run is concerning but the job is at least alive.
-            "stuck" => 3,
+            // An overrunning ("stuck") run is concerning but the job is at least alive, and a Grey
+            // node that disagrees with its cluster (or has gone quiet) affects monitoring coverage
+            // rather than a monitored service.
+            "stuck" | "degraded" | "silent" => 3,
             _ => 3,
         }
     }
@@ -1223,6 +1295,68 @@ mod tests {
         assert_eq!(
             event.failure_detail().as_deref(),
             Some("last check-in `failed`: exit code 1")
+        );
+    }
+
+    fn node_event(status: &str) -> String {
+        let (healthy, previous) = match status {
+            "healthy" => ("true", "degraded"),
+            _ => ("false", "healthy"),
+        };
+        format!(
+            r#"{{
+                "version": "v1",
+                "id": "evt-3",
+                "event": "node.state_changed",
+                "timestamp": "2026-06-19T12:00:00Z",
+                "entity": {{ "type": "node", "name": "1p3x9k", "tags": {{}} }},
+                "state": {{ "current": "{status}", "previous": "{previous}", "healthy": {healthy}, "was_healthy": {was_healthy}, "since": "2026-06-19T11:00:00Z" }},
+                "node": {{
+                    "id": "1p3x9k",
+                    "status": "{status}",
+                    "last_updated": "2026-06-19T10:30:00Z",
+                    "probes": {{
+                        "web.prod": {{ "failing": true, "cluster_failing": false }},
+                        "api.prod": {{ "failing": true, "cluster_failing": false }},
+                        "db.prod": {{ "failing": true, "cluster_failing": true }}
+                    }},
+                    "disagreeing": 2,
+                    "total": 3,
+                    "quorum": 2
+                }}
+            }}"#,
+            was_healthy = healthy == "false"
+        )
+    }
+
+    #[test]
+    fn test_node_events_parse_and_describe_the_disagreement() {
+        let event: GreyWebhookEvent = serde_json::from_str(&node_event("degraded")).unwrap();
+
+        assert_eq!(event.unique_key(), "grey/node/1p3x9k");
+        assert_eq!(event.entity_label(), "Node");
+        assert_eq!(event.priority(), 3);
+        assert_eq!(
+            event.failure_detail().as_deref(),
+            Some("2 of 3 probes fail from this node but not from the cluster: `api.prod`, `web.prod`")
+        );
+
+        let description = event.task_description();
+        assert!(description.contains("**Node `1p3x9k`** changed from **healthy** to **degraded**"), "{description}");
+        assert!(description.contains("**Latest detail:** 2 of 3 probes"), "{description}");
+        assert!(!description.contains("**Tags:**"), "node events carry no tags: {description}");
+        assert_eq!(event.task_title(None), "**Grey**: Node `1p3x9k` is degraded");
+
+        let silent: GreyWebhookEvent = serde_json::from_str(&node_event("silent")).unwrap();
+        assert_eq!(
+            silent.failure_detail().as_deref(),
+            Some("no samples recorded since 2026-06-19T10:30:00Z")
+        );
+
+        let recovered: GreyWebhookEvent = serde_json::from_str(&node_event("healthy")).unwrap();
+        assert!(recovered.state.healthy);
+        assert!(
+            Filter::new(r#"entity.type == "node""#).unwrap().matches(&recovered).unwrap()
         );
     }
 
