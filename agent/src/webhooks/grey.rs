@@ -1543,7 +1543,7 @@ mod tests {
         );
         assert!(
             !description.contains("**Tags:**"),
-            "node events carry no tags: {description}"
+            "a node that has published no labels has no tags: {description}"
         );
         assert_eq!(
             event.task_title(None),
