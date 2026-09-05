@@ -365,14 +365,23 @@ threshold against is real impact rather than Grey's settling window.
 
 A clustered Grey also reports on itself. Its nodes decide a probe's health by
 quorum, so one node with a bad uplink cannot raise an alert alone; instead Grey
-sends a `node.state_changed` event (`entity.type == "node"`, named by the node
-identifier) when a node is **degraded** (a quorum of its probes fail from its
-vantage point while the cluster reads them passing) or **silent** (it has
-stopped recording samples). These are handled like any other monitor: one task
-per node, listing the probes it disagrees on, raised and recovered through the
-same waiting periods. Every node in the cluster reports every node, so the
-delivery still arrives when the affected node is the one that cannot send it;
-repeated deliveries of the same transition collapse onto the one task.
+sends a `node.state_changed` event (`entity.type == "node"`) when a node is
+**degraded** (a quorum of its probes fail from its vantage point while the
+cluster reads them passing) or **silent** (it has stopped recording samples).
+These are handled like any other monitor: one task per node, listing the probes
+it disagrees on, raised and recovered through the same waiting periods. Every
+node in the cluster reports every node, so the delivery still arrives when the
+affected node is the one that cannot send it; repeated deliveries of the same
+transition collapse onto the one task.
+
+Each node publishes a set of labels about itself: `hostname` (detected from the
+operating system, or set through `cluster.labels.hostname`) plus whatever the
+operator configured under `cluster.labels`, conventionally things like `cloud`,
+`region`, `az` or `cluster`. The task names the node by its `hostname` when it
+has one, falling back to the node identifier otherwise; the identifier is always
+recorded on the task and remains the key the node's task is tracked under, since
+hostnames are neither guaranteed nor unique. The remaining labels are listed on
+the task as tags.
 
 ## Choosing which monitors to act on
 
@@ -386,9 +395,16 @@ The filter runs against each state change and can match on `event`,
 entity.type == "probe" && tags.environment == "production"
 ```
 
-Node events carry no tags, so a filter on tags alone excludes them; add
-`|| entity.type == "node"` to keep them, or use `entity.type != "node"` to route
-them to a separate workflow.
+A node's labels are exposed the same way (`tags.hostname`, `tags.region`, …), so
+node events can be routed by where the node runs:
+
+```
+entity.type == "node" && tags.region == "ap-southeast-2"
+```
+
+A node that has published no labels has no tags at all, so a filter on tags
+alone excludes it; add `|| entity.type == "node"` to keep such nodes, or use
+`entity.type != "node"` to route them to a separate workflow.
 
 Leave it empty to act on every change Grey reports. Be careful narrowing it
 after the fact: a filter that admits the unhealthy event but rejects the
@@ -512,7 +528,7 @@ impl crate::workflows::ConfigurableWorkflow for GreyWebhook {
                     },
                 )
                 .with_help(
-                    "Only act on the state changes matching this, such as entity.type == \"probe\" (or \"cron\" / \"node\" for Grey's own nodes). A monitor's own tags are available as tags.<name>. Leave it empty to act on every change.",
+                    "Only act on the state changes matching this, such as entity.type == \"probe\" (or \"cron\" / \"node\" for Grey's own nodes). A monitor's own tags (or a node's labels, such as tags.hostname) are available as tags.<name>. Leave it empty to act on every change.",
                 ),
             ]
             .into_iter()
@@ -736,6 +752,10 @@ impl Job for GreyWebhook {
 /// This mirrors the wire shape of `grey_api::WebhookEvent` (see Grey's `docs/guide/webhooks.md`),
 /// carrying only the fields we read. The full `probe`/`cron`/`node` snapshots are kept as raw JSON
 /// so we can surface a little extra context without coupling to Grey's internal types.
+///
+/// For node events `entity.tags` carries the node's published labels (`hostname` plus whatever the
+/// operator configured), and the `node` snapshot repeats them under `labels`; older Grey versions
+/// send `{}` and omit `node.labels`, which is treated as a node with no labels.
 #[allow(dead_code)]
 #[derive(Deserialize)]
 struct GreyWebhookEvent {
@@ -779,9 +799,63 @@ struct GreyState {
 impl GreyWebhookEvent {
     /// A stable per-monitor key (`grey/<type>/<name>`) used to correlate the Todoist task, the
     /// [`GREY_FAILURES_PARTITION`] state record, and the queue idempotency key for the task's
-    /// active-state upserts.
+    /// active-state upserts. Always keyed by `entity.name` — for a node that is its identifier,
+    /// never its hostname, which is neither guaranteed to be present nor to be unique.
     fn unique_key(&self) -> String {
         format!("grey/{}/{}", self.entity.entity_type, self.entity.name)
+    }
+
+    /// Whether this event concerns one of Grey's own cluster nodes rather than a monitor.
+    fn is_node(&self) -> bool {
+        self.entity.entity_type == "node"
+    }
+
+    /// Looks up one of the entity's tags. For node events these are the node's published labels;
+    /// `entity.tags` is preferred, with the `node.labels` snapshot as a fallback so a payload that
+    /// carries the labels in only one place still resolves them.
+    fn label(&self, key: &str) -> Option<&str> {
+        self.entity
+            .tags
+            .get(key)
+            .map(String::as_str)
+            .or_else(|| self.node.as_ref()?.get("labels")?.get(key)?.as_str())
+    }
+
+    /// Every tag (or node label) on the entity, sorted by key so anything rendered from them (and
+    /// thus the upsert hash) is deterministic. `entity.tags` wins over `node.labels` on conflict.
+    fn labels(&self) -> std::collections::BTreeMap<&str, &str> {
+        let mut labels: std::collections::BTreeMap<&str, &str> = self
+            .node
+            .as_ref()
+            .and_then(|node| node.get("labels")?.as_object())
+            .into_iter()
+            .flat_map(|labels| labels.iter())
+            .filter_map(|(key, value)| Some((key.as_str(), value.as_str()?)))
+            .collect();
+
+        labels.extend(
+            self.entity
+                .tags
+                .iter()
+                .map(|(key, value)| (key.as_str(), value.as_str())),
+        );
+
+        labels
+    }
+
+    /// The node's `hostname` label, when it has published a usable one.
+    fn hostname(&self) -> Option<&str> {
+        self.is_node()
+            .then(|| self.label("hostname"))
+            .flatten()
+            .filter(|hostname| !hostname.trim().is_empty())
+    }
+
+    /// The name the entity is shown under: a node's hostname when it has one, otherwise the
+    /// entity's name (the node identifier, or the probe/cron name). Only for display — identity
+    /// and correlation always go through [`Self::unique_key`].
+    fn display_name(&self) -> &str {
+        self.hostname().unwrap_or(&self.entity.name)
     }
 
     /// A human-friendly label for the entity type (`Probe` / `Cron`), title-cased for display.
@@ -797,7 +871,12 @@ impl GreyWebhookEvent {
     /// when one is configured. The `status` clause describes the monitor's current situation, e.g.
     /// `is failing`, `is recovering`, or `has recovered after 12m`.
     fn title_with_status(&self, dashboard_url: Option<&str>, status: &str) -> String {
-        let body = format!("{} `{}` {}", self.entity_label(), self.entity.name, status);
+        let body = format!(
+            "{} `{}` {}",
+            self.entity_label(),
+            self.display_name(),
+            status
+        );
 
         match dashboard_url {
             Some(url) if !url.is_empty() => format!("[**Grey**]({url}): {body}"),
@@ -819,11 +898,16 @@ impl GreyWebhookEvent {
         )
     }
 
-    /// The `- **Since:** … / - **Availability:** … / - **Tags:** …` context lines shared by every
-    /// task description. Tags are sorted so the rendered description (and thus the upsert hash) is
-    /// deterministic.
+    /// The `- **Node:** … / - **Since:** … / - **Availability:** … / - **Tags:** …` context lines
+    /// shared by every task description. Tags are sorted so the rendered description (and thus the
+    /// upsert hash) is deterministic. A node shown by hostname also records its identifier, since
+    /// that is what its task is tracked under; the hostname itself is then left out of the tags.
     fn detail_lines(&self) -> Vec<String> {
         let mut lines = Vec::new();
+
+        if self.hostname().is_some() {
+            lines.push(format!("- **Node:** `{}`", self.entity.name));
+        }
 
         if let Some(since) = self.state.since {
             lines.push(format!("- **Since:** {}", since.to_rfc3339()));
@@ -833,15 +917,14 @@ impl GreyWebhookEvent {
             lines.push(format!("- **Availability:** {availability:.2}%"));
         }
 
-        if !self.entity.tags.is_empty() {
-            let mut tags: Vec<_> = self.entity.tags.iter().collect();
-            tags.sort();
-            let rendered = tags
-                .into_iter()
-                .map(|(key, value)| format!("`{key}={value}`"))
-                .collect::<Vec<_>>()
-                .join(", ");
-            lines.push(format!("- **Tags:** {rendered}"));
+        let tags = self
+            .labels()
+            .into_iter()
+            .filter(|(key, _)| !(self.is_node() && *key == "hostname"))
+            .map(|(key, value)| format!("`{key}={value}`"))
+            .collect::<Vec<_>>();
+        if !tags.is_empty() {
+            lines.push(format!("- **Tags:** {}", tags.join(", ")));
         }
 
         lines
@@ -859,7 +942,7 @@ impl GreyWebhookEvent {
             format!(
                 "**{} `{}`** changed from **{}** to **{}**.",
                 self.entity_label(),
-                self.entity.name,
+                self.display_name(),
                 self.state.previous,
                 self.state.current
             ),
@@ -886,7 +969,7 @@ impl GreyWebhookEvent {
             format!(
                 "**{} `{}`** has **recovered**.",
                 self.entity_label(),
-                self.entity.name
+                self.display_name()
             ),
             String::new(),
             format!("- **Total impact time:** {}", format_duration(impact)),
@@ -975,8 +1058,9 @@ impl GreyWebhookEvent {
             }
             _ => {
                 let (count, total) = (count("disagreeing")?, count("total")?);
-                let mut detail =
-                    format!("{count} of {total} probes fail from this node but not from the cluster");
+                let mut detail = format!(
+                    "{count} of {total} probes fail from this node but not from the cluster"
+                );
                 if !disagreeing.is_empty() {
                     let names = disagreeing
                         .iter()
@@ -1022,16 +1106,12 @@ impl Filterable for GreyWebhookEvent {
                 .map(FilterValue::Number)
                 .unwrap_or(FilterValue::Null),
             k if k.starts_with("entity.tags.") => self
-                .entity
-                .tags
-                .get(&k["entity.tags.".len()..])
-                .map(|v| v.as_str().into())
+                .label(&k["entity.tags.".len()..])
+                .map(Into::into)
                 .unwrap_or(FilterValue::Null),
             k if k.starts_with("tags.") => self
-                .entity
-                .tags
-                .get(&k["tags.".len()..])
-                .map(|v| v.as_str().into())
+                .label(&k["tags.".len()..])
+                .map(Into::into)
                 .unwrap_or(FilterValue::Null),
             _ => FilterValue::Null,
         }
@@ -1041,6 +1121,8 @@ impl Filterable for GreyWebhookEvent {
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
+
+    use rstest::rstest;
 
     use crate::db::PeekedMessage;
     use crate::publishers::TodoistUpsertTaskState;
@@ -1298,23 +1380,35 @@ mod tests {
         );
     }
 
+    /// A `node.state_changed` payload as sent by a Grey that predates node labels: empty
+    /// `entity.tags` and no `node.labels` at all.
     fn node_event(status: &str) -> String {
+        node_event_with_labels(status, "{}", None)
+    }
+
+    /// A `node.state_changed` payload with `entity.tags` set to `tags` (a JSON object) and, when
+    /// given, a `node.labels` map.
+    fn node_event_with_labels(status: &str, tags: &str, node_labels: Option<&str>) -> String {
         let (healthy, previous) = match status {
             "healthy" => ("true", "degraded"),
             _ => ("false", "healthy"),
         };
+        let node_labels = node_labels
+            .map(|labels| format!(r#""labels": {labels},"#))
+            .unwrap_or_default();
         format!(
             r#"{{
                 "version": "v1",
                 "id": "evt-3",
                 "event": "node.state_changed",
                 "timestamp": "2026-06-19T12:00:00Z",
-                "entity": {{ "type": "node", "name": "1p3x9k", "tags": {{}} }},
+                "entity": {{ "type": "node", "name": "1p3x9k", "tags": {tags} }},
                 "state": {{ "current": "{status}", "previous": "{previous}", "healthy": {healthy}, "was_healthy": {was_healthy}, "since": "2026-06-19T11:00:00Z" }},
                 "node": {{
                     "id": "1p3x9k",
                     "status": "{status}",
                     "last_updated": "2026-06-19T10:30:00Z",
+                    {node_labels}
                     "probes": {{
                         "web.prod": {{ "failing": true, "cluster_failing": false }},
                         "api.prod": {{ "failing": true, "cluster_failing": false }},
@@ -1329,6 +1423,101 @@ mod tests {
         )
     }
 
+    const NODE_LABELS: &str =
+        r#"{ "hostname": "grey-syd-1", "cloud": "aws", "region": "ap-southeast-2" }"#;
+
+    #[rstest]
+    #[case::labels_in_tags_and_snapshot(NODE_LABELS, Some(NODE_LABELS))]
+    #[case::labels_in_tags_only(NODE_LABELS, None)]
+    #[case::labels_in_snapshot_only("{}", Some(NODE_LABELS))]
+    fn a_labelled_node_is_named_by_hostname_and_lists_its_other_labels(
+        #[case] tags: &str,
+        #[case] node_labels: Option<&str>,
+    ) {
+        let event: GreyWebhookEvent =
+            serde_json::from_str(&node_event_with_labels("degraded", tags, node_labels)).unwrap();
+
+        // The hostname is for people; the identifier stays the key the incident is tracked under.
+        assert_eq!(event.display_name(), "grey-syd-1");
+        assert_eq!(event.unique_key(), "grey/node/1p3x9k");
+
+        let title = event.task_title(None);
+        assert!(title.contains("`grey-syd-1`"), "{title}");
+        assert!(!title.contains("1p3x9k"), "{title}");
+
+        for description in [
+            event.task_description(),
+            event.recovered_description(chrono::Duration::minutes(12)),
+        ] {
+            assert!(description.contains("Node `grey-syd-1`"), "{description}");
+            assert!(
+                description.contains("`1p3x9k`"),
+                "the identifier is recorded: {description}"
+            );
+            assert!(description.contains("`cloud=aws`"), "{description}");
+            assert!(
+                description.contains("`region=ap-southeast-2`"),
+                "{description}"
+            );
+            assert!(
+                !description.contains("hostname="),
+                "the hostname is the name, not a tag: {description}"
+            );
+        }
+
+        // The labels route node events just like a monitor's tags route probes and crons.
+        for filter in [
+            r#"tags.hostname == "grey-syd-1""#,
+            r#"entity.tags.region == "ap-southeast-2""#,
+            r#"entity.type == "node" && tags.cloud == "aws""#,
+        ] {
+            assert!(
+                Filter::new(filter).unwrap().matches(&event).unwrap(),
+                "{filter}"
+            );
+        }
+        assert!(
+            !Filter::new(r#"tags.region == "eu-west-1""#)
+                .unwrap()
+                .matches(&event)
+                .unwrap()
+        );
+    }
+
+    #[rstest]
+    #[case::pre_label_payload("{}", None)]
+    #[case::empty_labels("{}", Some("{}"))]
+    #[case::blank_hostname(r#"{ "hostname": "  " }"#, None)]
+    fn a_node_without_a_hostname_is_named_by_its_identifier(
+        #[case] tags: &str,
+        #[case] node_labels: Option<&str>,
+    ) {
+        let event: GreyWebhookEvent =
+            serde_json::from_str(&node_event_with_labels("degraded", tags, node_labels)).unwrap();
+
+        assert_eq!(event.display_name(), "1p3x9k");
+        assert_eq!(event.unique_key(), "grey/node/1p3x9k");
+        assert!(event.task_title(None).contains("`1p3x9k`"));
+        assert!(
+            !Filter::new(r#"tags.hostname == "grey-syd-1""#)
+                .unwrap()
+                .matches(&event)
+                .unwrap()
+        );
+    }
+
+    #[test]
+    fn a_probe_keeps_its_own_name_even_when_tagged_with_a_hostname() {
+        let body = probe_event("web.prod", false).replace(
+            r#""service": "Web""#,
+            r#""service": "Web", "hostname": "grey-syd-1""#,
+        );
+        let event: GreyWebhookEvent = serde_json::from_str(&body).unwrap();
+
+        assert_eq!(event.display_name(), "web.prod");
+        assert!(event.task_description().contains("`hostname=grey-syd-1`"));
+    }
+
     #[test]
     fn test_node_events_parse_and_describe_the_disagreement() {
         let event: GreyWebhookEvent = serde_json::from_str(&node_event("degraded")).unwrap();
@@ -1338,14 +1527,28 @@ mod tests {
         assert_eq!(event.priority(), 3);
         assert_eq!(
             event.failure_detail().as_deref(),
-            Some("2 of 3 probes fail from this node but not from the cluster: `api.prod`, `web.prod`")
+            Some(
+                "2 of 3 probes fail from this node but not from the cluster: `api.prod`, `web.prod`"
+            )
         );
 
         let description = event.task_description();
-        assert!(description.contains("**Node `1p3x9k`** changed from **healthy** to **degraded**"), "{description}");
-        assert!(description.contains("**Latest detail:** 2 of 3 probes"), "{description}");
-        assert!(!description.contains("**Tags:**"), "node events carry no tags: {description}");
-        assert_eq!(event.task_title(None), "**Grey**: Node `1p3x9k` is degraded");
+        assert!(
+            description.contains("**Node `1p3x9k`** changed from **healthy** to **degraded**"),
+            "{description}"
+        );
+        assert!(
+            description.contains("**Latest detail:** 2 of 3 probes"),
+            "{description}"
+        );
+        assert!(
+            !description.contains("**Tags:**"),
+            "node events carry no tags: {description}"
+        );
+        assert_eq!(
+            event.task_title(None),
+            "**Grey**: Node `1p3x9k` is degraded"
+        );
 
         let silent: GreyWebhookEvent = serde_json::from_str(&node_event("silent")).unwrap();
         assert_eq!(
@@ -1356,7 +1559,10 @@ mod tests {
         let recovered: GreyWebhookEvent = serde_json::from_str(&node_event("healthy")).unwrap();
         assert!(recovered.state.healthy);
         assert!(
-            Filter::new(r#"entity.type == "node""#).unwrap().matches(&recovered).unwrap()
+            Filter::new(r#"entity.type == "node""#)
+                .unwrap()
+                .matches(&recovered)
+                .unwrap()
         );
     }
 
