@@ -40,7 +40,7 @@ jobs:
 
       - name: Prepare release notes
         if: github.event_name != 'pull_request' || steps.success.outputs.cache-hit != 'true'
-        uses: release-drafter/release-drafter@v7.7.0
+        uses: release-drafter/release-drafter@v7.9.0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
