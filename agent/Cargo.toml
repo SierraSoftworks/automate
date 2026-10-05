@@ -39,9 +39,10 @@ tokio = { version = "1.52.3", features = ["net", "io-std", "rt-multi-thread", "t
 tokio-rusqlite = "0.7.0"
 toml = "1.1.2"
 tracing = { version = "0.1.44" }
-tracing-batteries = { git = "https://github.com/sierrasoftworks/tracing-batteries-rs.git", features = [
+tracing-batteries = { git = "https://github.com/sierrasoftworks/tracing-batteries-rs.git", branch = "feat/pensive-hopper-hntjkm", features = [
   "analytics",
   "opentelemetry",
+  "profiling-pprof",
   "testing",
   "human_errors"
 ] }
