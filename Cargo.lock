@@ -4802,7 +4802,7 @@ dependencies = [
 [[package]]
 name = "tracing-batteries"
 version = "0.1.0"
-source = "git+https://github.com/sierrasoftworks/tracing-batteries-rs.git?branch=feat%2Fpensive-hopper-hntjkm#501c30bf261858a0d555b77bf036a8cb07702a28"
+source = "git+https://github.com/sierrasoftworks/tracing-batteries-rs.git#29f5a93200379d1336d28cbad810cb3c6f8e747f"
 dependencies = [
  "chrono",
  "flate2",
