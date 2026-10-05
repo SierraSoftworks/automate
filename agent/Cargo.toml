@@ -42,6 +42,7 @@ tracing = { version = "0.1.44" }
 tracing-batteries = { git = "https://github.com/sierrasoftworks/tracing-batteries-rs.git", features = [
   "analytics",
   "opentelemetry",
+  "profiling-pprof",
   "testing",
   "human_errors"
 ] }

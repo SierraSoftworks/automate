@@ -63,6 +63,10 @@ async fn main() {
 
     let session = Arc::new(Session::new("automate", env!("CARGO_PKG_VERSION"))
         .with_battery(tracing_batteries::OpenTelemetry::new("").with_stdout(true))
+        .with_battery(
+            tracing_batteries::Profiling::new("")
+                .with_backend(tracing_batteries::ProfilingPprof::new()),
+        )
         .with_battery(tracing_batteries::Sentry::new(
             "https://64422db58bbf92837d6484d1b8117d5a@o219072.ingest.us.sentry.io/4506753155137536",
         ))
