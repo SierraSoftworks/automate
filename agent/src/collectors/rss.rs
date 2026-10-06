@@ -4,6 +4,18 @@ use std::borrow::Cow;
 use crate::collectors::{Collector, incremental::IncrementalCollector};
 use chrono::{DateTime, Utc};
 use feed_rs::{model::Entry, parser::parse};
+use regex::bytes::Regex;
+use std::sync::LazyLock;
+
+/// Matches empty Media RSS title/description elements, which feed-rs 3.x
+/// rejects with a `MissingContent` error (YouTube emits `<media:description/>`
+/// for videos without a description).
+static EMPTY_MEDIA_TEXT: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r"<media:(?:title|description)(?:\s[^>]*)?/>|<media:title(?:\s[^>]*)?>\s*</media:title>|<media:description(?:\s[^>]*)?>\s*</media:description>",
+    )
+    .expect("valid regex")
+});
 
 /// The watermark persisted between RSS collector runs.
 ///
@@ -130,6 +142,7 @@ impl IncrementalCollector for RssCollector {
             ],
         )?;
 
+        let content = EMPTY_MEDIA_TEXT.replace_all(&content, &b""[..]);
         let items: Vec<Entry> = parse(&content[..])
             .wrap_user_err(
                 format!(
