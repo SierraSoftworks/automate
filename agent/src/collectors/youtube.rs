@@ -79,7 +79,7 @@ fn parse_youtube_entry(entry: &Entry) -> YouTubeItem {
     let channel = entry
         .authors
         .first()
-        .map(|a| a.name.to_string())
+        .and_then(|a| a.name.clone())
         .unwrap_or_default();
 
     YouTubeItem {
