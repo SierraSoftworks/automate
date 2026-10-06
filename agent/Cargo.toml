@@ -5,7 +5,7 @@ edition = "2024"
 
 [dependencies]
 automate-api = { path = "../api" }
-actix-web = "4.13.0"
+actix-web = { version = "4.13.0", default-features = false, features = ["macros", "compress-brotli", "compress-gzip", "compress-zstd", "cookies", "unicode", "compat", "ws"] }
 async-trait = "0.1.89"
 base64 = "0.23"
 calcard = { version = "0.3.4", features = ["serde"] }
