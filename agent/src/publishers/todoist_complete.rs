@@ -8,6 +8,12 @@ pub struct TodoistCompleteTaskPayload {
     pub unique_key: String,
 
     pub config: crate::publishers::TodoistTarget,
+
+    /// When set, the task is only completed if the title it was last upserted with is exactly
+    /// this. It lets a caller tidy away one specific state of a task (say, an alert it has since
+    /// withdrawn) without closing whatever else may be living under the same key.
+    #[serde(default)]
+    pub only_if_title: Option<String>,
 }
 
 pub struct TodoistCompleteTask;
@@ -41,6 +47,12 @@ impl Job for TodoistCompleteTask {
             .get::<TodoistUpsertTaskState>("todoist/task", cache_key.clone())
             .await?
         {
+            if let Some(expected) = job.only_if_title.as_deref()
+                && existing_task.title.as_deref() != Some(expected)
+            {
+                return Ok(());
+            }
+
             client.0.complete_task(&existing_task.id).await.wrap_user_err(
                 format!("Failed to complete Todoist task '{}'.", existing_task.id),
                 &[
