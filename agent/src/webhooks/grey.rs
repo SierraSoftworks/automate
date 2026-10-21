@@ -46,6 +46,12 @@ type HmacSha256 = Hmac<Sha256>;
 /// ([`crate::services::debounce::DebounceState`]), keyed by [`GreyWebhookEvent::unique_key`].
 const GREY_FAILURES_PARTITION: &str = "grey/failures";
 
+/// How long after withdrawing a pending alert we sweep for a task that surfaced anyway. Purging the
+/// delayed upsert only helps while it is still waiting in the queue; Grey's own 5m debounce lines a
+/// brief blip's recovery up with the default alert delay almost to the second, so the upsert is
+/// often already running when the recovery arrives. This gives it time to finish before the sweep.
+const WITHDRAWN_ALERT_SWEEP_DELAY: chrono::Duration = chrono::Duration::minutes(1);
+
 /// Formats a duration as a compact, human-readable string (e.g. `1h 5m`, `12m`, `45s`, `0s`).
 /// Sub-minute components are only shown when the duration is under an hour, keeping longer spans
 /// tidy. Negative durations are clamped to `0s`.
@@ -641,12 +647,17 @@ impl Job for GreyWebhook {
             }
             Some(Detection::Recovering { triggered_for }) => {
                 // If the monitor returned to healthy before the alert debounce window elapsed, the
-                // operator's task never surfaced — its delayed upsert is still sitting in the queue —
-                // so cancel that pending alert and don't surface anything. A brief blip that clears
-                // within the alert window must never reach Todoist (previously these produced spurious
-                // "recovered after 0s" tasks). The debounce state is deliberately left in place so a
-                // relapse within the recovery window is still recognised as the same flapping incident
-                // and re-escalated immediately.
+                // operator's task should never have surfaced — its delayed upsert is still sitting in
+                // the queue — so cancel that pending alert and don't surface anything. A brief blip
+                // that clears within the alert window must never reach Todoist (previously these
+                // produced spurious "recovered after 0s" tasks). The debounce state is deliberately
+                // left in place so a relapse within the recovery window is still recognised as the
+                // same flapping incident and re-escalated immediately.
+                //
+                // The purge can lose a race with the upsert it is cancelling (see
+                // [`WITHDRAWN_ALERT_SWEEP_DELAY`]), which would otherwise leave an "is failing" task
+                // that nothing ever closes, so a completion is queued behind it. That is a no-op
+                // when no task exists, and a relapse cancels it like any other pending cleanup.
                 if triggered_for < config.alert_delay {
                     info!(
                         "Grey {} '{}' recovered ({} -> {}) after only {}, before the {} alert window elapsed; purging the pending alert without surfacing a task.",
@@ -662,6 +673,24 @@ impl Job for GreyWebhook {
                         .queue()
                         .purge(TodoistUpsertTask::partition(), unique_key.clone())
                         .await?;
+
+                    // Only the alert we just withdrew is swept: this key may also hold an earlier
+                    // incident's recovered task, which stays for the operator to review. The alert
+                    // was titled from the unhealthy state, which is this event's previous one.
+                    TodoistCompleteTask::dispatch_delayed(
+                        TodoistCompleteTaskPayload {
+                            unique_key: unique_key.clone(),
+                            config: todoist_config,
+                            only_if_title: Some(event.title_with_status(
+                                dashboard_url.as_deref(),
+                                &format!("is {}", event.state.previous),
+                            )),
+                        },
+                        Some(unique_key.into()),
+                        WITHDRAWN_ALERT_SWEEP_DELAY,
+                        services,
+                    )
+                    .await?;
 
                     return Ok(());
                 }
@@ -700,6 +729,7 @@ impl Job for GreyWebhook {
                         TodoistCompleteTaskPayload {
                             unique_key: unique_key.clone(),
                             config: todoist_config,
+                            ..Default::default()
                         },
                         Some(unique_key.into()),
                         config.recovery_delay,
@@ -1611,9 +1641,24 @@ mod tests {
             peek_upserts(&services).await.is_empty(),
             "the pending alert should be purged and no recovered task surfaced"
         );
+
+        // The purge cannot stop an upsert that was already running, so a short-fused cleanup is
+        // queued to sweep up a task that surfaced anyway (it does nothing when none exists). It is
+        // pinned to the withdrawn alert's title so an older recovered task is left for review.
+        let completes = peek_completes(&services).await;
+        assert_eq!(completes.len(), 1, "a sweep should be queued for the blip");
+        assert_eq!(completes[0].key, unique_key);
+        assert_eq!(
+            completes[0].payload.only_if_title.as_deref(),
+            Some("**Grey**: Probe `web.prod` is failing")
+        );
         assert!(
-            peek_completes(&services).await.is_empty(),
-            "no cleanup should be queued for an unsurfaced blip"
+            completes[0].hidden_until > Utc::now(),
+            "the sweep should give an in-flight alert time to land"
+        );
+        assert!(
+            completes[0].hidden_until < Utc::now() + chrono::Duration::minutes(2),
+            "the sweep should not wait out the whole recovery window"
         );
 
         // Crucially the debounce state is retained (now marked recovering, first-failure time
@@ -1641,6 +1686,11 @@ mod tests {
         )
         .await
         .unwrap();
+
+        assert!(
+            peek_completes(&services).await.is_empty(),
+            "the relapse should cancel the pending sweep"
+        );
 
         let upserts = peek_upserts(&services).await;
         let escalation = upserts

@@ -453,6 +453,7 @@ impl Job for GrafanaWebhook {
                     TodoistCompleteTaskPayload {
                         unique_key,
                         config: config.todoist.clone(),
+                        ..Default::default()
                     },
                     None,
                     services,

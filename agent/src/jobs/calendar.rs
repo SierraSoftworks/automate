@@ -244,6 +244,7 @@ impl Job for CalendarWorkflow {
                         crate::publishers::TodoistCompleteTaskPayload {
                             unique_key: identifier_string,
                             config: job.todoist.clone(),
+                            ..Default::default()
                         },
                         None,
                         services,
@@ -257,6 +258,7 @@ impl Job for CalendarWorkflow {
                         crate::publishers::TodoistCompleteTaskPayload {
                             unique_key: identifier_string,
                             config: job.todoist.clone(),
+                            ..Default::default()
                         },
                         None,
                         services,
