@@ -57,7 +57,7 @@ zeroize = "1.9"
 [dev-dependencies]
 base64 = "0.23"
 rsa = { version = "0.9.10", features = ["getrandom"] }
-rstest = "0.27.0"
+rstest = "0.28.0"
 wiremock = "0.6"
 
 [features]
