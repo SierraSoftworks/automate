@@ -109,10 +109,11 @@ impl AlphaVantageClient {
             .await
     }
 
-    /// Looks up the trading currency for a symbol via the `OVERVIEW` endpoint,
-    /// caching the result for six months (a symbol's currency rarely changes).
-    /// Falls back to `USD` when AlphaVantage does not report a currency, which
-    /// happens for non-equity instruments such as ETFs.
+    /// Looks up the trading currency for a symbol, caching the result for six
+    /// months (a symbol's currency rarely changes). The `OVERVIEW` endpoint is
+    /// consulted first; it reports nothing for non-equity instruments such as
+    /// ETFs, so the listing returned by `SYMBOL_SEARCH` is used as a fallback.
+    /// Falls back to `USD` when neither endpoint reports a currency.
     pub async fn currency(
         &self,
         services: &(impl Services + Send + Sync + 'static),
@@ -124,7 +125,7 @@ impl AlphaVantageClient {
         services
             .cache()
             .cached(
-                "alphavantage/overview",
+                "alphavantage/currency",
                 symbol.to_string(),
                 move || {
                     Box::pin(async move {
@@ -132,14 +133,21 @@ impl AlphaVantageClient {
                             .get(&[("function", "OVERVIEW"), ("symbol", &symbol_owned)])
                             .await?;
 
-                        let currency = body
+                        if let Some(currency) = body
                             .get("Currency")
                             .and_then(|currency| currency.as_str())
                             .filter(|currency| !currency.is_empty())
-                            .unwrap_or("USD")
-                            .to_uppercase();
+                        {
+                            return Ok(currency.to_uppercase());
+                        }
 
-                        Ok(currency)
+                        let body = client
+                            .get(&[("function", "SYMBOL_SEARCH"), ("keywords", &symbol_owned)])
+                            .await?;
+
+                        Ok(listing_currency(&body, &symbol_owned)
+                            .unwrap_or("USD")
+                            .to_uppercase())
                     })
                 },
                 chrono::Duration::days(182),
@@ -271,6 +279,35 @@ impl AlphaVantageClient {
     }
 }
 
+/// Extracts the trading currency for `symbol` from a `SYMBOL_SEARCH` response.
+/// An exact symbol match is preferred; otherwise the best-ranked listing whose
+/// symbol extends the requested one is used, since AlphaVantage's exchange
+/// suffixes can be longer than the commonly used ones (`VUAA.DE` is listed as
+/// `VUAA.DEX`).
+fn listing_currency<'a>(body: &'a serde_json::Value, symbol: &str) -> Option<&'a str> {
+    let symbol = symbol.to_uppercase();
+    let listings: Vec<(String, &str)> = body
+        .get("bestMatches")?
+        .as_array()?
+        .iter()
+        .filter_map(|listing| {
+            let listed = listing.get("1. symbol")?.as_str()?.to_uppercase();
+            let currency = listing.get("8. currency")?.as_str()?;
+            (!currency.is_empty()).then_some((listed, currency))
+        })
+        .collect();
+
+    listings
+        .iter()
+        .find(|(listed, _)| *listed == symbol)
+        .or_else(|| {
+            listings
+                .iter()
+                .find(|(listed, _)| listed.starts_with(&symbol))
+        })
+        .map(|(_, currency)| *currency)
+}
+
 /// A simple asynchronous rate limiter that spaces successive operations at
 /// least `min_interval` apart. Multiple callers serialise on the internal
 /// mutex, so concurrent requests queue up rather than racing.
@@ -388,14 +425,31 @@ mod tests {
         assert_eq!(currency, "GBP");
     }
 
+    #[rstest::rstest]
+    #[case::exact_match("VUAA.DEX", "EUR")]
+    #[case::extended_suffix("VUAA.DE", "EUR")]
+    #[case::other_listing("VUAA.LON", "USD")]
+    #[case::unlisted("NOPE", "USD")]
     #[tokio::test]
-    async fn currency_defaults_to_usd_when_absent() {
+    async fn currency_falls_back_to_symbol_search(#[case] symbol: &str, #[case] expected: &str) {
         let server = mock_alphavantage("OVERVIEW", r#"{}"#).await;
+        Mock::given(method("GET"))
+            .and(path("/query"))
+            .and(query_param("function", "SYMBOL_SEARCH"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(
+                r#"{"bestMatches":[
+                    {"1. symbol":"VUAA.LON","3. type":"ETF","8. currency":"USD"},
+                    {"1. symbol":"VUAA.DEX","3. type":"ETF","8. currency":"EUR"}
+                ]}"#,
+            ))
+            .mount(&server)
+            .await;
         let services = mock_services().await.unwrap();
-        let client = AlphaVantageClient::new_with_url(services.http_client(), "demo", server.uri());
+        let client = AlphaVantageClient::new_with_url(services.http_client(), "demo", server.uri())
+            .with_min_request_interval(Duration::ZERO);
 
-        let currency = client.currency(&services, "SPY").await.unwrap();
-        assert_eq!(currency, "USD");
+        let currency = client.currency(&services, symbol).await.unwrap();
+        assert_eq!(currency, expected);
     }
 
     #[tokio::test]

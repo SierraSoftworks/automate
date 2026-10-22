@@ -971,7 +971,8 @@ impl GitHubAttentionEvent {
                 // with active-sounding actions (`created`, `reintroduced`,
                 // `appeared_in_branch`) for alerts which are already dismissed
                 // or fixed, so the alert's own state has the final say.
-                resolved: RESOLVING_ACTIONS.contains(&payload.action.as_str()) || !alert.is_active(),
+                resolved: RESOLVING_ACTIONS.contains(&payload.action.as_str())
+                    || !alert.is_active(),
                 repository: payload.repository.full_name.clone(),
                 repository_owner: payload.repository.owner.login.clone(),
                 repository_name: payload.repository.name.clone(),
