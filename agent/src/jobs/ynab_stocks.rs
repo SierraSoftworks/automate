@@ -76,13 +76,17 @@ Open the account in YNAB, edit its notes, and add a line beginning with
 `/automate:stock`:
 
 ```
-/automate:stock MSFT=100 AAPL=50 cost_basis=USD5000 cgt_rate=40% payee_name="My Broker"
+/automate:stock MSFT=100 AAPL=50 cash=EUR250 cost_basis=USD5000 cgt_rate=40% payee_name="My Broker"
 ```
 
 The directive occupies a single line and the rest of the note is left alone, so
 you can keep your own notes above and below it.
 
 - Each `SYMBOL=quantity` pair is a holding. Quantities may be fractional.
+- `cash` is uninvested money held in the account, optionally with a currency
+  prefix (`EUR250`, or just `250` for the budget's own currency). Separate
+  several currencies with commas (`cash=EUR250,USD100`). Cash counts in full
+  and is never subject to the `cgt_rate` deduction.
 - `cost_basis` is what you paid, optionally with a currency prefix
   (`USD5000`, or just `5000` for the budget's own currency). It is only used to
   work out the gain.
@@ -287,6 +291,9 @@ struct StocksState {
 struct StockSpec {
     /// The (ticker symbol, quantity held) pairs.
     holdings: Vec<(String, f64)>,
+    /// The (currency, amount) cash balances; the currency is `None` when the
+    /// amount is quoted in the budget's own currency.
+    cash: Vec<(Option<String>, f64)>,
     /// The raw cost-basis specification (e.g. `USD5000` or `5000`), if provided.
     cost_basis: Option<String>,
     /// The capital gains tax rate, expressed as a fraction (e.g. `0.4` for 40%).
@@ -303,6 +310,14 @@ struct StockValue {
     native_price: f64,
     native_value: f64,
     /// The value of the holding converted into the budget's currency.
+    value: f64,
+}
+
+/// The valuation of a single cash balance held alongside the holdings.
+struct CashValue {
+    native_currency: String,
+    native_value: f64,
+    /// The cash balance converted into the budget's currency.
     value: f64,
 }
 
@@ -410,11 +425,22 @@ impl Job for YnabStocksWorkflow {
                 });
             }
 
-            if values.is_empty() {
-                continue;
+            // Convert each cash balance into the budget's currency.
+            let mut cash = Vec::with_capacity(spec.cash.len());
+            for (currency, amount) in &spec.cash {
+                let currency = currency.as_deref().unwrap_or(budget_currency);
+                let rate = alphavantage
+                    .exchange_rate(services, currency, budget_currency)
+                    .await?;
+                cash.push(CashValue {
+                    native_currency: currency.to_uppercase(),
+                    native_value: *amount,
+                    value: amount * rate,
+                });
             }
 
             let gross: f64 = values.iter().map(|v| v.value).sum();
+            let cash_total: f64 = cash.iter().map(|c| c.value).sum();
 
             // Convert the cost basis (which may be quoted in any currency) into
             // the budget's currency before applying the CGT deduction.
@@ -432,7 +458,9 @@ impl Job for YnabStocksWorkflow {
                 None => 0.0,
             };
 
-            let net = net_value(gross, cost_basis, spec.cgt_rate);
+            // Cash is held at face value, so only the holdings are subject to
+            // the CGT deduction.
+            let net = net_value(gross, cost_basis, spec.cgt_rate) + cash_total;
             let shift = compute_shift(net, account.balance);
 
             // 1000 milliunits == 1 unit of the budget's currency, so we ignore
@@ -462,7 +490,7 @@ impl Job for YnabStocksWorkflow {
                         payee_id: None,
                         payee_name: Some(payee_name),
                         category_id: None,
-                        memo: Some(build_memo(&values)),
+                        memo: Some(build_memo(&values, &cash)),
                         cleared: Some(ClearedStatus::Cleared),
                         approved: Some(true),
                         flag_color: None,
@@ -513,9 +541,9 @@ fn budget_currency_iso_code(settings: &rust_ynab::PlanSettings) -> Option<&str> 
         .map(|currency_format| currency_format.iso_code.as_str())
 }
 
-/// Builds a human-readable memo summarising the valued holdings, truncated to
-/// fit within YNAB's memo length limit.
-fn build_memo(values: &[StockValue]) -> String {
+/// Builds a human-readable memo summarising the valued holdings and cash
+/// balances, truncated to fit within YNAB's memo length limit.
+fn build_memo(values: &[StockValue], cash: &[CashValue]) -> String {
     let memo = values
         .iter()
         .map(|v| {
@@ -524,6 +552,10 @@ fn build_memo(values: &[StockValue]) -> String {
                 v.symbol, v.native_currency, v.native_value, v.native_currency, v.native_price
             )
         })
+        .chain(
+            cash.iter()
+                .map(|c| format!("Cash: {} {:.2}", c.native_currency, c.native_value)),
+        )
         .collect::<Vec<_>>()
         .join(", ");
 
@@ -542,7 +574,8 @@ fn truncate_memo(memo: &str) -> String {
 }
 
 /// Parses a `/automate:stock` directive from an account note. Returns `None`
-/// when the note does not contain the directive or specifies no holdings.
+/// when the note does not contain the directive or specifies neither holdings
+/// nor cash.
 fn parse_stock_command(note: &str) -> Option<StockSpec> {
     let start = note.find("/automate:stock")?;
     let rest = &note[start + "/automate:stock".len()..];
@@ -550,12 +583,14 @@ fn parse_stock_command(note: &str) -> Option<StockSpec> {
     let line = rest.lines().next().unwrap_or("");
 
     let mut holdings = Vec::new();
+    let mut cash = Vec::new();
     let mut cost_basis = None;
     let mut cgt_rate = 0.0;
     let mut payee_name = None;
 
     for (key, value) in parse_key_value_pairs(line) {
         match key.as_str() {
+            "cash" => cash.extend(value.split(',').filter_map(parse_currency_value)),
             "cost_basis" => cost_basis = Some(value),
             "cgt_rate" => {
                 cgt_rate = value
@@ -574,12 +609,13 @@ fn parse_stock_command(note: &str) -> Option<StockSpec> {
         }
     }
 
-    if holdings.is_empty() {
+    if holdings.is_empty() && cash.is_empty() {
         return None;
     }
 
     Some(StockSpec {
         holdings,
+        cash,
         cost_basis,
         cgt_rate,
         payee_name,
@@ -761,6 +797,38 @@ mod tests {
             sorted_holdings(spec.holdings),
             vec![("BRK.B".to_string(), 2.0), ("VOD.L".to_string(), 12.5)]
         );
+    }
+
+    #[rstest]
+    #[case::single("/automate:stock MSFT=1 cash=EUR250", &[(Some("EUR"), 250.0)])]
+    #[case::budget_currency("/automate:stock MSFT=1 cash=250.5", &[(None, 250.5)])]
+    #[case::multiple(
+        "/automate:stock MSFT=1 cash=EUR250,USD100",
+        &[(Some("EUR"), 250.0), (Some("USD"), 100.0)]
+    )]
+    #[case::without_holdings("/automate:stock cash=EUR250", &[(Some("EUR"), 250.0)])]
+    #[case::invalid_entries_ignored("/automate:stock MSFT=1 cash=EUR,USD100", &[(Some("USD"), 100.0)])]
+    fn parses_cash_balances(#[case] note: &str, #[case] expected: &[(Option<&str>, f64)]) {
+        let spec = parse_stock_command(note).expect("directive should parse");
+
+        let cash: Vec<_> = spec
+            .cash
+            .iter()
+            .map(|(currency, amount)| (currency.as_deref(), *amount))
+            .collect();
+        assert_eq!(cash, expected);
+        assert!(!spec.holdings.iter().any(|(symbol, _)| symbol == "cash"));
+    }
+
+    #[test]
+    fn memo_includes_cash_balances() {
+        let cash = [CashValue {
+            native_currency: "EUR".to_string(),
+            native_value: 250.0,
+            value: 270.0,
+        }];
+
+        assert!(build_memo(&[], &cash).contains("Cash: EUR 250.00"));
     }
 
     #[test]
