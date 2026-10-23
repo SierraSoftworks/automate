@@ -11,8 +11,8 @@ use crate::prelude::*;
 /// handler retries once that limit is reached.
 const MIN_REQUEST_INTERVAL: Duration = Duration::from_secs(2);
 
-/// A minimal AlphaVantage API client used to fetch stock quotes, company
-/// overviews, and currency exchange rates.
+/// A minimal AlphaVantage API client used to fetch stock quotes, listing
+/// currencies, and currency exchange rates.
 ///
 /// AlphaVantage signals errors (invalid symbols, rate limiting, premium-only
 /// endpoints) with a `200 OK` status and a structured JSON body rather than an
@@ -109,11 +109,11 @@ impl AlphaVantageClient {
             .await
     }
 
-    /// Looks up the trading currency for a symbol, caching the result for six
-    /// months (a symbol's currency rarely changes). The `OVERVIEW` endpoint is
-    /// consulted first; it reports nothing for non-equity instruments such as
-    /// ETFs, so the listing returned by `SYMBOL_SEARCH` is used as a fallback.
-    /// Falls back to `USD` when neither endpoint reports a currency.
+    /// Looks up the trading currency for a symbol via the `SYMBOL_SEARCH`
+    /// endpoint, caching the result for six months (a symbol's currency rarely
+    /// changes). `SYMBOL_SEARCH` lists the currency of equities and ETFs alike,
+    /// whereas `OVERVIEW` reports nothing for ETFs and is premium-only for some
+    /// listings. Falls back to `USD` when no matching listing reports one.
     pub async fn currency(
         &self,
         services: &(impl Services + Send + Sync + 'static),
@@ -129,18 +129,6 @@ impl AlphaVantageClient {
                 symbol.to_string(),
                 move || {
                     Box::pin(async move {
-                        let body = client
-                            .get(&[("function", "OVERVIEW"), ("symbol", &symbol_owned)])
-                            .await?;
-
-                        if let Some(currency) = body
-                            .get("Currency")
-                            .and_then(|currency| currency.as_str())
-                            .filter(|currency| !currency.is_empty())
-                        {
-                            return Ok(currency.to_uppercase());
-                        }
-
                         let body = client
                             .get(&[("function", "SYMBOL_SEARCH"), ("keywords", &symbol_owned)])
                             .await?;
@@ -411,35 +399,29 @@ mod tests {
         assert!(client.quote(&services, "MSFT").await.is_err());
     }
 
-    #[tokio::test]
-    async fn currency_reads_overview() {
-        let server = mock_alphavantage(
-            "OVERVIEW",
-            r#"{"Symbol":"VOD.LON","Currency":"GBP","Name":"Vodafone"}"#,
-        )
-        .await;
-        let services = mock_services().await.unwrap();
-        let client = AlphaVantageClient::new_with_url(services.http_client(), "demo", server.uri());
-
-        let currency = client.currency(&services, "VOD.LON").await.unwrap();
-        assert_eq!(currency, "GBP");
-    }
-
     #[rstest::rstest]
     #[case::exact_match("VUAA.DEX", "EUR")]
     #[case::extended_suffix("VUAA.DE", "EUR")]
     #[case::other_listing("VUAA.LON", "USD")]
+    #[case::equity("VOD.LON", "GBP")]
     #[case::unlisted("NOPE", "USD")]
     #[tokio::test]
-    async fn currency_falls_back_to_symbol_search(#[case] symbol: &str, #[case] expected: &str) {
-        let server = mock_alphavantage("OVERVIEW", r#"{}"#).await;
+    async fn currency_reads_symbol_search(#[case] symbol: &str, #[case] expected: &str) {
+        // OVERVIEW answers as premium-only for some listings; the lookup must
+        // not depend on it.
+        let server = mock_alphavantage(
+            "OVERVIEW",
+            r#"{"Information":"This is a premium endpoint."}"#,
+        )
+        .await;
         Mock::given(method("GET"))
             .and(path("/query"))
             .and(query_param("function", "SYMBOL_SEARCH"))
             .respond_with(ResponseTemplate::new(200).set_body_string(
                 r#"{"bestMatches":[
                     {"1. symbol":"VUAA.LON","3. type":"ETF","8. currency":"USD"},
-                    {"1. symbol":"VUAA.DEX","3. type":"ETF","8. currency":"EUR"}
+                    {"1. symbol":"VUAA.DEX","3. type":"ETF","8. currency":"EUR"},
+                    {"1. symbol":"VOD.LON","3. type":"Equity","8. currency":"GBP"}
                 ]}"#,
             ))
             .mount(&server)
