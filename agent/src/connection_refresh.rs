@@ -102,10 +102,11 @@ async fn sweep(context: &AppContext, registry: &Registry) -> Result<(), human_er
                     expired += 1;
                     report_expiry(&services, connection).await;
                 }
-                Err(err) => {
+                Err(err) if expires_before_next_sweep(connection) => {
                     // Transient by construction — a provider that has rejected
                     // the grant reports it as an outcome rather than an error —
-                    // so the next sweep tries again.
+                    // but this was the last sweep before the grant lapses, so
+                    // workflows are about to find it expired.
                     error!(
                         tenant = %tenant,
                         connection.id = %connection.id,
@@ -113,6 +114,16 @@ async fn sweep(context: &AppContext, registry: &Registry) -> Result<(), human_er
                         "Could not renew a stored credential: {err}",
                     );
                     services.session().record_human_error(&err);
+                }
+                Err(err) => {
+                    // A provider having a bad moment is not worth reporting
+                    // while the grant still has a sweep left to be renewed in.
+                    warn!(
+                        tenant = %tenant,
+                        connection.id = %connection.id,
+                        error = %err,
+                        "Could not renew a stored credential, will retry on the next sweep: {err}",
+                    );
                 }
             }
         }
@@ -136,6 +147,13 @@ fn is_due(connection: &Connection) -> bool {
         && connection
             .expires_at
             .is_some_and(|expires_at| expires_at <= Utc::now() + RENEW_BEFORE)
+}
+
+/// Whether a grant will have expired by the time the next sweep could renew it.
+fn expires_before_next_sweep(connection: &Connection) -> bool {
+    connection.expires_at.is_none_or(|expires_at| {
+        expires_at <= Utc::now() + chrono::TimeDelta::from_std(EVERY).unwrap_or_default()
+    })
 }
 
 /// Records that an account's grant has died, so the person owning it finds out
@@ -212,6 +230,23 @@ mod tests {
         assert!(!is_due(
             &connection(ConnectionSecret::ApiKey { key: "tok".into() }).await
         ));
+    }
+
+    /// A failed renewal is only worth reporting once no later sweep can
+    /// retry it before the grant lapses.
+    #[tokio::test]
+    async fn a_failed_renewal_matters_only_on_the_last_sweep_before_expiry() {
+        for (expires_in, expected) in [
+            (Duration::minutes(5), true),
+            (Duration::minutes(-1), true),
+            (Duration::minutes(25), false),
+        ] {
+            assert_eq!(
+                expires_before_next_sweep(&connection(oauth2(expires_in)).await),
+                expected,
+                "grant expiring in {expires_in}",
+            );
+        }
     }
 
     /// Only the person who granted it can revive a rejected grant, so asking
