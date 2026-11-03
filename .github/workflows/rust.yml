@@ -358,7 +358,7 @@ jobs:
           version: ${{ github.event.release.tag_name }}
 
       - name: Upload GitHub Release Artifacts
-        uses: SierraSoftworks/gh-releases@v1.0.10
+        uses: SierraSoftworks/gh-releases@v1.1.0
         if: github.event_name == 'release'
         with:
           files: "target/${{ matrix.target }}/release/${{ env.APP_NAME }}${{ matrix.extension }} | ${{ env.APP_NAME }}-${{ matrix.os }}-${{ matrix.arch }}${{ matrix.extension }}"
