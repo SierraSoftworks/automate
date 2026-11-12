@@ -27,7 +27,7 @@ jsonwebtoken = { version = "11.0.0", features = ["aws_lc_rs"] }
 openssl-sys = { version = "0.9.116", features = ["vendored"], optional = true }
 regex = "1.12.4"
 reqwest = { version = "0.12.27", features = ["rustls-tls"] }
-rusqlite = { version = "0.37.0", features = ["bundled", "chrono"] }
+rusqlite = { version = "0.42.0", features = ["bundled", "chrono"] }
 rust-ynab = "0.5"
 scraper = "0.29.0"
 serde = { version = "1.0.219", features = ["alloc", "derive"] }
@@ -36,7 +36,7 @@ sha2 = "0.11.0"
 sha256 = "1.6.0"
 todoist-api = "1.0.0-alpha.1"
 tokio = { version = "1.52.3", features = ["net", "io-std", "rt-multi-thread", "time", "fs", "tracing"] }
-tokio-rusqlite = "0.7.0"
+tokio-rusqlite = "0.9.0"
 toml = "1.1.2"
 tracing = { version = "0.1.44" }
 tracing-batteries = { git = "https://github.com/sierrasoftworks/tracing-batteries-rs.git", features = [
