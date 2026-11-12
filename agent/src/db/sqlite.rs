@@ -320,7 +320,7 @@ impl SqliteDatabase {
 
                 for (i, migration) in MIGRATIONS.iter().enumerate().take(version) {
                     c.execute_batch(migration)?;
-                    c.execute("INSERT INTO migrations (id) VALUES (?1)", [i + 1])?;
+                    c.execute("INSERT INTO migrations (id) VALUES (?1)", [(i + 1) as i64])?;
                 }
 
                 Ok::<_, tokio_rusqlite::Error>(())
@@ -358,7 +358,10 @@ impl SqliteDatabase {
                 ADVICE_DB_ERROR,
             )?;
 
-        let latest_migration: usize = self
+        // rusqlite only implements `FromSql`/`ToSql` for SQLite's native signed
+        // integers (unsigned ones need the `fallible_uint` feature), so migration
+        // ids are stored as `i64` and converted at the boundary.
+        let latest_migration: i64 = self
             .connection
             .call(|c| {
                 c.query_one("SELECT COALESCE(MAX(id), 0) FROM migrations", [], |r| {
@@ -370,13 +373,15 @@ impl SqliteDatabase {
                 "Failed to determine the latest database migration version.",
                 ADVICE_DB_ERROR,
             )?;
+        let latest_migration = usize::try_from(latest_migration).unwrap_or_default();
 
         for (i, migration) in MIGRATIONS.iter().enumerate().skip(latest_migration) {
             self.connection
                 .call(move |c| {
                     let transaction = c.transaction()?;
                     transaction.execute_batch(migration)?;
-                    transaction.execute("INSERT INTO migrations (id) VALUES (?1)", [i + 1])?;
+                    transaction
+                        .execute("INSERT INTO migrations (id) VALUES (?1)", [(i + 1) as i64])?;
 
                     transaction.commit()
                 })
