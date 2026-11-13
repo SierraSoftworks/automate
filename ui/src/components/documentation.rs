@@ -14,19 +14,23 @@
 //! if documentation ever becomes something a user can supply, this has to start
 //! sanitising and this comment has to go.
 
-use pulldown_cmark::{Options, Parser, html};
 use yew::prelude::*;
+use yewi::prelude::*;
 
 #[derive(Properties, PartialEq)]
 pub struct DocumentationProps {
-    /// The Markdown the workflow type ships with.
+    /// The guidance, in Markdown.
     pub markdown: AttrValue,
 }
 
+/// The setup guidance a workflow type ships with, folded away until asked for.
+///
+/// The text is rendered by yewi's `Markdown`, which escapes any raw HTML in the
+/// source and opens links in a new tab so that following one does not discard a
+/// half-filled form.
 #[function_component(Documentation)]
 pub fn documentation(props: &DocumentationProps) -> Html {
     let open = use_state(|| false);
-
     let on_toggle = {
         let open = open.clone();
         Callback::from(move |_| open.set(!*open))
@@ -36,44 +40,26 @@ pub fn documentation(props: &DocumentationProps) -> Html {
         return html! {};
     }
 
-    // Collapsed by default. Somebody adding their fourth RSS feed does not need
-    // to scroll past an explanation of RSS to reach the form, and somebody
-    // adding their first will not miss a control this size.
     html! {
         <section class="documentation">
-            <button
-                class="documentation__toggle"
-                aria-expanded={if *open { "true" } else { "false" }}
-                onclick={on_toggle}
+            <Button
+                variant={ButtonVariant::Subtle}
+                size={Size::Small}
+                icon={if *open { icons::CHEVRON_DOWN } else { icons::CHEVRON_RIGHT }}
+                on_click={on_toggle}
+                attrs={attrs! { "aria-expanded" => if *open { "true" } else { "false" } }}
             >
                 if *open { { "Hide setup guidance" } } else { { "How does this work?" } }
-            </button>
-
+            </Button>
             if *open {
                 <div class="documentation__body">
-                    { render(&props.markdown) }
+                    <Markdown
+                        source={props.markdown.clone()}
+                        top_heading={HeadingLevel::H3}
+                        external_links=true
+                    />
                 </div>
             }
         </section>
     }
-}
-
-/// Turns the Markdown into nodes Yew can mount.
-fn render(markdown: &str) -> Html {
-    let mut options = Options::empty();
-    options.insert(Options::ENABLE_TABLES);
-    options.insert(Options::ENABLE_STRIKETHROUGH);
-
-    let mut rendered = String::new();
-    html::push_html(&mut rendered, Parser::new_ext(markdown, options));
-
-    // Links go to somebody else's site, so they open in a new tab and carry the
-    // usual disclaimers — leaving the form half-filled to read a provider's
-    // documentation is exactly the thing this is meant to save.
-    let rendered = rendered.replace(
-        "<a href=",
-        "<a target=\"_blank\" rel=\"noopener noreferrer\" href=",
-    );
-
-    Html::from_html_unchecked(AttrValue::from(rendered))
 }

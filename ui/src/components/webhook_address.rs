@@ -8,7 +8,7 @@
 use yew::prelude::*;
 
 use crate::api;
-use crate::components::{Button, ButtonKind};
+use yewi::prelude::*;
 
 #[derive(Properties, PartialEq)]
 pub struct WebhookAddressProps {
@@ -24,7 +24,6 @@ pub struct WebhookAddressProps {
 
 #[function_component(WebhookAddress)]
 pub fn webhook_address(props: &WebhookAddressProps) -> Html {
-    let copied = use_state(|| false);
     let confirming = use_state(|| false);
     let busy = use_state(|| false);
     let error = use_state(|| None::<String>);
@@ -35,20 +34,6 @@ pub fn webhook_address(props: &WebhookAddressProps) -> Html {
     let url = origin()
         .map(|origin| format!("{origin}{}", props.path))
         .unwrap_or_else(|| props.path.to_string());
-
-    let on_copy = {
-        let (url, copied) = (url.clone(), copied.clone());
-
-        Callback::from(move |_| {
-            let (url, copied) = (url.clone(), copied.clone());
-
-            wasm_bindgen_futures::spawn_local(async move {
-                if copy_to_clipboard(&url).await {
-                    copied.set(true);
-                }
-            });
-        })
-    };
 
     let on_ask = {
         let confirming = confirming.clone();
@@ -97,67 +82,54 @@ pub fn webhook_address(props: &WebhookAddressProps) -> Html {
 
     html! {
         <div class="webhook-address">
-            <span class="webhook-address__label">{ "Send deliveries to" }</span>
-
-            <div class="webhook-address__row">
-                // Read-only rather than disabled, so it can still be selected and
-                // copied by hand when the clipboard is not available to us.
-                <input
-                    class="webhook-address__url"
-                    type="text"
-                    readonly={true}
-                    value={url.clone()}
-                />
-
-                <Button kind={ButtonKind::Subtle} onclick={on_copy}>
-                    if *copied { { "Copied" } } else { { "Copy" } }
-                </Button>
-            </div>
-
+            <Field label="Send deliveries to">
+                <Cluster nowrap=true gap={Space::Sm}>
+                    <TextInput class="webhook-address__url" value={url.clone()} readonly=true mono=true />
+                    <CopyButton value={url.clone()}>{ "Copy" }</CopyButton>
+                </Cluster>
+            </Field>
             if *confirming {
-                <div class="webhook-address__confirm">
-                    <p class="webhook-address__warning">
-                        { "A new address takes effect at once, and this one stops working. \
-                           Anything already sending here will need updating." }
-                    </p>
-
-                    <div class="webhook-address__actions">
-                        <Button kind={ButtonKind::Danger} onclick={on_rotate} busy={*busy}>
+                <Alert class="webhook-address__confirm" tone={Tone::Warn} actions={html! {
+                    <>
+                        <Button
+                            variant={ButtonVariant::Danger}
+                            size={Size::Small}
+                            on_click={on_rotate}
+                            loading={*busy}
+                        >
                             { "Issue a new address" }
                         </Button>
-                        <Button kind={ButtonKind::Subtle} onclick={on_cancel} disabled={*busy}>
+                        <Button
+                            variant={ButtonVariant::Subtle}
+                            size={Size::Small}
+                            on_click={on_cancel}
+                            disabled={*busy}
+                        >
                             { "Keep this one" }
                         </Button>
-                    </div>
-                </div>
+                    </>
+                }}>
+                    { "A new address takes effect at once, and this one stops working. \
+                       Anything already sending here will need updating." }
+                </Alert>
             } else {
-                <button class="webhook-address__rotate" onclick={on_ask}>
+                <Button
+                    class="webhook-address__rotate"
+                    variant={ButtonVariant::Subtle}
+                    size={Size::Small}
+                    icon={icons::REFRESH_CW}
+                    on_click={on_ask}
+                >
                     { "Issue a new address" }
-                </button>
+                </Button>
             }
-
             if let Some(message) = (*error).clone() {
-                <p class="webhook-address__error">{ message }</p>
+                <Text tag={TextTag::P} size={TextSize::Sm} tone={Tone::Danger}>{ message }</Text>
             }
         </div>
     }
 }
 
-/// Where the browser is talking to, so a path can be shown as a URL.
 fn origin() -> Option<String> {
     web_sys::window()?.location().origin().ok()
-}
-
-/// Puts the address on the clipboard, reporting whether it got there.
-///
-/// The clipboard is unavailable over plain HTTP and when permission is refused,
-/// which is why the address is also selectable: failing here costs the
-/// convenience, not the ability to get the URL.
-async fn copy_to_clipboard(value: &str) -> bool {
-    let Some(window) = web_sys::window() else {
-        return false;
-    };
-
-    let promise = window.navigator().clipboard().write_text(value);
-    wasm_bindgen_futures::JsFuture::from(promise).await.is_ok()
 }

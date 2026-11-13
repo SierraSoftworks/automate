@@ -178,20 +178,15 @@ export async function purgeConnectionsNamed(
 /**
  * Sets a `Switch` to a given state.
  *
- * The checkbox itself is a one-pixel transparent square — the control a person
- * actually sees and clicks is the `.switch__track` span beside it, and the
- * browser's label activation forwards that click to the input behind it. Going
- * through the track is therefore both what a user does and the only thing that
- * passes an actionability check.
+ * yewi's switch is a native checkbox with `role="switch"`, so clicking it is
+ * both what a user does and something Playwright can check is possible.
  */
 export async function setSwitch(input: Locator, checked: boolean): Promise<void> {
   if ((await input.isChecked()) === checked) {
     return;
   }
 
-  await input
-    .locator("xpath=following-sibling::span[contains(@class, 'switch__track')]")
-    .click();
+  await input.click();
 
   await expect(input).toBeChecked({ checked });
 }
@@ -208,5 +203,7 @@ export const WEBHOOK_URL = /^https?:\/\/[^/]+\/webhooks\/w\/[A-Za-z0-9_-]{22}$/;
  */
 export async function workflowAction(row: Locator, name: string): Promise<void> {
   await row.getByRole("button", { name: "Workflow actions" }).click();
-  await row.getByRole("menuitem", { name }).click();
+  // The menu floats above the page rather than inside the row, and only one
+  // can be open at a time.
+  await row.page().getByRole("menuitem", { name }).click();
 }

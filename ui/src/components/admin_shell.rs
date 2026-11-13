@@ -2,11 +2,11 @@ use std::rc::Rc;
 
 use chrono::{Datelike, Utc};
 use yew::prelude::*;
+use yew_router::prelude::{Routable, use_route};
+use yewi::prelude::*;
 
-use yew_router::prelude::*;
-
-use crate::app::Route;
-use crate::components::{AppBar, ImpersonationBanner, PageTitle, SearchBar};
+use crate::app::{AuthHandle, AuthStatus, Route};
+use crate::components::{ActAsItems, ImpersonationBanner};
 use crate::fixtures;
 use crate::pages::Protected;
 use crate::search::{SearchContext, SearchFilter, SearchVocabulary, VocabularyContext};
@@ -132,47 +132,143 @@ pub fn admin_shell(props: &AdminShellProps) -> Html {
         ),
     };
 
+    let bar = html! {
+        <AppBar brand={brand()} actions={html! { <><ThemeToggle /><UserArea /></> }}>
+            <AdminNav />
+        </AppBar>
+    };
+
     html! {
         <ContextProvider<SearchContext> context={search}>
             <ContextProvider<VocabularyContext> context={vocabulary_ctx}>
-                <div class="app-shell">
-                    <AppBar><AdminNav /></AppBar>
+                <AppShell {bar} class="app-shell">
                     <ImpersonationBanner />
-                    <main class="app-main">
-                        <div class="app-container">
-                            <ContextProvider<PageActions> context={(*page_actions).clone()}>
-                                <Protected>
-                                    <PageTitle title={title} subtitle={subtitle} />
-                                    <div class="page-toolbar">
-                                        <SearchBar
-                                            placeholder={search_placeholder}
-                                            autocomplete={search_autocomplete}
-                                        />
-                                        { (*actions).clone() }
-                                    </div>
-                                    { props.children.clone() }
-                                </Protected>
-                            </ContextProvider<PageActions>>
-                        </div>
-                    </main>
-                    <footer class="app-footer">
-                        <p>{ format!("Copyright © Sierra Softworks {}", Utc::now().year()) }</p>
-                    </footer>
-                </div>
+                    <div class="app-container">
+                        <ContextProvider<PageActions> context={(*page_actions).clone()}>
+                            <Protected>
+                                <PageHeader title={title} subtitle={html! { { subtitle } }} />
+                                <div class="page-toolbar">
+                                    <SearchBar
+                                        placeholder={search_placeholder}
+                                        autocomplete={search_autocomplete}
+                                    />
+                                    { (*actions).clone() }
+                                </div>
+                                { props.children.clone() }
+                            </Protected>
+                        </ContextProvider<PageActions>>
+                    </div>
+                    <Footer />
+                </AppShell>
             </ContextProvider<VocabularyContext>>
         </ContextProvider<SearchContext>>
     }
 }
 
-/// The links between the admin pages.
+/// The brand mark at the start of the app bar, linking back to the admin home.
+pub fn brand() -> Html {
+    let logo = html! {
+        <img src="https://cdn.sierrasoftworks.com/logos/icon.svg" alt="" />
+    };
+
+    html! {
+        <AppBarBrand {logo} href={util::nav_href("/admin")}>{ "Automate" }</AppBarBrand>
+    }
+}
+
+/// The copyright line at the foot of every page.
+#[function_component(Footer)]
+pub fn footer() -> Html {
+    html! {
+        <footer class="app-footer">
+            <Text tag={TextTag::P} size={TextSize::Sm} color={TextColor::Subtle}>
+                { format!("Copyright © Sierra Softworks {}", Utc::now().year()) }
+            </Text>
+        </footer>
+    }
+}
+
+/// The signed-in user at the end of the app bar: who they are, the accounts an
+/// administrator may act as, and the way out.
+#[function_component(UserArea)]
+fn user_area() -> Html {
+    let auth = use_context::<AuthHandle>().expect("AuthHandle context must be provided");
+    let Some(user) = auth.user.clone() else {
+        return html! {};
+    };
+
+    let on_sign_out = auth.signout.reform(|_| ());
+
+    html! {
+        <UserMenu
+            name={user.name.clone()}
+            detail={user.email.clone().map(AttrValue::from)}
+            show_name=true
+            {on_sign_out}
+        >
+            <ActAsItems />
+        </UserMenu>
+    }
+}
+
+#[derive(Properties, PartialEq)]
+pub struct SearchBarProps {
+    pub placeholder: AttrValue,
+
+    /// Whether the page publishes a vocabulary worth completing against. Pages
+    /// that only do free-text matching leave the suggestions off.
+    #[prop_or_default]
+    pub autocomplete: bool,
+}
+
+/// The unified search field shared by the routed admin pages.
 ///
-/// Small enough to live beside the shell that renders it: there are three
-/// destinations, and giving them their own module would be more ceremony than
-/// the thing deserves.
+/// A bare term matches everything a row shows; `field:value` scopes a term to
+/// one property. The field names and their values come from the routed page,
+/// through [`VocabularyContext`], and yewi's `QueryInput` offers them as the
+/// user types.
+#[function_component(SearchBar)]
+pub fn search_bar(props: &SearchBarProps) -> Html {
+    let auth = use_context::<AuthHandle>().expect("AuthHandle context must be provided");
+    let search = use_context::<SearchContext>();
+    let vocabulary = use_context::<VocabularyContext>();
+
+    let signed_in = matches!(auth.status, AuthStatus::SignedIn(_) | AuthStatus::Disabled);
+    let (true, Some(search)) = (signed_in, search) else {
+        return html! { <div class="page-toolbar__spacer" /> };
+    };
+
+    let fields: Rc<[QueryField]> = match vocabulary.filter(|_| props.autocomplete) {
+        Some(ctx) => ctx
+            .vocabulary
+            .fields
+            .iter()
+            .map(|field| {
+                QueryField::new(field.name.clone())
+                    .description(field.description.clone())
+                    .values(field.values.iter().cloned())
+            })
+            .collect(),
+        None => Rc::from([]),
+    };
+
+    html! {
+        <QueryInput
+            class="page-toolbar__search"
+            value={search.query.clone()}
+            on_input={search.set.clone()}
+            {fields}
+            label="Search"
+            placeholder={props.placeholder.clone()}
+        />
+    }
+}
+
+/// The links between the admin pages.
 #[function_component(AdminNav)]
 fn admin_nav() -> Html {
     let current = use_route::<Route>().unwrap_or(Route::Admin);
-    let auth = use_context::<crate::app::AuthHandle>();
+    let auth = use_context::<AuthHandle>();
 
     let link = |route: Route, label: &'static str| {
         // Both spellings of the browser route are the same destination, so one
@@ -185,25 +281,17 @@ fn admin_nav() -> Html {
                 | (Route::Users, Route::Users)
                 | (Route::Admin, Route::Admin | Route::AdminRoot)
         );
-        let classes = classes!(
-            "admin-nav__link",
-            active.then_some("admin-nav__link--active")
-        );
 
         // Demo mode lives in the query string, and a client-side navigation
         // replaces the whole URL — so following a link out of a demo page would
         // otherwise land on one talking to an agent that is not there.
-        if fixtures::is_demo() {
-            return html! {
-                <a class={classes} href={util::nav_href(&route.to_path())}>{ label }</a>
-            };
-        }
+        let href = if fixtures::is_demo() {
+            NavTarget::href(util::nav_href(&route.to_path()))
+        } else {
+            NavTarget::route(route)
+        };
 
-        html! {
-            <Link<Route> to={route} classes={classes}>
-                { label }
-            </Link<Route>>
-        }
+        html! { <TopMenuItem {href} current={active}>{ label }</TopMenuItem> }
     };
 
     // Nobody else can load the page behind it, so offering the link would only
@@ -213,7 +301,7 @@ fn admin_nav() -> Html {
         .is_some_and(|user| user.is_admin);
 
     html! {
-        <nav class="admin-nav">
+        <TopMenu label="Admin pages">
             { link(Route::Workflows, "Workflows") }
             { link(Route::Connections, "Connections") }
             { link(Route::Activity, "Activity") }
@@ -223,10 +311,8 @@ fn admin_nav() -> Html {
             }
             // Only reachable in demo mode, which is the only mode it works in.
             if fixtures::is_demo() {
-                <a class="admin-nav__link" href={util::nav_href("/demo/controls")}>
-                    { "Controls" }
-                </a>
+                <TopMenuItem href={util::nav_href("/demo/controls")}>{ "Controls" }</TopMenuItem>
             }
-        </nav>
+        </TopMenu>
     }
 }

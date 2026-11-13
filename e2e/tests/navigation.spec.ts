@@ -46,7 +46,7 @@ for (const { path, title, subtitle, nav } of pages) {
     // Only one link may be highlighted. Both spellings of the browser route
     // resolve to the same destination, so it is possible for one to appear
     // unselected while the other is on screen.
-    const active = page.locator(".admin-nav__link--active");
+    const active = page.locator('header nav [aria-current="page"]');
     await expect(active).toHaveCount(1);
     await expect(active).toHaveText(nav);
   });
@@ -54,14 +54,14 @@ for (const { path, title, subtitle, nav } of pages) {
 
 test("following a nav link changes the page without a reload", async ({ page }) => {
   await gotoApp(page, "/admin/workflows");
-  await page.locator("input[type=search]").fill("GitHub");
+  await page.getByRole("combobox", { name: "Search" }).fill("GitHub");
 
   await page.getByRole("link", { name: "Connections" }).click();
 
   await expect(page).toHaveURL(/\/admin\/connections$/);
   await expect(page.getByRole("heading", { level: 1, name: "Connections" })).toBeVisible();
-  await expect(page.locator(".admin-nav__link--active")).toHaveText("Connections");
-  await expect(page.locator("input[type=search]")).toHaveValue("");
+  await expect(page.locator('header nav [aria-current="page"]')).toHaveText("Connections");
+  await expect(page.getByRole("combobox", { name: "Search" })).toHaveValue("");
 });
 
 test("connection management lives on the Connections page", async ({ page }) => {
@@ -90,10 +90,10 @@ for (const { path, title, action } of [
   test(`${title} uses the flat list layout`, async ({ page }) => {
     await gotoApp(page, path);
 
-    await expect(page.locator("header .admin-nav")).toBeVisible();
+    await expect(page.locator("header").getByRole("navigation")).toBeVisible();
     await expect(page.getByRole("heading", { level: 1, name: title })).toHaveCount(1);
     await expect(page.getByRole("heading", { level: 2, name: title })).toHaveCount(0);
-    await expect(page.locator(".page-toolbar input[type=search]")).toBeVisible();
+    await expect(page.locator(".page-toolbar").getByRole("combobox", { name: "Search" })).toBeVisible();
     await expect(page.locator(".page-toolbar").getByRole("button", { name: action })).toBeVisible();
   });
 }
@@ -108,7 +108,7 @@ for (const { path, action } of [
     await gotoApp(page, path);
 
     await expect(page.locator(".page-toolbar").getByRole("button", { name: action })).toHaveClass(
-      /\bbtn--primary\b/,
+      /\byi-button--primary\b/,
     );
   });
 }

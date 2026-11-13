@@ -1,5 +1,6 @@
-//! The control gallery: every control the admin UI ships with, rendered in each
-//! state it can be in.
+//! The control gallery: every control Automate builds on top of yewi, rendered
+//! in each state it can be in. (yewi's own controls are documented on its
+//! reference site.)
 //!
 //! Reviewing a control normally means finding a page that happens to use it and
 //! then contriving the data that puts it in the state you wanted to look at — an
@@ -18,10 +19,11 @@
 
 mod specimens;
 
-use chrono::{Datelike, Utc};
 use yew::prelude::*;
 
-use crate::components::{Alert, AlertKind, PageTitle};
+use yewi::prelude::*;
+
+use crate::components::Footer;
 use crate::fixtures;
 use crate::util;
 
@@ -43,14 +45,16 @@ pub fn demo_controls(props: &DemoControlsProps) -> Html {
     if !fixtures::is_demo() {
         return shell(html! {
             <Alert
-                kind={AlertKind::Info}
+                tone={Tone::Info}
                 title="The gallery needs demo mode"
-                message="Some of these controls load their contents from the agent. Demo mode \
-                         serves them from fixtures instead, so the gallery can run without one."
+                actions={html! {
+                    <Button variant={ButtonVariant::Primary} size={Size::Small} href="/demo/controls?demo">
+                        { "Open in demo mode" }
+                    </Button>
+                }}
             >
-                <a class="btn btn--primary" href="/demo/controls?demo">
-                    { "Open in demo mode" }
-                </a>
+                { "Some of these controls load their contents from the agent. Demo mode \
+                   serves them from fixtures instead, so the gallery can run without one." }
             </Alert>
         });
     }
@@ -63,32 +67,24 @@ pub fn demo_controls(props: &DemoControlsProps) -> Html {
 
     let Some(selected) = selected else {
         return shell(html! {
-            <Alert
-                kind={AlertKind::Warning}
-                title="No such control"
-                message={format!("The gallery has nothing called \"{}\".", requested.unwrap_or_default())}
-            />
+            <Alert tone={Tone::Warn} title="No such control">
+                { format!("The gallery has nothing called \"{}\".", requested.unwrap_or_default()) }
+            </Alert>
         });
     };
 
     let nav = html! {
-        <nav class="gallery__nav" aria-label="Controls">
-            { for CONTROLS.iter().map(|control| {
-                let active = control.slug == selected.slug;
-                html! {
-                    // A full-page navigation, because a client-side one drops the
-                    // query string and with it the demo mode this page needs.
-                    <a
-                        key={control.slug}
-                        class={classes!("gallery__link", active.then_some("gallery__link--active"))}
-                        href={util::nav_href(&format!("/demo/controls/{}", control.slug))}
-                        aria-current={active.then_some("page")}
-                    >
-                        { control.name }
-                    </a>
-                }
+        <Sidebar label="Controls" class="gallery__nav">
+            { for CONTROLS.iter().map(|control| html! {
+                <SidebarItem
+                    key={control.slug}
+                    href={util::nav_href(&format!("/demo/controls/{}", control.slug))}
+                    current={control.slug == selected.slug}
+                >
+                    { control.name }
+                </SidebarItem>
             }) }
-        </nav>
+        </Sidebar>
     };
 
     shell(html! {
@@ -96,8 +92,8 @@ pub fn demo_controls(props: &DemoControlsProps) -> Html {
             { nav }
             <div class="gallery__body">
                 <header class="gallery__heading">
-                    <h2 class="gallery__title">{ selected.name }</h2>
-                    <p class="gallery__blurb">{ selected.blurb }</p>
+                    <Heading level={HeadingLevel::H2}>{ selected.name }</Heading>
+                    <Text tag={TextTag::P} color={TextColor::Muted}>{ selected.blurb }</Text>
                 </header>
                 { (selected.view)() }
             </div>
@@ -107,25 +103,24 @@ pub fn demo_controls(props: &DemoControlsProps) -> Html {
 
 /// The page chrome shared by the gallery's states.
 fn shell(body: Html) -> Html {
+    let actions = html! {
+        <Button size={Size::Small} icon={icons::ARROW_LEFT} href={util::nav_href("/admin")}>
+            { "Back to the admin UI" }
+        </Button>
+    };
+
     html! {
-        <div class="app-shell">
-            <main class="app-main">
-                <div class="app-container">
-                    <PageTitle
-                        title="Controls"
-                        subtitle="Every control the admin UI ships with, in each state it can be in."
-                    >
-                        <a class="btn btn--small" href={util::nav_href("/admin")}>
-                            { "Back to the admin UI" }
-                        </a>
-                    </PageTitle>
-                    { body }
-                </div>
-            </main>
-            <footer class="app-footer">
-                <p>{ format!("Copyright © Sierra Softworks {}", Utc::now().year()) }</p>
-            </footer>
-        </div>
+        <AppShell class="app-shell">
+            <div class="app-container">
+                <PageHeader
+                    title="Controls"
+                    subtitle="The controls Automate builds on top of yewi, in each state they can be in."
+                    {actions}
+                />
+                { body }
+            </div>
+            <Footer />
+        </AppShell>
     }
 }
 
@@ -149,9 +144,9 @@ pub fn specimen(props: &SpecimenProps) -> Html {
     html! {
         <section class="specimen">
             <div class="specimen__caption">
-                <h3 class="specimen__label">{ props.label.clone() }</h3>
+                <Heading level={HeadingLevel::H3} size={TextSize::Md}>{ props.label.clone() }</Heading>
                 if let Some(note) = &props.note {
-                    <p class="specimen__note">{ note.clone() }</p>
+                    <Text tag={TextTag::P} size={TextSize::Sm} color={TextColor::Muted}>{ note.clone() }</Text>
                 }
             </div>
             <div class="specimen__stage">{ props.children.clone() }</div>

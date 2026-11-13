@@ -11,9 +11,9 @@ use yew::prelude::*;
 
 use crate::api::{self, ApiError};
 use crate::app::AuthHandle;
-use crate::components::{
-    Alert, AlertKind, BrowserPartition, PageActions, PartitionBrowser, RefreshButton,
-};
+use yewi::prelude::*;
+
+use crate::components::{BrowserPartition, PageActions, PartitionBrowser, RefreshButton};
 use crate::search::{SearchField, SearchVocabulary, VocabularyContext};
 
 use super::{kv, queue};
@@ -151,7 +151,7 @@ pub fn admin() -> Html {
     let retry = {
         let kv_state = kv_state.clone();
         let queue_state = queue_state.clone();
-        Callback::from(move |_: MouseEvent| {
+        Callback::from(move |_: ()| {
             kv_state.set(Load::Loading);
             queue_state.set(Load::Loading);
             spawn_local(fetch_kv(kv_state.clone()));
@@ -238,7 +238,7 @@ pub fn admin() -> Html {
 
     // Still performing the initial load of one of the stores.
     if matches!(&*kv_state, Load::Loading) || matches!(&*queue_state, Load::Loading) {
-        return html! { <p class="loading-note">{ "Loading…" }</p> };
+        return html! { <Loading label="Loading…" layout={LoadingLayout::Block} /> };
     }
 
     // A session that expired affects both stores; surface a single sign-in
@@ -251,11 +251,15 @@ pub fn admin() -> Html {
         let onclick = Callback::from(move |_: MouseEvent| login.emit(()));
         return html! {
             <Alert
-                kind={AlertKind::Error}
+                tone={Tone::Danger}
                 title="Your session has expired"
-                message="Sign in again to inspect the admin stores."
+                actions={html! {
+                    <Button variant={ButtonVariant::Primary} size={Size::Small} on_click={onclick}>
+                        { "Sign in" }
+                    </Button>
+                }}
             >
-                <button class="btn btn--small btn--primary" {onclick}>{ "Sign in" }</button>
+                { "Sign in again to inspect the admin stores." }
             </Alert>
         };
     }
@@ -263,13 +267,9 @@ pub fn admin() -> Html {
     // Both stores failed for some other reason: show a single error with retry.
     if let (Some(error), Some(_)) = (kv_state.error(), queue_state.error()) {
         return html! {
-            <Alert
-                kind={AlertKind::Error}
-                title="Couldn't load the admin stores"
-                message={error.to_string()}
-            >
-                <button class="btn btn--small" onclick={retry}>{ "Retry" }</button>
-            </Alert>
+            <ErrorState title="Couldn't load the admin stores" on_retry={retry}>
+                { error.to_string() }
+            </ErrorState>
         };
     }
 
@@ -299,11 +299,7 @@ pub fn admin() -> Html {
     let banner = match banner {
         Some((store, message)) => html! {
             <div class="admin__banner">
-                <Alert
-                    kind={AlertKind::Warning}
-                    title={format!("Couldn't load the {store}")}
-                    message={message}
-                />
+                <Alert tone={Tone::Warn} title={format!("Couldn't load the {store}")}>{ message }</Alert>
             </div>
         },
         None => html! {},

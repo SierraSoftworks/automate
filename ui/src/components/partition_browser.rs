@@ -1,4 +1,5 @@
 use yew::prelude::*;
+use yewi::prelude::*;
 
 use crate::search::{MatchContext, SearchContext, SearchFilter};
 
@@ -27,7 +28,7 @@ pub struct BrowserPartition {
     /// The store kind, used for `kind:` filtering (for example `kv` or `queue`).
     pub kind: AttrValue,
     /// An icon distinguishing the partition's store kind in the sidebar.
-    pub icon: Html,
+    pub icon: IconData,
     /// The partition's entries, in display order.
     pub entries: Vec<BrowserEntry>,
 }
@@ -74,9 +75,7 @@ pub fn partition_browser(props: &PartitionBrowserProps) -> Html {
 
     if props.partitions.is_empty() {
         return html! {
-            <div class="browser browser--empty">
-                <p>{ props.empty.clone() }</p>
-            </div>
+            <EmptyState title={props.empty.clone()} icon={icons::DATABASE} />
         };
     }
 
@@ -129,12 +128,12 @@ pub fn partition_browser(props: &PartitionBrowserProps) -> Html {
                     }
                     html! {
                         <li>
-                            <button class={class} onclick={onclick}>
+                            <button type="button" class={class} aria-current={is_active.then_some("true")} onclick={onclick}>
                                 <span class="browser__item-icon" title={partition.kind.clone()}>
-                                    { partition.icon.clone() }
+                                    <Icon icon={partition.icon} />
                                 </span>
                                 <span class="browser__item-name">{ partition.name.clone() }</span>
-                                <span class="browser__item-count">{ matching.len() }</span>
+                                <Badge count={matching.len() as u32} show_zero=true />
                             </button>
                         </li>
                     }
@@ -158,9 +157,7 @@ pub fn partition_browser(props: &PartitionBrowserProps) -> Html {
 
             let list = if entries.is_empty() {
                 html! {
-                    <div class="browser__detail-empty">
-                        <p>{ "No entries match your search." }</p>
-                    </div>
+                    <EmptyState title="No entries match your search." size={Size::Small} />
                 }
             } else {
                 html! {
@@ -174,7 +171,7 @@ pub fn partition_browser(props: &PartitionBrowserProps) -> Html {
                 <section class="browser__detail">
                     <header class="browser__detail-head">
                         <span class="browser__detail-icon" title={partition.kind.clone()}>
-                            { partition.icon.clone() }
+                            <Icon icon={partition.icon} />
                         </span>
                         <h2 class="browser__detail-title">{ partition.name.clone() }</h2>
                         <span class="browser__detail-count">{ count }</span>
@@ -185,9 +182,7 @@ pub fn partition_browser(props: &PartitionBrowserProps) -> Html {
         }
         None => html! {
             <section class="browser__detail">
-                <div class="browser__detail-empty">
-                    <p>{ "Select a partition to view its contents." }</p>
-                </div>
+                <EmptyState title="Select a partition to view its contents." size={Size::Small} />
             </section>
         },
     };

@@ -1,53 +1,33 @@
-//! Reusable presentational components ported from the original server-rendered
-//! admin UI. All text is rendered through Yew's `{value}` interpolation, which
-//! HTML-escapes its content; JSON payloads are pretty-printed and rendered as
-//! plain text nodes inside `<pre><code>` so that untrusted payload data can
-//! never inject markup.
+//! The pieces of the admin UI that are specific to Automate.
+//!
+//! Controls, page chrome and feedback all come from [yewi](https://yewi.sierrasoftworks.com);
+//! what lives here is what yewi cannot know about: the shell that ties the
+//! routes together, forms drawn from the agent's descriptions, and the data
+//! browser. All text is rendered through Yew's `{value}` interpolation, which
+//! HTML-escapes its content, so untrusted payload data can never inject markup.
 
 mod admin_shell;
-mod alert;
-mod app_bar;
 mod connect_menu;
 mod connections_panel;
 mod documentation;
 pub mod dynamic_form;
 mod entity;
 mod filter_input;
-mod form;
-mod helpers;
+pub mod form;
 mod impersonation;
-mod json_highlight;
-mod layout;
-mod menu_button;
-mod page_title;
 mod partition_browser;
 mod refresh_button;
-mod secret_input;
-mod status_pill;
 mod webhook_address;
 
-pub use admin_shell::{AdminShell, PageActions};
-pub use alert::{Alert, AlertKind};
-pub use app_bar::{AppBar, SearchBar};
+pub use admin_shell::{AdminShell, Footer, PageActions, brand};
 pub use connect_menu::ConnectMenu;
+#[cfg_attr(not(debug_assertions), allow(unused_imports))]
 pub use connections_panel::ConnectionsPanel;
 pub use documentation::Documentation;
 pub use dynamic_form::{DynamicForm, FetchedOptions};
 pub use entity::{DbEntity, EntityMetadata};
 pub use filter_input::FilterInput;
-#[allow(unused_imports)]
-pub use form::{
-    Button, ButtonGroup, ButtonKind, Field, NumberInput, Select, SelectOption, Switch, TextArea,
-    TextInput,
-};
-pub use helpers::Center;
-pub use impersonation::{ActAsMenu, ImpersonationBanner, ImpersonationNotice};
-pub use json_highlight::JsonHighlight;
-pub use layout::Layout;
-pub use menu_button::{MenuButton, MenuButtonOption};
-pub use page_title::PageTitle;
+pub use impersonation::{ActAsItems, ImpersonationBanner, ImpersonationNotice};
 pub use partition_browser::{BrowserEntry, BrowserPartition, PartitionBrowser};
 pub use refresh_button::RefreshButton;
-pub use secret_input::SecretInput;
-pub use status_pill::{StatusPill, StatusTone};
 pub use webhook_address::WebhookAddress;

@@ -97,14 +97,14 @@ test("pausing a workflow from its row keeps it listed and says that it is paused
   const row = page.locator("li.workflow").filter({ hasText: name });
   await expect(row).toHaveCount(1);
 
-  const enabled = row.locator(".workflow__summary").getByRole("checkbox");
+  const enabled = row.locator(".workflow__summary").getByRole("switch");
   await expect(enabled).toBeChecked();
 
   await setSwitch(enabled, false);
 
   await expect(row).toContainText("paused");
   await expect(row).toContainText(name);
-  await expect(row.locator(".workflow__summary").getByRole("checkbox")).not.toBeChecked();
+  await expect(row.locator(".workflow__summary").getByRole("switch")).not.toBeChecked();
 });
 
 test("renaming a workflow through its edit form updates the entry in the list", async ({ page }) => {

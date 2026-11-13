@@ -70,10 +70,10 @@ test("the log can be narrowed by outcome and by subject", async ({ page, request
 
   // Everything the agent records for a linked service succeeded, so asking for
   // the failures must leave this one out rather than merely reorder it.
-  await page.locator("input[type=search]").fill("outcome:failure");
+  await page.getByRole("combobox", { name: "Search" }).fill("outcome:failure");
   await expect(page.locator(".activity-entry").filter({ hasText: name })).toHaveCount(0);
 
-  await page.locator("input[type=search]").fill(`subject:${name}`);
+  await page.getByRole("combobox", { name: "Search" }).fill(`subject:${name}`);
   await expect(page.locator(".activity-entry").filter({ hasText: name }).first()).toBeVisible();
   await expect(page.locator(".activity-entry")).toHaveCount(
     await page.locator(".activity-entry").filter({ hasText: name }).count(),
@@ -85,9 +85,9 @@ test("the log can be narrowed by outcome and by subject", async ({ page, request
 test("the search bar completes the fields this page offers", async ({ page }) => {
   await gotoApp(page, "/admin/activity");
 
-  await page.locator("input[type=search]").fill("out");
+  await page.getByRole("combobox", { name: "Search" }).fill("out");
 
-  const suggestions = page.locator(".app-bar__suggestion");
+  const suggestions = page.getByRole("option");
   await expect(suggestions).toHaveCount(1);
   await expect(suggestions.first()).toContainText("outcome:");
 });
@@ -114,7 +114,7 @@ test("a busy webhook does not crowd the log out", async ({ page, request }) => {
   /** How many entries the log holds about this workflow, once it has settled. */
   const entries = async () => {
     await gotoApp(page, "/admin/activity");
-    await page.locator("input[type=search]").fill(`subject:${name}`);
+    await page.getByRole("combobox", { name: "Search" }).fill(`subject:${name}`);
     await expect(page.locator(".activity-entry").first()).toBeVisible();
     return page.locator(".activity-entry").count();
   };

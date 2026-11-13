@@ -249,9 +249,15 @@ The project uses GitHub Actions for CI/CD:
   UI can be run and reviewed with `trunk serve` and no agent. The substitution happens
   inside `ui/src/api.rs`; pages must not branch on demo mode themselves. Mutations stick
   for the lifetime of the tab.
+- **Design system**: the UI is built from [yewi](https://yewi.sierrasoftworks.com) components
+  (`yewi = "0.2"`). Use its controls, page chrome and `--yi-*` tokens rather than writing new
+  ones; `ui/src/components/` holds only what is specific to Automate, and `ui/styles.scss`
+  only the accent and the layouts of those pieces. Import with `use yewi::prelude::*;` and
+  avoid glob-importing `yew_router::prelude` beside it, since both export `Link`.
 - **Control gallery** (debug builds only): `/demo/controls` and `/demo/controls/{control}`
-  render every shared component in each state it can be in. Add a specimen there when you
-  add or change a component in `ui/src/components/`.
+  render Automate's own components in each state they can be in (yewi's are documented on
+  its reference site). Add a specimen there when you add or change a component in
+  `ui/src/components/`.
 - Admin authentication is server-driven OIDC: the agent performs the full Authorization Code + PKCE flow (`/api/v1/auth/login` → provider → `/api/v1/auth/callback`) and stores the ID token in an `HttpOnly` session cookie. Mutating API requests require a double-submit CSRF token (`GET /api/v1/csrf` sets a cookie; the UI echoes it in the `X-CSRF-Token` header). The browser never handles tokens.
 - Database operations use `tokio-rusqlite` for multi-threaded SQLite access
 - Stored OAuth grants are renewed proactively by the cross-account sweep in `agent/src/connection_refresh.rs`, started alongside the audit trim in `JobHost::run`. It offers every connection approaching `connections::RENEW_BEFORE` to its integration's `Integration::refresh`, which keeps the refresh token exercised (providers drop one that goes unused) and means a workflow can use the stored access token as it stands. Workflows still reach a token through `connections::resolve_oauth2_token`, `integrations::todoist::access_token` or `integrations::ynab::access_token`, which now normally return what is stored.

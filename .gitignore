@@ -19,3 +19,7 @@ e2e/node_modules/
 e2e/test-results/
 e2e/playwright-report/
 e2e/.playwright/
+
+# The font files `ui/build.rs` writes out of the yewi-fonts crate for Trunk to
+# copy into the bundle. Generated, so they always match the locked yewi release.
+ui/fonts/
