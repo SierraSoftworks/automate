@@ -15,6 +15,11 @@ filt-rs = { version = "1.1.3", features = ["visitor"] }
 yew = { version = "0.23", features = ["csr"] }
 yew-router = "0.20"
 
+# The design system every control and the page chrome come from. Its stylesheet
+# is compiled into the crate and installed by `main`; `styles.scss` only adds
+# the layouts that are specific to this application.
+yewi = { version = "0.2", features = ["csr", "router", "markdown", "serde_json", "chrono"] }
+
 gloo-net = "0.5"
 gloo-utils = "0.2"
 gloo-timers = { version = "0.3", features = ["futures"] }
@@ -50,4 +55,8 @@ chrono = { version = "0.4", features = ["serde", "wasmbind"] }
 log = "0.4"
 wasm-logger = "0.2"
 console_error_panic_hook = "0.1"
-pulldown-cmark = { version = "0.13.4", default-features = false, features = ["html"] }
+
+[build-dependencies]
+# Writes the self-hosted font files into `fonts/` for Trunk to copy (see
+# `build.rs` and `index.html`).
+yewi-fonts = "0.2"

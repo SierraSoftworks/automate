@@ -1,23 +1,27 @@
 use yew::prelude::*;
-use yew_router::prelude::*;
+use yewi::prelude::*;
 
 use crate::Route;
-use crate::components::{Center, Layout};
+use crate::components::{Footer, brand};
 
 /// Fallback page shown for unmatched routes.
 #[function_component(NotFound)]
 pub fn not_found() -> Html {
     html! {
-        <Layout>
-            <Center>
-                <div class="auth-card">
-                    <h1 class="auth-card__title">{ "Page not found" }</h1>
-                    <p class="auth-card__lead">{ "The page you were looking for doesn't exist." }</p>
-                    <Link<Route> to={Route::Landing} classes="btn btn--primary btn--lg">
+        <AppShell bar={html! { <AppBar brand={brand()} actions={html! { <ThemeToggle /> }} /> }} class="app-shell app-shell--bare">
+            <EmptyState
+                class="auth-screen"
+                title="Page not found"
+                icon={icons::COMPASS}
+                actions={html! {
+                    <Button variant={ButtonVariant::Primary} href={NavTarget::route(Route::Landing)}>
                         { "Back to home" }
-                    </Link<Route>>
-                </div>
-            </Center>
-        </Layout>
+                    </Button>
+                }}
+            >
+                { "The page you were looking for doesn't exist." }
+            </EmptyState>
+            <Footer />
+        </AppShell>
     }
 }

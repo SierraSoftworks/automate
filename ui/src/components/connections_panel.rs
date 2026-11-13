@@ -10,7 +10,7 @@ use wasm_bindgen_futures::spawn_local;
 use yew::prelude::*;
 
 use crate::api;
-use crate::components::{Alert, AlertKind};
+use yewi::prelude::*;
 
 /// One integration and whatever we currently know about its connections.
 #[derive(Clone, PartialEq)]
@@ -79,9 +79,9 @@ pub fn connections_panel(props: &ConnectionsPanelProps) -> Html {
 
     if let Some(message) = (*error).clone() {
         return html! {
-            <section class="connections">
-                <h2 class="connections__heading">{ "Connections" }</h2>
-                <Alert kind={AlertKind::Error} title="Couldn't load the connections" message={message} />
+            <section class="connections-panel">
+                <Heading level={HeadingLevel::H2} size={TextSize::Lg}>{ "Connections" }</Heading>
+                <Alert tone={Tone::Danger} title="Couldn't load the connections">{ message }</Alert>
             </section>
         };
     }
@@ -99,14 +99,12 @@ pub fn connections_panel(props: &ConnectionsPanelProps) -> Html {
         .map(|row| {
             let body = if let Some(message) = &row.error {
                 html! {
-                    <Alert
-                        kind={AlertKind::Error}
-                        title="Couldn't load these connections"
-                        message={message.clone()}
-                    />
+                    <Alert tone={Tone::Danger} title="Couldn't load these connections">
+                        { message.clone() }
+                    </Alert>
                 }
             } else if row.connections.is_empty() {
-                html! { <p class="connections__empty">{ "Not connected." }</p> }
+                html! { <Text tag={TextTag::P} size={TextSize::Sm} color={TextColor::Muted}>{ "Not connected." }</Text> }
             } else {
                 let items = row
                     .connections
@@ -141,32 +139,28 @@ pub fn connections_panel(props: &ConnectionsPanelProps) -> Html {
                         });
 
                         html! {
-                            <li class="connections__item">
-                                <span class="connections__name">{ &connection.name }</span>
+                            <li class="connections-panel__item">
+                                <span class="connections-panel__name">{ &connection.name }</span>
                                 if let Some(kind) = &connection.kind {
-                                    <span class="connections__kind">{ kind }</span>
+                                    <Tag>{ kind }</Tag>
                                 }
                                 if let Some(detail) = &connection.detail {
-                                    <span class="connections__detail">{ detail }</span>
+                                    <Text size={TextSize::Sm} color={TextColor::Muted}>{ detail }</Text>
                                 }
-                                <button
-                                    class="btn btn--small btn--danger"
-                                    onclick={ondisconnect}
-                                    title="Disconnect this account"
-                                >
+                                <Button variant={ButtonVariant::Danger} size={Size::Small} on_click={ondisconnect}>
                                     { "Disconnect" }
-                                </button>
+                                </Button>
                             </li>
                         }
                     })
                     .collect::<Html>();
 
-                html! { <ul class="connections__list">{ items }</ul> }
+                html! { <ul class="connections-panel__list">{ items }</ul> }
             };
 
             html! {
-                <div class="connections__group">
-                    <h3 class="connections__title">{ &row.integration.name }</h3>
+                <div class="connections-panel__group">
+                    <Heading level={HeadingLevel::H3} size={TextSize::Md}>{ &row.integration.name }</Heading>
                     { body }
                 </div>
             }
@@ -174,8 +168,8 @@ pub fn connections_panel(props: &ConnectionsPanelProps) -> Html {
         .collect::<Html>();
 
     html! {
-        <section class="connections">
-            <h2 class="connections__heading">{ "Connections" }</h2>
+        <section class="connections-panel">
+            <Heading level={HeadingLevel::H2} size={TextSize::Lg}>{ "Connections" }</Heading>
             { sections }
         </section>
     }

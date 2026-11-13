@@ -6,6 +6,7 @@ use std::collections::BTreeMap;
 
 use automate_api::{QueueMessage, QueueStatus};
 use yew::prelude::*;
+use yewi::prelude::*;
 
 use crate::components::{BrowserEntry, BrowserPartition, DbEntity, EntityMetadata};
 use crate::util;
@@ -13,20 +14,8 @@ use crate::util;
 /// The store kind reported to the browser for `kind:` filtering.
 const KIND: &str = "queue";
 
-/// A pipeline glyph marking queue partitions in the sidebar.
-pub fn queue_icon() -> Html {
-    html! {
-        <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor"
-            stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-            <line x1="8" y1="6" x2="21" y2="6" />
-            <line x1="8" y1="12" x2="21" y2="12" />
-            <line x1="8" y1="18" x2="21" y2="18" />
-            <circle cx="3.5" cy="6" r="1" />
-            <circle cx="3.5" cy="12" r="1" />
-            <circle cx="3.5" cy="18" r="1" />
-        </svg>
-    }
-}
+/// The icon a queue partition wears in the data browser.
+pub const QUEUE_ICON: IconData = icons::LIST;
 
 /// A queue message prepared for display. Timestamps are retained as raw instants
 /// so the timeline can both compute positions and render exact ISO 8601 values
@@ -101,7 +90,7 @@ pub fn queue_partitions(
                 id: format!("{KIND}:{partition}").into(),
                 name: partition.into(),
                 kind: KIND.into(),
-                icon: queue_icon(),
+                icon: QUEUE_ICON,
                 entries,
             }
         })
@@ -137,12 +126,12 @@ fn queue_entry(
 
     let controls = html! {
         <>
-            <button class="btn btn--small btn--primary" onclick={trigger_onclick}>
+            <Button variant={ButtonVariant::Primary} size={Size::Small} on_click={trigger_onclick}>
                 { "Trigger" }
-            </button>
-            <button class="btn btn--small btn--danger" onclick={delete_onclick}>
+            </Button>
+            <Button variant={ButtonVariant::Danger} size={Size::Small} on_click={delete_onclick}>
                 { "Delete" }
-            </button>
+            </Button>
         </>
     };
 
@@ -160,84 +149,22 @@ fn queue_entry(
     }
 }
 
-/// An inbox glyph marking the point at which a message was enqueued.
-fn inbox_icon() -> Html {
-    html! {
-        <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor"
-            stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-            <polyline points="22 12 16 12 14 15 10 15 8 12 2 12" />
-            <path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z" />
-        </svg>
-    }
-}
-
-/// An outbox (upload tray) glyph marking the point at which a message becomes
-/// available for execution.
-fn outbox_icon() -> Html {
-    html! {
-        <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor"
-            stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-            <polyline points="17 8 12 3 7 8" />
-            <line x1="12" y1="3" x2="12" y2="15" />
-        </svg>
-    }
-}
-
-/// A circular-arrow glyph indicating a message that is currently being
-/// processed; spun via CSS.
-fn retry_icon() -> Html {
-    html! {
-        <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor"
-            stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-            <polyline points="23 4 23 10 17 10" />
-            <polyline points="1 20 1 14 7 14" />
-            <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" />
-        </svg>
-    }
-}
-
-/// Which edge a timeline popover is anchored to. Popovers grow toward the
-/// centre of the timeline so they never extend past the entry box and get
-/// clipped: the left-hand (queued) node anchors to its start, the right-hand
-/// (state) node to its end.
-#[derive(Clone, Copy)]
-enum PopoverAlign {
-    Start,
-    End,
-}
-
-/// A hover/focus popover revealing the exact ISO 8601 datetime for a timeline
-/// timestamp.
-fn time_popover(instant: chrono::DateTime<chrono::Utc>, align: PopoverAlign) -> Html {
-    let class = match align {
-        PopoverAlign::Start => "queue-tl__popover queue-tl__popover--start",
-        PopoverAlign::End => "queue-tl__popover queue-tl__popover--end",
-    };
-    html! {
-        <span class={class} role="tooltip">
-            { util::format_iso8601(instant) }
-        </span>
-    }
-}
-
 /// Builds the right-hand state node of the timeline: an outbox when delayed, an
 /// outbox with a notification dot when pending, or a spinning retry glyph when
 /// reserved/processing. The node reveals an ISO 8601 popover on hover/focus.
-fn state_node(
-    status: QueueStatus,
-    label: String,
-    instant: chrono::DateTime<chrono::Utc>,
-    align: PopoverAlign,
-) -> Html {
+fn state_node(status: QueueStatus, label: String, instant: chrono::DateTime<chrono::Utc>) -> Html {
     let (icon, icon_class, dot) = match status {
-        QueueStatus::Reserved => (retry_icon(), "queue-tl__icon queue-tl__icon--spin", false),
+        QueueStatus::Reserved => (
+            icons::REFRESH_CW,
+            "queue-tl__icon queue-tl__icon--spin",
+            false,
+        ),
         QueueStatus::Pending => (
-            outbox_icon(),
+            icons::UPLOAD,
             "queue-tl__icon queue-tl__icon--pending",
             true,
         ),
-        QueueStatus::Delayed => (outbox_icon(), "queue-tl__icon", false),
+        QueueStatus::Delayed => (icons::UPLOAD, "queue-tl__icon", false),
     };
     let dot = if dot {
         html! { <span class="queue-tl__dot" /> }
@@ -245,11 +172,10 @@ fn state_node(
         html! {}
     };
     html! {
-        <span class="queue-tl__node" tabindex="0">
-            <span class={icon_class}>{ icon }{ dot }</span>
+        <Tooltip class="queue-tl__node" tip={util::format_iso8601(instant)} focusable=true>
+            <span class={icon_class}><Icon {icon} size="15px" />{ dot }</span>
             <span class="queue-tl__label">{ label }</span>
-            { time_popover(instant, align) }
-        </span>
+        </Tooltip>
     }
 }
 
@@ -280,7 +206,7 @@ fn queue_timeline(msg: &QueueMessageDisplay) -> Html {
         // message has been waiting.
         return html! {
             <div class="queue-tl queue-tl--collapsed">
-                { state_node(msg.status, util::short_relative(queued), queued, PopoverAlign::Start) }
+                { state_node(msg.status, util::short_relative(queued), queued) }
             </div>
         };
     }
@@ -316,17 +242,16 @@ fn queue_timeline(msg: &QueueMessageDisplay) -> Html {
 
     html! {
         <div class="queue-tl">
-            <span class="queue-tl__node" tabindex="0">
-                <span class="queue-tl__icon">{ inbox_icon() }</span>
+            <Tooltip class="queue-tl__node" tip={util::format_iso8601(queued)} focusable=true>
+                <span class="queue-tl__icon"><Icon icon={icons::INBOX} size="15px" /></span>
                 <span class="queue-tl__label">{ util::short_relative(queued) }</span>
-                { time_popover(queued, PopoverAlign::Start) }
-            </span>
+            </Tooltip>
             <span class="queue-tl__track">
                 <span class="queue-tl__duration">{ util::short_duration(total) }</span>
                 <span class="queue-tl__fill" style={fill_style} />
                 { marker }
             </span>
-            { state_node(msg.status, util::short_relative(visible), visible, PopoverAlign::End) }
+            { state_node(msg.status, util::short_relative(visible), visible) }
         </div>
     }
 }

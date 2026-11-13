@@ -9,12 +9,10 @@ use automate_api::{ConnectionKind, ConnectionStatus, ConnectionSummary};
 use yew::prelude::*;
 
 use crate::api;
-use crate::components::{
-    Alert, AlertKind, Button, ButtonGroup, ButtonKind, ConnectMenu, Field, MenuButtonOption,
-    PageActions, StatusPill, StatusTone, TextInput,
-};
+use yewi::prelude::*;
+
+use crate::components::{ConnectMenu, PageActions};
 use crate::search::{MatchContext, SearchContext};
-use crate::util::short_relative;
 
 /// The services that can be linked by pasting in a token.
 ///
@@ -85,9 +83,9 @@ pub fn connections() -> Html {
         })
     };
 
-    let provider_options: Vec<MenuButtonOption> = PASTEABLE_PROVIDERS
+    let provider_options: Vec<(AttrValue, AttrValue)> = PASTEABLE_PROVIDERS
         .iter()
-        .map(|(id, label)| MenuButtonOption::new(*id, *label))
+        .map(|(id, label)| (AttrValue::from(*id), AttrValue::from(*label)))
         .collect();
 
     let page_actions = use_context::<PageActions>();
@@ -106,10 +104,9 @@ pub fn connections() -> Html {
                             credential_options={provider_options}
                             oncredential={on_provider}
                             onstarted={onstarted}
-                            kind={ButtonKind::Primary}
+                            variant={ButtonVariant::Primary}
                             {disabled}
-                            small={false}
-                            title="Add a connection"
+                            size={Size::Medium}
                         />
                     </div>
                 });
@@ -131,11 +128,9 @@ pub fn connections() -> Html {
     html! {
         <section class="connections-page">
             if let Some(message) = &*error {
-                <Alert
-                    kind={AlertKind::Error}
-                    title="We could not load your connections."
-                    message={message.clone()}
-                />
+                <Alert tone={Tone::Danger} title="We could not load your connections.">
+                    { message.clone() }
+                </Alert>
             }
 
             if let Some(provider) = (*chosen).clone() {
@@ -144,11 +139,11 @@ pub fn connections() -> Html {
 
             {
                 match &*connections {
-                    None => html! { <p class="connections__empty">{ "Loading…" }</p> },
+                    None => html! { <Loading label="Loading…" layout={LoadingLayout::Block} /> },
                     Some(list) if list.is_empty() => html! {
-                        <p class="connections__empty">
-                            { "You have not linked any services yet." }
-                        </p>
+                        <EmptyState title="You have not linked any services yet." icon={icons::LINK}>
+                            { "Add a connection to give your workflows somewhere to read from and publish to." }
+                        </EmptyState>
                     },
                     Some(list) => {
                         let visible: Vec<&ConnectionSummary> = list
@@ -176,7 +171,7 @@ pub fn connections() -> Html {
                             .collect();
 
                         if visible.is_empty() {
-                            html! { <p class="connections__empty">{ "No connections match your search." }</p> }
+                            html! { <EmptyState title="No connections match your search." icon={icons::SEARCH_X} /> }
                         } else {
                             html! {
                                 <ul class="connections__list">
@@ -273,63 +268,49 @@ fn link_service(props: &LinkServiceProps) -> Html {
         .map(|(_, label)| *label)
         .unwrap_or(props.provider.as_str());
 
+    let footer = html! {
+        <>
+            <Button variant={ButtonVariant::Subtle} on_click={on_cancel} disabled={*busy}>
+                { "Cancel" }
+            </Button>
+            <Button variant={ButtonVariant::Primary} on_click={onsubmit} loading={*busy}>
+                { "Link service" }
+            </Button>
+        </>
+    };
+
     html! {
-        <div class="form-modal" role="dialog" aria-modal="true" aria-labelledby="add-connection-title">
-            <div class="form-modal__panel">
-                <div class="form-modal__header">
-                    <h3 id="add-connection-title" class="form-modal__title">
-                        { format!("Add {provider_label} connection") }
-                    </h3>
-                </div>
-
-                <div class="form-modal__body">
-                    if let Some(message) = &*error {
-                        <Alert
-                            kind={AlertKind::Error}
-                            title="We could not link that service."
-                            message={message.clone()}
-                        />
-                    }
-
-                    <Field
-                        id="connection-name"
-                        label="Name"
-                        help="Optional. Useful once you have linked more than one account on the same service."
-                    >
-                        <TextInput
-                            id="connection-name"
-                            value={(*name).clone()}
-                            onchange={on_name}
-                            placeholder="Personal"
-                        />
-                    </Field>
-
-                    <Field
-                        id="connection-key"
-                        label="Token"
-                        required=true
-                        help={AttrValue::from(where_to_find_the_token(&props.provider))}
-                    >
-                        <TextInput
-                            id="connection-key"
-                            value={(*key).clone()}
-                            onchange={on_key}
-                            secret=true
-                            placeholder="Paste the token here"
-                        />
-                    </Field>
-
-                    <div class="connections__form-actions">
-                        <Button kind={ButtonKind::Primary} onclick={onsubmit} busy={*busy}>
-                            { "Link service" }
-                        </Button>
-                        <Button kind={ButtonKind::Subtle} onclick={on_cancel} disabled={*busy}>
-                            { "Cancel" }
-                        </Button>
-                    </div>
-                </div>
-            </div>
-        </div>
+        <Dialog
+            open=true
+            title={format!("Add {provider_label} connection")}
+            {footer}
+            on_close={props.oncancel.clone()}
+        >
+            <Stack>
+                if let Some(message) = &*error {
+                    <Alert tone={Tone::Danger} title="We could not link that service.">
+                        { message.clone() }
+                    </Alert>
+                }
+                <Field
+                    label="Name"
+                    hint="Optional. Useful once you have linked more than one account on the same service."
+                >
+                    <TextInput value={(*name).clone()} on_input={on_name} placeholder="Personal" />
+                </Field>
+                <Field
+                    label="Token"
+                    required=true
+                    hint={where_to_find_the_token(&props.provider)}
+                >
+                    <SecretInput
+                        value={(*key).clone()}
+                        on_input={on_key}
+                        placeholder="Paste the token here"
+                    />
+                </Field>
+            </Stack>
+        </Dialog>
     }
 }
 
@@ -343,6 +324,7 @@ struct ConnectionRowProps {
 fn connection_row(props: &ConnectionRowProps) -> Html {
     let reconnecting = use_state(|| false);
     let removing = use_state(|| false);
+    let confirming_remove = use_state(|| false);
     let editing = use_state(|| false);
     let reconnect_error = use_state(|| None::<String>);
     let connection = props.connection.clone();
@@ -400,33 +382,27 @@ fn connection_row(props: &ConnectionRowProps) -> Html {
         })
     };
 
+    let onask_remove = {
+        let confirming_remove = confirming_remove.clone();
+        Callback::from(move |_: MouseEvent| confirming_remove.set(true))
+    };
+    let oncancel_remove = {
+        let confirming_remove = confirming_remove.clone();
+        Callback::from(move |_: ()| confirming_remove.set(false))
+    };
     let onremove = {
         let id = connection.id.to_string();
-        let name = connection.name.clone();
         let removing = removing.clone();
+        let confirming_remove = confirming_remove.clone();
         let on_changed = props.on_changed.clone();
-
-        Callback::from(move |_: MouseEvent| {
-            // Unlinking stops every workflow that publishes through it, which is
-            // not obvious from the button alone.
-            let confirmed = web_sys::window()
-                .and_then(|w| {
-                    w.confirm_with_message(&format!(
-                        "Unlink {name}? Workflows that publish through it will stop working."
-                    ))
-                    .ok()
-                })
-                .unwrap_or(false);
-
-            if !confirmed {
-                return;
-            }
-
+        Callback::from(move |_: ()| {
             let (id, removing, on_changed) = (id.clone(), removing.clone(), on_changed.clone());
+            let confirming_remove = confirming_remove.clone();
             removing.set(true);
             wasm_bindgen_futures::spawn_local(async move {
                 let _ = api::delete_service_connection(&id).await;
                 removing.set(false);
+                confirming_remove.set(false);
                 on_changed.emit(());
             });
         })
@@ -441,53 +417,66 @@ fn connection_row(props: &ConnectionRowProps) -> Html {
                         <span class="connection__name">{ &connection.name }</span>
                     </span>
                     if let Some(account_type) = account_type(&connection) {
-                        <span class="connection__account-type">{ account_type }</span>
+                        <Tag class="connection__account-type">{ account_type }</Tag>
                     }
                 </div>
-                <span class="connection__meta">
+                <Text size={TextSize::Sm} color={TextColor::Muted} class="connection__meta">
                     { kind_label(connection.kind) }
                     { " · linked " }
-                    { short_relative(connection.created_at) }
-                </span>
+                    <Timestamp at={connection.created_at} compact=true />
+                </Text>
             </div>
-
             <StatusBadge status={connection.status} />
-
             <ButtonGroup label="Connection actions">
                 if connection.status == ConnectionStatus::NeedsReauthorization {
                     <Button
-                        small=true
-                        onclick={onreconnect}
-                        busy={*reconnecting}
+                        size={Size::Small}
+                        on_click={onreconnect}
+                        loading={*reconnecting}
                         disabled={*removing}
-                        title="Reconnect this service"
                     >
                         { "Reconnect" }
                     </Button>
                 } else if connection.kind == ConnectionKind::ApiKey {
-                    <Button small=true onclick={onedit} disabled={*removing} title="Edit this connection">
+                    <Button size={Size::Small} on_click={onedit} disabled={*removing}>
                         { "Edit" }
                     </Button>
                 }
                 <Button
-                    kind={ButtonKind::Danger}
-                    small=true
-                    onclick={onremove}
-                    busy={*removing}
+                    variant={ButtonVariant::Danger}
+                    size={Size::Small}
+                    on_click={onask_remove}
+                    loading={*removing}
                     disabled={*reconnecting}
-                    title="Unlink this service"
                 >
                     { "Unlink" }
                 </Button>
             </ButtonGroup>
-
             if let Some(message) = &*reconnect_error {
-                <p class="connection__error" role="alert">{ message }</p>
+                <Text
+                    tag={TextTag::P}
+                    size={TextSize::Sm}
+                    tone={Tone::Danger}
+                    class="connection__error"
+                    attrs={attrs! { "role" => "alert" }}
+                >
+                    { message }
+                </Text>
             }
-
             if *editing {
-                <EditConnection connection={connection} {onsaved} oncancel={oncancel_edit} />
+                <EditConnection connection={connection.clone()} {onsaved} oncancel={oncancel_edit} />
             }
+            <ConfirmDialog
+                open={*confirming_remove}
+                title={format!("Unlink {}?", connection.name)}
+                confirm_label="Unlink"
+                danger=true
+                busy={*removing}
+                on_confirm={onremove}
+                on_cancel={oncancel_remove}
+            >
+                { "Workflows that publish through it will stop working." }
+            </ConfirmDialog>
         </div>
     }
 }
@@ -552,61 +541,50 @@ fn edit_connection(props: &EditConnectionProps) -> Html {
         })
     };
 
+    let footer = html! {
+        <>
+            <Button variant={ButtonVariant::Subtle} on_click={on_cancel} disabled={*busy}>
+                { "Cancel" }
+            </Button>
+            <Button
+                variant={ButtonVariant::Primary}
+                on_click={onsubmit}
+                loading={*busy}
+                disabled={name.trim().is_empty()}
+            >
+                { "Save changes" }
+            </Button>
+        </>
+    };
+
     html! {
-        <div class="form-modal" role="dialog" aria-modal="true" aria-labelledby="edit-connection-title">
-            <div class="form-modal__panel">
-                <div class="form-modal__header">
-                    <h3 id="edit-connection-title" class="form-modal__title">
-                        { format!("Edit {} connection", props.connection.name) }
-                    </h3>
-                </div>
-                <div class="form-modal__body">
-                    if let Some(message) = &*error {
-                        <Alert
-                            kind={AlertKind::Error}
-                            title="We could not update that connection."
-                            message={message.clone()}
-                        />
-                    }
-
-                    <Field id="edit-connection-name" label="Name" required=true>
-                        <TextInput
-                            id="edit-connection-name"
-                            value={(*name).clone()}
-                            onchange={on_name}
-                        />
-                    </Field>
-
-                    <Field
-                        id="edit-connection-key"
-                        label="New API key"
-                        help="Write-only. Leave blank to keep the existing API key."
-                    >
-                        <TextInput
-                            id="edit-connection-key"
-                            value={(*key).clone()}
-                            onchange={on_key}
-                            secret=true
-                            placeholder="Paste a replacement API key"
-                        />
-                    </Field>
-
-                    <div class="connections__form-actions">
-                        <Button
-                            kind={ButtonKind::Primary}
-                            onclick={onsubmit}
-                            busy={*busy}
-                            disabled={name.trim().is_empty()}
-                        >
-                            { "Save changes" }
-                        </Button>
-                        <Button kind={ButtonKind::Subtle} onclick={on_cancel} disabled={*busy}>
-                            { "Cancel" }
-                        </Button>
-                    </div>
-                </div>
-            </div>
-        </div>
+        <Dialog
+            open=true
+            title={format!("Edit {} connection", props.connection.name)}
+            {footer}
+            on_close={props.oncancel.clone()}
+        >
+            <Stack>
+                if let Some(message) = &*error {
+                    <Alert tone={Tone::Danger} title="We could not update that connection.">
+                        { message.clone() }
+                    </Alert>
+                }
+                <Field label="Name" required=true>
+                    <TextInput value={(*name).clone()} on_input={on_name} />
+                </Field>
+                <Field
+                    label="New API key"
+                    hint="Write-only. Leave blank to keep the existing API key."
+                >
+                    <SecretInput
+                        value={(*key).clone()}
+                        on_input={on_key}
+                        placeholder="Paste a replacement API key"
+                    />
+                </Field>
+            </Stack>
+        </Dialog>
     }
 }
 
@@ -622,11 +600,11 @@ fn status_badge(props: &StatusBadgeProps) -> Html {
     // rows that do need attention harder to spot.
     let (tone, label) = match props.status {
         ConnectionStatus::Ok => return html! {},
-        ConnectionStatus::NeedsReauthorization => (StatusTone::Warning, "Needs reconnecting"),
-        ConnectionStatus::Error => (StatusTone::Error, "Not working"),
+        ConnectionStatus::NeedsReauthorization => (Tone::Warn, "Needs reconnecting"),
+        ConnectionStatus::Error => (Tone::Danger, "Not working"),
     };
 
-    html! { <StatusPill {tone} {label} /> }
+    html! { <Pill {tone} dot=true class="status-pill">{ label }</Pill> }
 }
 
 fn kind_label(kind: ConnectionKind) -> &'static str {

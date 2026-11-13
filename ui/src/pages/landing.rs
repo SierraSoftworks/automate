@@ -1,8 +1,10 @@
 use yew::prelude::*;
-use yew_router::prelude::*;
+use yew_router::prelude::use_navigator;
 
 use crate::app::{AuthHandle, AuthStatus, Route};
-use crate::components::Layout;
+use yewi::prelude::*;
+
+use crate::components::{Footer, brand};
 use crate::fixtures;
 use crate::util;
 
@@ -42,44 +44,32 @@ pub fn landing() -> Html {
         });
     }
 
-    let action = match auth.as_ref() {
-        // Authentication is required: offer the single sign-in action. On success
-        // the effect above redirects into the admin area.
-        Some(handle) if handle.status == AuthStatus::NeedsLogin => {
-            let login = handle.login.clone();
-            let onclick = Callback::from(move |_: MouseEvent| login.emit(()));
-            html! {
-                <button class="btn btn--primary btn--lg" {onclick}>
-                    { "Sign in" }
-                </button>
-            }
-        }
-        // Either still resolving the session, or already resolved and about to
-        // redirect to the admin area: show a disabled placeholder so the primary
-        // call to action doesn't flicker between states.
-        _ => html! {
-            <button class="btn btn--primary btn--lg" disabled={true}>
-                { "Sign in" }
-            </button>
-        },
-    };
+    let login = auth
+        .as_ref()
+        .filter(|handle| handle.status == AuthStatus::NeedsLogin)
+        .map(|handle| handle.login.reform(|_: MouseEvent| ()));
 
     html! {
-        <Layout>
-            <main class="landing">
-                <div class="landing__inner">
-                    <h1 class="landing__title">{ "Automate" }</h1>
-                    <p class="landing__lead">
-                        { "A simple, self-hosted automation platform. Automate syncs \
-                           calendars, syndicates feeds, manages GitHub notifications, \
-                           and routes webhooks — using Todoist to ask for a human when \
-                           it needs one." }
-                    </p>
-                    <div class="landing__actions">
-                        { action }
-                    </div>
-                </div>
-            </main>
-        </Layout>
+        <AppShell bar={html! { <AppBar brand={brand()} actions={html! { <ThemeToggle /> }} /> }} class="app-shell app-shell--bare">
+            <div class="landing">
+                <Heading level={HeadingLevel::H1} size={TextSize::Xxxl}>{ "Automate" }</Heading>
+                <Text tag={TextTag::P} size={TextSize::Lg} color={TextColor::Muted}>
+                    { "A simple, self-hosted automation platform. Automate syncs \
+                       calendars, syndicates feeds, manages GitHub notifications, \
+                       and routes webhooks — using Todoist to ask for a human when \
+                       it needs one." }
+                </Text>
+                <Button
+                    variant={ButtonVariant::Primary}
+                    size={Size::Large}
+                    icon={icons::LOG_IN}
+                    disabled={login.is_none()}
+                    on_click={login.unwrap_or_default()}
+                >
+                    { "Sign in" }
+                </Button>
+            </div>
+            <Footer />
+        </AppShell>
     }
 }

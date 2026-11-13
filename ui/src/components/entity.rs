@@ -1,6 +1,6 @@
 use yew::prelude::*;
 
-use super::JsonHighlight;
+use yewi::prelude::*;
 
 /// A single labelled metadata fact rendered alongside a [`DbEntity`], such as a
 /// scheduled time or a trace parent.
@@ -65,14 +65,17 @@ pub fn db_entity(props: &DbEntityProps) -> Html {
         <details class="db-entity">
             <summary class="db-entity__summary">
                 <div class="db-entity__head">
-                    <span class="db-entity__chevron" aria-hidden="true" />
+                    <Icon class="db-entity__chevron" icon={icons::CHEVRON_RIGHT} />
                     <span class="db-entity__key">{ props.entity_key.clone() }</span>
                     <div class="db-entity__controls">{ props.children.clone() }</div>
                 </div>
                 { props.meta.clone() }
             </summary>
             { metadata }
-            <JsonHighlight value={props.payload.clone()} />
+            <JsonView
+                value={Json::from(&props.payload)}
+                variant={JsonViewVariant::Source}
+            />
         </details>
     }
 }

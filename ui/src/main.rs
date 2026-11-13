@@ -11,6 +11,7 @@ pub use app::Route;
 
 fn main() {
     console_error_panic_hook::set_once();
+    yewi::install_styles();
     wasm_logger::init(wasm_logger::Config::default());
     yew::Renderer::<app::App>::new().render();
 }

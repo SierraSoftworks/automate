@@ -124,7 +124,7 @@ test("the row's own controls do not open the card", async ({ page }) => {
   await header.click();
   await expect(header).toHaveAttribute("aria-expanded", "false");
 
-  await row.locator(".switch__track").click();
+  await row.locator(".workflow__summary").getByRole("switch").click();
   await expect(row).toContainText("paused");
   await expect(header).toHaveAttribute("aria-expanded", "false");
 

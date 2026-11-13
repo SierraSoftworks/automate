@@ -19,13 +19,11 @@ use yew::prelude::*;
 
 use crate::api;
 use crate::components::dynamic_form::{set_at, value_at};
-use crate::components::{
-    Alert, AlertKind, Button, ButtonKind, Documentation, DynamicForm, FetchedOptions, Field,
-    JsonHighlight, MenuButton, MenuButtonOption, PageActions, StatusPill, StatusTone, Switch,
-    TextInput, WebhookAddress,
-};
+use yewi::prelude::*;
+
+use crate::components::{Documentation, DynamicForm, FetchedOptions, PageActions, WebhookAddress};
 use crate::search::{MatchContext, SearchContext};
-use crate::util::{format_iso8601, short_relative};
+use crate::util::short_relative;
 
 /// What a form hands back when it is submitted.
 #[derive(Clone, PartialEq)]
@@ -68,11 +66,14 @@ fn health_pill(health: &WorkflowHealth) -> Html {
     };
 
     html! {
-        <StatusPill
-            tone={if failing { StatusTone::Error } else { StatusTone::Ok }}
-            {label}
-            {title}
-        />
+        <Pill
+            tone={if failing { Tone::Danger } else { Tone::Ok }}
+            dot=true
+            class="status-pill"
+            attrs={attrs! { "title" => title }}
+        >
+            { label }
+        </Pill>
     }
 }
 
@@ -176,9 +177,9 @@ pub fn workflows() -> Html {
         })
     };
 
-    let type_options: Vec<MenuButtonOption> = types
+    let type_options: Vec<(String, String)> = types
         .iter()
-        .map(|descriptor| MenuButtonOption::new(descriptor.id.clone(), descriptor.name.clone()))
+        .map(|descriptor| (descriptor.id.clone(), descriptor.name.clone()))
         .collect();
 
     let chosen_descriptor = chosen
@@ -198,11 +199,16 @@ pub fn workflows() -> Html {
                     <div class="page-title__actions">
                         <MenuButton
                             label="Add Workflow"
-                            options={type_options}
-                            onselect={on_type}
-                            kind={ButtonKind::Primary}
+                            icon={icons::PLUS}
+                            variant={ButtonVariant::Primary}
                             {disabled}
-                        />
+                        >
+                            { for type_options.iter().map(|(id, name)| {
+                                let id = id.clone();
+                                let on_select = on_type.reform(move |_: MouseEvent| id.clone());
+                                html! { <MenuItem {on_select}>{ name.clone() }</MenuItem> }
+                            }) }
+                        </MenuButton>
                     </div>
                 });
             }
@@ -232,15 +238,15 @@ pub fn workflows() -> Html {
         .collect();
 
     let body = if *loading {
-        html! { <p class="workflows__empty">{ "Loading…" }</p> }
+        html! { <Loading label="Loading…" layout={LoadingLayout::Block} /> }
     } else if workflows.is_empty() {
         html! {
-            <p class="workflows__empty">
-                { "You have no workflows yet. Add one to have Automate watch something for you." }
-            </p>
+            <EmptyState title="You have no workflows yet." icon={icons::WORKFLOW}>
+                { "Add one to have Automate watch something for you." }
+            </EmptyState>
         }
     } else if visible_workflows.is_empty() {
-        html! { <p class="workflows__empty">{ "No workflows match your search." }</p> }
+        html! { <EmptyState title="No workflows match your search." icon={icons::SEARCH_X} /> }
     } else {
         html! {
             <ul class="workflows__list">
@@ -260,11 +266,7 @@ pub fn workflows() -> Html {
     html! {
         <section class="workflows">
             if let Some(message) = (*error).clone() {
-                <Alert
-                    kind={AlertKind::Error}
-                    title="We could not load your workflows."
-                    message={message}
-                />
+                <Alert tone={Tone::Danger} title="We could not load your workflows.">{ message }</Alert>
             }
 
             if let Some(descriptor) = chosen_descriptor {
@@ -507,21 +509,10 @@ fn workflow_row(props: &WorkflowRowProps) -> Html {
         })
     };
 
-    let on_action = {
-        let (on_trigger, on_delete, confirming_reset) = (
-            on_trigger.clone(),
-            on_delete.clone(),
-            confirming_reset.clone(),
-        );
-
-        Callback::from(move |action: String| match action.as_str() {
-            "trigger" => on_trigger.emit(()),
-            "reset" => confirming_reset.set(true),
-            "delete" => on_delete.emit(()),
-            _ => {}
-        })
+    let on_ask_reset = {
+        let confirming_reset = confirming_reset.clone();
+        Callback::from(move |_: MouseEvent| confirming_reset.set(true))
     };
-
     let on_expand = {
         let expanded = expanded.clone();
         Callback::from(move |_: MouseEvent| expanded.set(!*expanded))
@@ -560,22 +551,29 @@ fn workflow_row(props: &WorkflowRowProps) -> Html {
     // out. Assembled rather than written out, because which of them apply
     // depends on the workflow: only a scheduled one can be run on demand, and
     // only one that remembers something can forget it.
-    let mut actions = Vec::new();
-
-    if let Some(descriptor) = &props.descriptor
-        && matches!(descriptor.trigger, WorkflowTrigger::Cron { .. })
-    {
-        actions.push(MenuButtonOption::new("trigger", "Run now"));
-    }
-
-    if workflow.resettable {
-        actions.push(MenuButtonOption::new("reset", "Reset state"));
-    }
-
-    actions.push(MenuButtonOption::new("delete", "Delete").destructive());
-
-    // Nothing to open for a workflow that has neither an address nor a run
-    // behind it, so it is not made to look as though there is.
+    let can_run = props
+        .descriptor
+        .as_ref()
+        .is_some_and(|descriptor| matches!(descriptor.trigger, WorkflowTrigger::Cron { .. }));
+    let actions = html! {
+        <>
+            if can_run {
+                <MenuItem icon={icons::PLAY} on_select={on_trigger.reform(|_: MouseEvent| ())}>
+                    { "Run now" }
+                </MenuItem>
+            }
+            if workflow.resettable {
+                <MenuItem icon={icons::ROTATE_CCW} on_select={on_ask_reset}>{ "Reset state" }</MenuItem>
+            }
+            <MenuItem
+                icon={icons::TRASH_2}
+                tone={Tone::Danger}
+                on_select={on_delete.reform(|_: MouseEvent| ())}
+            >
+                { "Delete" }
+            </MenuItem>
+        </>
+    };
     let expandable = workflow.health.is_some() || workflow.webhook_path.is_some();
     let panel_id = format!("workflow-detail-{}", workflow.id);
 
@@ -596,16 +594,12 @@ fn workflow_row(props: &WorkflowRowProps) -> Html {
     html! {
         <li class={classes!("workflow", expandable.then_some("workflow--expandable"))}>
             <div class="workflow__summary" onclick={expandable.then_some(on_row)}>
-                <Switch
-                    id={format!("workflow-enabled-{}", workflow.id)}
+                <ToggleSwitch
+                    label={format!("{} enabled", workflow.name)}
                     checked={workflow.enabled}
-                    onchange={on_toggle}
+                    on_change={on_toggle}
                     disabled={*busy}
                 />
-
-                // A real button, so the row can be opened from the keyboard and
-                // says whether it is open. The rest of the row is a convenience
-                // on top of this rather than the only way in.
                 if expandable {
                     <button
                         type="button"
@@ -615,19 +609,13 @@ fn workflow_row(props: &WorkflowRowProps) -> Html {
                         onclick={on_expand}
                     >
                         { title }
-                        <span
+                        <Icon
                             class={classes!(
                                 "workflow__chevron",
                                 expanded.then_some("workflow__chevron--open"),
                             )}
-                            aria-hidden="true"
-                        >
-                            <svg viewBox="0 0 24 24" width="12" height="12" fill="none"
-                                stroke="currentColor" stroke-width="2" stroke-linecap="round"
-                                stroke-linejoin="round">
-                                <polyline points="6 9 12 15 18 9" />
-                            </svg>
-                        </span>
+                            icon={icons::CHEVRON_DOWN}
+                        />
                     </button>
                 } else {
                     <div class="workflow__detail">{ title }</div>
@@ -643,55 +631,64 @@ fn workflow_row(props: &WorkflowRowProps) -> Html {
                 // A workflow whose type has gone cannot be edited, so it has no
                 // default action and the menu is the whole control.
                 if props.descriptor.is_some() {
-                    <MenuButton
+                    <SplitButton
                         label={if *editing { "Close" } else { "Edit" }}
+                        size={Size::Small}
                         menu_label="Workflow actions"
-                        onclick={on_edit}
-                        options={actions}
-                        onselect={on_action}
+                        on_click={on_edit}
                         disabled={*busy}
-                    />
+                    >
+                        { actions }
+                    </SplitButton>
                 } else {
-                    <MenuButton
-                        label="Actions"
-                        options={actions}
-                        onselect={on_action}
-                        disabled={*busy}
-                    />
+                    <MenuButton label="Actions" size={Size::Small} disabled={*busy}>
+                        { actions }
+                    </MenuButton>
                 }
             </div>
 
             if let Some(message) = (*notice).clone() {
-                <p class="workflow__notice" role="status">{ message }</p>
+                <Text
+                    tag={TextTag::P}
+                    size={TextSize::Sm}
+                    tone={Tone::Ok}
+                    class="workflow__notice"
+                    attrs={attrs! { "role" => "status" }}
+                >
+                    { message }
+                </Text>
             }
 
             if let Some((title, message)) = (*error).clone() {
-                <Alert kind={AlertKind::Error} title={title} message={message} />
+                <Alert tone={Tone::Danger} {title}>{ message }</Alert>
             }
 
             if *confirming_reset {
-                <div class="workflow__confirm">
-                    <p class="workflow__warning">
-                        { "This forgets where the workflow got to. The next run treats \
-                           everything it finds as new, so a backlog that was already dealt \
-                           with will be filed again." }
-                    </p>
-
-                    <div class="workflow__confirm-actions">
-                        <Button kind={ButtonKind::Danger} onclick={on_reset} busy={*busy}>
+                <Alert class="workflow__confirm" tone={Tone::Warn} actions={html! {
+                    <>
+                        <Button
+                            variant={ButtonVariant::Danger}
+                            size={Size::Small}
+                            on_click={on_reset}
+                            loading={*busy}
+                        >
                             { "Reset state" }
                         </Button>
                         <Button
-                            kind={ButtonKind::Subtle}
-                            onclick={on_cancel_reset}
+                            variant={ButtonVariant::Subtle}
+                            size={Size::Small}
+                            on_click={on_cancel_reset}
                             disabled={*busy}
                         >
                             { "Leave it as it is" }
                         </Button>
-                    </div>
-                </div>
+                    </>
+                }}>
+                    { "This forgets where the workflow got to. The next run treats \
+                       everything it finds as new, so a backlog that was already dealt \
+                       with will be filed again." }
+                </Alert>
             }
-
             if *expanded {
                 <div class="workflow__panel" id={panel_id}>
                     if let Some(path) = workflow.webhook_path.clone() {
@@ -709,10 +706,10 @@ fn workflow_row(props: &WorkflowRowProps) -> Html {
             }
 
             if props.descriptor.is_none() {
-                <p class="workflow__orphaned">
+                <Note class="workflow__orphaned" tone={Tone::Warn}>
                     { "This workflow's type is no longer available, so it cannot be edited or run. \
                        It is shown so you can see why it stopped, and delete it when you are ready." }
-                </p>
+                </Note>
             } else if *editing && let Some(descriptor) = props.descriptor.clone() {
                 <WorkflowForm
                     descriptor={descriptor}
@@ -763,18 +760,16 @@ fn workflow_runs(props: &WorkflowRunsProps) -> Html {
 
     if let Some(message) = (*error).clone() {
         return html! {
-            <Alert
-                kind={AlertKind::Error}
-                title="We could not load this workflow's runs."
-                message={message}
-            />
+            <Alert tone={Tone::Danger} title="We could not load this workflow's runs.">{ message }</Alert>
         };
     }
 
     let body = match &*state {
-        None => html! { <p class="workflow-runs__empty">{ "Loading…" }</p> },
+        None => html! { <Loading label="Loading…" /> },
         Some(None) => html! {
-            <p class="workflow-runs__empty">{ "This workflow has not run yet." }</p>
+            <Text tag={TextTag::P} size={TextSize::Sm} color={TextColor::Muted}>
+                { "This workflow has not run yet." }
+            </Text>
         },
         Some(Some(state)) => {
             // Shown once when the last run is itself the failure, which is the
@@ -815,29 +810,22 @@ fn run(props: &RunProps) -> Html {
     html! {
         <div class="workflow-runs__run">
             <div class="workflow-runs__header">
-                <span class="workflow-runs__label">{ props.label }</span>
-                <StatusPill
-                    tone={if failed { StatusTone::Error } else { StatusTone::Ok }}
-                    label={if failed { "Failed" } else { "Succeeded" }}
-                />
-                <span
-                    class="workflow-runs__when"
-                    title={format_iso8601(report.finished_at)}
-                >
-                    { short_relative(report.finished_at) }{ format!(" · took {took}ms") }
-                </span>
+                <Text weight={TextWeight::Medium} class="workflow-runs__label">{ props.label }</Text>
+                <Pill tone={if failed { Tone::Danger } else { Tone::Ok }} dot=true class="status-pill">
+                    { if failed { "Failed" } else { "Succeeded" } }
+                </Pill>
+                <Text size={TextSize::Sm} color={TextColor::Muted} class="workflow-runs__when">
+                    <Timestamp at={report.finished_at} compact=true />
+                    { format!(" · took {took}ms") }
+                </Text>
             </div>
-
             if let Some(message) = &report.message {
-                <p class="workflow-runs__message">{ message }</p>
+                <Text tag={TextTag::P} size={TextSize::Sm} class="workflow-runs__message">{ message }</Text>
             }
-
-            // The payload is what makes a failure actionable: which delivery,
-            // which fields, which of the twelve repositories.
             if let Some(input) = &report.input {
                 <details class="workflow-runs__input">
                     <summary>{ "What it ran on" }</summary>
-                    <JsonHighlight value={input.clone()} />
+                    <JsonView value={Json::from(input)} variant={JsonViewVariant::Source} />
                 </details>
             }
         </div>
@@ -895,39 +883,29 @@ fn add_workflow(props: &AddWorkflowProps) -> Html {
     };
 
     html! {
-        <div class="form-modal" role="dialog" aria-modal="true" aria-labelledby="add-workflow-title">
-                    <div class="form-modal__panel">
-                        <div class="form-modal__header">
-                            <h3 id="add-workflow-title" class="form-modal__title">
-                                { format!("Add {} workflow", props.descriptor.name) }
-                            </h3>
-                        </div>
-
-                        <div class="form-modal__body form-modal__body--workflow">
-                            <p class="workflows__form-description">{ props.descriptor.description.clone() }</p>
-
-                            <Documentation markdown={props.descriptor.documentation.clone()} />
-
-                            if let Some(message) = (*error).clone() {
-                                <Alert
-                                    kind={AlertKind::Error}
-                                    title="We could not save this workflow."
-                                    message={message}
-                                />
-                            }
-
-                            <WorkflowForm
-                                descriptor={props.descriptor.clone()}
-                                connections={props.connections.clone()}
-                                initial={None::<WorkflowValues>}
-                                submit_label="Add workflow"
-                                busy={*busy}
-                                onsubmit={on_submit}
-                                oncancel={props.oncancel.clone()}
-                            />
-                        </div>
-                    </div>
-        </div>
+        <Dialog
+            open=true
+            title={format!("Add {} workflow", props.descriptor.name)}
+            size={Size::Large}
+            on_close={props.oncancel.clone()}
+        >
+            <Stack>
+                <Text tag={TextTag::P} color={TextColor::Muted}>{ props.descriptor.description.clone() }</Text>
+                <Documentation markdown={props.descriptor.documentation.clone()} />
+                if let Some(message) = (*error).clone() {
+                    <Alert tone={Tone::Danger} title="We could not save this workflow.">{ message }</Alert>
+                }
+                <WorkflowForm
+                    descriptor={props.descriptor.clone()}
+                    connections={props.connections.clone()}
+                    initial={None::<WorkflowValues>}
+                    submit_label="Add workflow"
+                    busy={*busy}
+                    onsubmit={on_submit}
+                    oncancel={props.oncancel.clone()}
+                />
+            </Stack>
+        </Dialog>
     }
 }
 
@@ -1090,43 +1068,32 @@ fn workflow_form(props: &WorkflowFormProps) -> Html {
             if matches!(props.descriptor.trigger, WorkflowTrigger::Cron { .. }) {
                 <Field
                     label="Schedule"
-                    id="workflow-schedule"
-                    required={true}
-                    help={crate::util::describe_cron(&schedule)
-                        .map(|described| AttrValue::from(format!("Runs {described}.")))}
+                    required=true
+                    hint={crate::util::describe_cron(&schedule)
+                        .map(|described| Html::from(format!("Runs {described}.")))
+                        .unwrap_or_default()}
                 >
                     <TextInput
-                        id="workflow-schedule"
                         value={(*schedule).clone()}
-                        onchange={on_schedule}
-                        placeholder={Some(AttrValue::from("@daily"))}
+                        on_input={on_schedule}
+                        placeholder="@daily"
+                        mono=true
                         disabled={props.busy}
                     />
                 </Field>
             }
-
             <Field
                 label="Enabled"
-                id="workflow-enabled"
-                help={Some(AttrValue::from(
-                    "A paused workflow keeps its settings and its history, and simply stops running.",
-                ))}
+                hint="A paused workflow keeps its settings and its history, and simply stops running."
             >
-                <Switch
-                    id="workflow-enabled"
-                    checked={*enabled}
-                    onchange={on_enabled}
-                    disabled={props.busy}
-                />
+                <ToggleSwitch checked={*enabled} on_change={on_enabled} disabled={props.busy} />
             </Field>
-
             <div class="workflow-form__actions">
-                <Button kind={ButtonKind::Primary} onclick={on_submit} busy={props.busy}>
+                <Button variant={ButtonVariant::Primary} on_click={on_submit} loading={props.busy}>
                     { props.submit_label.clone() }
                 </Button>
-
                 if let Some(on_cancel) = on_cancel {
-                    <Button kind={ButtonKind::Subtle} onclick={on_cancel} disabled={props.busy}>
+                    <Button variant={ButtonVariant::Subtle} on_click={on_cancel} disabled={props.busy}>
                         { "Cancel" }
                     </Button>
                 }
@@ -1135,7 +1102,6 @@ fn workflow_form(props: &WorkflowFormProps) -> Html {
     }
 }
 
-/// The configuration a new workflow of this type starts from.
 fn defaults_of(descriptor: &WorkflowTypeDescriptor) -> serde_json::Value {
     let mut config = serde_json::json!({});
 

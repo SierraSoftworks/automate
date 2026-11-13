@@ -6,6 +6,7 @@ use std::collections::BTreeMap;
 
 use automate_api::KeyValueEntry;
 use yew::prelude::*;
+use yewi::prelude::*;
 
 use crate::components::{BrowserEntry, BrowserPartition, DbEntity};
 use crate::util;
@@ -13,17 +14,8 @@ use crate::util;
 /// The store kind reported to the browser for `kind:` filtering.
 const KIND: &str = "kv";
 
-/// A database glyph marking key-value partitions in the sidebar.
-pub fn kv_icon() -> Html {
-    html! {
-        <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor"
-            stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-            <ellipse cx="12" cy="5" rx="9" ry="3" />
-            <path d="M21 5v6c0 1.66-4 3-9 3s-9-1.34-9-3V5" />
-            <path d="M21 11v6c0 1.66-4 3-9 3s-9-1.34-9-3v-6" />
-        </svg>
-    }
-}
+/// The icon a key-value partition wears in the data browser.
+pub const KV_ICON: IconData = icons::DATABASE;
 
 /// Detects whether a key-value payload is a cache envelope (`{ value, expires_at }`)
 /// and, if so, returns its parsed expiry instant. Cache entries are written by
@@ -38,18 +30,6 @@ fn cache_expiry(payload: &serde_json::Value) -> Option<chrono::DateTime<chrono::
     chrono::DateTime::parse_from_rfc3339(expires_at)
         .ok()
         .map(|dt| dt.with_timezone(&chrono::Utc))
-}
-
-/// A stopwatch glyph marking a cache entry's expiry time.
-fn stopwatch_icon() -> Html {
-    html! {
-        <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor"
-            stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-            <line x1="10" y1="2" x2="14" y2="2" />
-            <line x1="12" y1="14" x2="12" y2="9" />
-            <circle cx="12" cy="14" r="8" />
-        </svg>
-    }
 }
 
 /// Builds the always-visible expiry indicator shown beneath a cache entry's key:
@@ -69,7 +49,7 @@ fn cache_expiry_meta(expires_at: chrono::DateTime<chrono::Utc>) -> Html {
     );
     html! {
         <div class={class} title={util::format_iso8601(expires_at)}>
-            <span class="db-entity__expiry-icon">{ stopwatch_icon() }</span>
+            <Icon icon={icons::TIMER} size="13px" />
             <span class="db-entity__expiry-label">{ text }</span>
         </div>
     }
@@ -129,9 +109,9 @@ pub fn kv_partitions(
                             meta={meta}
                             payload={value}
                         >
-                            <button class="btn btn--small btn--danger" onclick={onclick}>
+                            <Button variant={ButtonVariant::Danger} size={Size::Small} on_click={onclick}>
                                 { "Delete" }
-                            </button>
+                            </Button>
                         </DbEntity>
                     };
                     BrowserEntry {
@@ -145,7 +125,7 @@ pub fn kv_partitions(
                 id: format!("{KIND}:{partition}").into(),
                 name: partition.into(),
                 kind: KIND.into(),
-                icon: kv_icon(),
+                icon: KV_ICON,
                 entries,
             }
         })

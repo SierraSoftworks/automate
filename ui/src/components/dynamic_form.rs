@@ -24,9 +24,10 @@ use std::rc::Rc;
 use automate_api::{ConnectionSummary, FieldDescriptor, FieldKind, OptionItem};
 use yew::prelude::*;
 
-use crate::components::{
-    Field, FilterInput, NumberInput, SecretInput, Select, SelectOption, Switch, TextArea, TextInput,
-};
+use yewi::prelude::*;
+
+use crate::components::FilterInput;
+use crate::components::form::{ChoiceSelect, SelectOption, blur_value};
 
 /// Reads the value at a dotted path, if there is one.
 pub fn value_at<'a>(config: &'a serde_json::Value, path: &str) -> Option<&'a serde_json::Value> {
@@ -137,10 +138,7 @@ struct DynamicFieldProps {
 #[function_component(DynamicField)]
 fn dynamic_field(props: &DynamicFieldProps) -> Html {
     let descriptor = &props.descriptor;
-    let id = format!("field-{}", descriptor.name.replace('.', "-"));
 
-    // Every control reports its new value the same way, so the update is written
-    // once here rather than in each arm below.
     let update = {
         let (config, onchange, path) = (
             props.config.clone(),
@@ -164,6 +162,16 @@ fn dynamic_field(props: &DynamicFieldProps) -> Html {
 
     let text_blur = {
         let update = update.clone();
+        Callback::from(move |event: FocusEvent| {
+            let Some(text) = blur_value(&event) else {
+                return;
+            };
+            let normalized = text.trim().to_string();
+            update.emit((!normalized.is_empty()).then(|| serde_json::json!(normalized)));
+        })
+    };
+    let filter_blur = {
+        let update = update.clone();
         Callback::from(move |text: String| {
             let normalized = text.trim().to_string();
             update.emit((!normalized.is_empty()).then(|| serde_json::json!(normalized)));
@@ -183,10 +191,9 @@ fn dynamic_field(props: &DynamicFieldProps) -> Html {
     let control = match &descriptor.kind {
         FieldKind::Text { placeholder } | FieldKind::Url { placeholder } => html! {
             <TextInput
-                id={id.clone()}
                 value={value.clone()}
-                onchange={text_update}
-                onblur={text_blur}
+                on_input={text_update}
+                on_blur={text_blur}
                 placeholder={placeholder.clone().map(AttrValue::from)}
                 disabled={props.disabled}
                 invalid={invalid}
@@ -195,10 +202,9 @@ fn dynamic_field(props: &DynamicFieldProps) -> Html {
 
         FieldKind::TextArea { placeholder } => html! {
             <TextArea
-                id={id.clone()}
                 value={value.clone()}
-                onchange={text_update}
-                onblur={text_blur}
+                on_input={text_update}
+                on_blur={text_blur}
                 placeholder={placeholder.clone().map(AttrValue::from)}
                 disabled={props.disabled}
                 invalid={invalid}
@@ -211,10 +217,9 @@ fn dynamic_field(props: &DynamicFieldProps) -> Html {
             generator_bytes,
         } => html! {
             <SecretInput
-                id={id.clone()}
                 value={value.clone()}
-                onchange={text_update}
-                onblur={text_blur}
+                on_input={text_update}
+                on_blur={text_blur}
                 placeholder={placeholder.clone().map(AttrValue::from)}
                 generator={*generator}
                 generator_bytes={*generator_bytes}
@@ -226,18 +231,17 @@ fn dynamic_field(props: &DynamicFieldProps) -> Html {
         FieldKind::Number { min, max, .. } => {
             let number_update = {
                 let update = update.clone();
-                Callback::from(move |number: Option<i64>| {
-                    update.emit(number.map(|number| serde_json::json!(number)));
+                Callback::from(move |number: Option<f64>| {
+                    update.emit(number.map(|number| serde_json::json!(number as i64)));
                 })
             };
 
             html! {
                 <NumberInput
-                    id={id.clone()}
-                    value={value_at(&props.config, &descriptor.name).and_then(|v| v.as_i64())}
-                    onchange={number_update}
-                    min={min.map(|min| min as i64)}
-                    max={max.map(|max| max as i64)}
+                    value={value_at(&props.config, &descriptor.name).and_then(|v| v.as_f64())}
+                    on_input={number_update}
+                    min={min}
+                    max={max}
                     disabled={props.disabled}
                 />
             }
@@ -250,18 +254,16 @@ fn dynamic_field(props: &DynamicFieldProps) -> Html {
             };
 
             html! {
-                <Switch
-                    id={id.clone()}
+                <ToggleSwitch
                     checked={value_at(&props.config, &descriptor.name).and_then(|v| v.as_bool()).unwrap_or(false)}
-                    onchange={switch_update}
+                    on_change={switch_update}
                     disabled={props.disabled}
                 />
             }
         }
 
         FieldKind::Select { options } => html! {
-            <Select
-                id={id.clone()}
+            <ChoiceSelect
                 value={(!value.is_empty()).then(|| AttrValue::from(value.clone()))}
                 onchange={choice_update}
                 options={options.iter().map(|o| SelectOption::new(o.value.clone(), o.label.clone())).collect::<Vec<_>>()}
@@ -290,14 +292,13 @@ fn dynamic_field(props: &DynamicFieldProps) -> Html {
                 // Offering an empty menu would look like a bug in the form
                 // rather than a step the person has not taken yet.
                 html! {
-                    <p class="dynamic-form__unavailable">
+                    <Text tag={TextTag::P} size={TextSize::Sm} color={TextColor::Muted} class="dynamic-form__unavailable">
                         { format!("Link a {provider} account before you can use this.") }
-                    </p>
+                    </Text>
                 }
             } else {
                 html! {
-                    <Select
-                        id={id.clone()}
+                    <ChoiceSelect
                         value={(!value.is_empty()).then(|| AttrValue::from(value.clone()))}
                         onchange={choice_update}
                         options={choices}
@@ -316,9 +317,9 @@ fn dynamic_field(props: &DynamicFieldProps) -> Html {
                 // is nothing to offer. Saying so is more use than an empty menu
                 // that looks broken.
                 html! {
-                    <p class="dynamic-form__unavailable">
+                    <Text tag={TextTag::P} size={TextSize::Sm} color={TextColor::Muted} class="dynamic-form__unavailable">
                         { "Choose an account first, and the options will be loaded from it." }
-                    </p>
+                    </Text>
                 }
             } else {
                 // A value stored before the list was fetched, or one since
@@ -338,8 +339,7 @@ fn dynamic_field(props: &DynamicFieldProps) -> Html {
                 }
 
                 html! {
-                    <Select
-                        id={id.clone()}
+                    <ChoiceSelect
                         value={(!value.is_empty()).then(|| AttrValue::from(value.clone()))}
                         onchange={choice_update}
                         options={choices}
@@ -353,11 +353,10 @@ fn dynamic_field(props: &DynamicFieldProps) -> Html {
 
         FieldKind::Cron => html! {
             <TextInput
-                id={id.clone()}
                 value={value.clone()}
-                onchange={text_update}
-                onblur={text_blur.clone()}
-                placeholder={Some(AttrValue::from("@daily"))}
+                on_input={text_update}
+                on_blur={text_blur.clone()}
+                placeholder="@daily"
                 disabled={props.disabled}
                 invalid={invalid}
             />
@@ -365,10 +364,9 @@ fn dynamic_field(props: &DynamicFieldProps) -> Html {
 
         FieldKind::Filter { fields } => html! {
             <FilterInput
-                id={id.clone()}
                 value={value.clone()}
                 onchange={text_update}
-                onblur={text_blur}
+                onblur={filter_blur}
                 fields={fields.clone()}
                 disabled={props.disabled}
                 invalid={invalid}
@@ -395,11 +393,10 @@ fn dynamic_field(props: &DynamicFieldProps) -> Html {
 
     html! {
         <Field
-            label={descriptor.label.clone()}
-            id={id}
+            label={html! { { &descriptor.label } }}
             required={descriptor.required}
-            help={help}
-            error={props.error.clone().map(AttrValue::from)}
+            hint={help.map(Html::from).unwrap_or_default()}
+            error={props.error.clone().map(Html::from).unwrap_or_default()}
         >
             { control }
         </Field>

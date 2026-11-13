@@ -15,6 +15,12 @@
       href="https://cdn.sierrasoftworks.com/logos/logo.ico"
       type="image/x-icon"
     />
+    <!-- Written by build.rs from the yewi-fonts crate and staged by the post_build hook in Trunk.toml. -->
+    <link rel="stylesheet" href="/fonts/fonts.css" />
+    <!-- Applies a saved light or dark choice before anything is drawn (yewi::THEME_SCRIPT). -->
+    <script>
+      (function(){try{var t=localStorage.getItem("yewi-theme");if(t==="light"||t==="dark")document.documentElement.setAttribute("data-theme",t)}catch(e){}})()
+    </script>
     <link data-trunk rel="scss" href="styles.scss" />
     <link data-trunk rel="rust" data-bin="automate-ui" />
   </head>

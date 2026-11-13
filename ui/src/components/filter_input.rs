@@ -8,11 +8,12 @@ use filt_rs::{
 };
 use yew::prelude::*;
 
-use crate::components::TextArea;
+use yewi::prelude::*;
+
+use crate::components::form::blur_value;
 
 #[derive(Properties, PartialEq)]
 pub struct FilterInputProps {
-    pub id: AttrValue,
     pub value: AttrValue,
     pub onchange: Callback<String>,
 
@@ -39,9 +40,15 @@ pub fn filter_input(props: &FilterInputProps) -> Html {
     let diagnostics = match analysis {
         FilterAnalysis::Empty => html! {},
         FilterAnalysis::Invalid(error) => html! {
-            <p class="filter-input__message filter-input__message--error" role="status">
+            <Text
+                tag={TextTag::P}
+                size={TextSize::Sm}
+                tone={Tone::Danger}
+                class="filter-input__message filter-input__message--error"
+                attrs={attrs! { "role" => "status" }}
+            >
                 { error }
-            </p>
+            </Text>
         },
         FilterAnalysis::Valid {
             used_fields,
@@ -55,38 +62,58 @@ pub fn filter_input(props: &FilterInputProps) -> Html {
 
             html! {
                 <>
-                    <p class="filter-input__message filter-input__message--valid" role="status">
+                    <Text
+                tag={TextTag::P}
+                size={TextSize::Sm}
+                tone={Tone::Ok}
+                class="filter-input__message filter-input__message--valid"
+                attrs={attrs! { "role" => "status" }}
+            >
                         { usage }
-                    </p>
+                    </Text>
                     if !unsupported_fields.is_empty() {
-                        <p class="filter-input__message filter-input__message--warning" role="status">
+                        <Text
+                tag={TextTag::P}
+                size={TextSize::Sm}
+                tone={Tone::Warn}
+                class="filter-input__message filter-input__message--warning"
+                attrs={attrs! { "role" => "status" }}
+            >
                             { unsupported_field_warning(&unsupported_fields) }
-                        </p>
+                        </Text>
                     }
                 </>
             }
         }
     };
 
+    let on_blur = {
+        let onblur = props.onblur.clone();
+        Callback::from(move |event: FocusEvent| {
+            if let Some(value) = blur_value(&event) {
+                onblur.emit(value);
+            }
+        })
+    };
+
     html! {
         <div class="filter-input">
             <TextArea
-                id={props.id.clone()}
                 value={props.value.clone()}
-                onchange={props.onchange.clone()}
-                onblur={props.onblur.clone()}
-                placeholder={Some(AttrValue::from("title contains \"release\""))}
+                on_input={props.onchange.clone()}
+                on_blur={on_blur}
+                placeholder="title contains \"release\""
                 rows={2}
                 disabled={props.disabled}
                 invalid={props.invalid || has_syntax_error}
-                monospace={true}
+                mono=true
             />
             { diagnostics }
             if !props.fields.is_empty() {
-                <p class="filter-input__fields">
+                <Text tag={TextTag::P} size={TextSize::Sm} color={TextColor::Muted} class="filter-input__fields">
                     { "Available fields: " }
-                    <code>{ props.fields.join(", ") }</code>
-                </p>
+                    <InlineCode>{ props.fields.join(", ") }</InlineCode>
+                </Text>
             }
         </div>
     }

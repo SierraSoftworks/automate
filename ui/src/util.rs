@@ -102,3 +102,17 @@ pub fn describe_cron(expression: &str) -> Option<String> {
 
     None
 }
+
+/// The tone a status pill takes for how something turned out, kept in one
+/// place so that a failure looks the same in the activity list as it does on
+/// the row it happened to.
+pub fn outcome_tone(outcome: automate_api::AuditOutcome) -> yewi::Tone {
+    use automate_api::AuditOutcome;
+
+    match outcome {
+        AuditOutcome::Success => yewi::Tone::Ok,
+        AuditOutcome::Failure => yewi::Tone::Danger,
+        AuditOutcome::Denied => yewi::Tone::Warn,
+        AuditOutcome::Skipped => yewi::Tone::Neutral,
+    }
+}

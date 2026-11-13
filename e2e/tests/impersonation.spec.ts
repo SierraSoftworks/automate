@@ -44,12 +44,12 @@ test("acting as somebody announces it, and can be undone", async ({ page }) => {
 
   // The chip has to follow, or the two halves of the screen disagree about
   // whose records are on it.
-  await expect(page.locator(".user-chip__name")).toHaveText("Rowan Muir");
+  await expect(page.locator("header .yi-user-menu__name").first()).toHaveText("Rowan Muir");
 
   await page.locator(banner).getByRole("button", { name: "Back to my own account" }).click();
 
   await expect(page.locator(banner)).toHaveCount(0);
-  await expect(page.locator(".user-chip__name")).toHaveText("Demo User");
+  await expect(page.locator("header .yi-user-menu__name").first()).toHaveText("Demo User");
 });
 
 test("the choice survives a navigation, because it is the session and not the page", async ({

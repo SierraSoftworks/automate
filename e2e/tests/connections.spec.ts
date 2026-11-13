@@ -33,16 +33,14 @@ async function openTodoistConnection(page: import("@playwright/test").Page) {
 test("credential and account setup methods share one menu", async ({ page }) => {
   await gotoApp(page, "/admin/connections?demo");
 
-  const toolbar = page.locator(".page-toolbar");
-  const add = toolbar.getByRole("button", { name: "Add Connection" });
+  const header = page.locator(".yi-page-header");
+  const add = header.getByRole("button", { name: "Add Connection" });
   await expect(add).toHaveCount(1);
-  await expect(toolbar.getByRole("button", { name: "Connect", exact: true })).toHaveCount(0);
+  await expect(header.getByRole("button", { name: "Connect", exact: true })).toHaveCount(0);
 
   await add.click();
-  await expect(page.locator(".menu-button__section")).toHaveText([
-    "API keys",
-    "Authorized accounts",
-  ]);
+  await expect(page.getByRole("group", { name: "API keys" })).toBeVisible();
+  await expect(page.getByRole("group", { name: "Authorized accounts" })).toBeVisible();
   await expect(page.getByRole("menuitem")).toHaveText([
     "AlphaVantage",
     "Todoist",
@@ -53,7 +51,7 @@ test("credential and account setup methods share one menu", async ({ page }) => 
   ]);
 
   await page.getByRole("menuitem", { name: "Spotify" }).click();
-  await expect(toolbar.getByRole("status")).toContainText(
+  await expect(header.getByRole("status")).toContainText(
     "Some connection methods unavailable",
   );
 });
@@ -100,13 +98,11 @@ test("a service linked with a pasted token appears in the list and can be unlink
   await reopened.getByRole("button", { name: "Cancel", exact: true }).click();
 
   // Unlinking stops every workflow publishing through the account, so the page
-  // asks first. Playwright dismisses dialogs unless told otherwise, which would
-  // leave the row in place and the assertion below failing for the wrong reason.
-  page.once("dialog", (dialog) => {
-    expect(dialog.message()).toContain(name);
-    return dialog.accept();
-  });
+  // asks first, naming the connection it is about to remove.
   await row.getByRole("button", { name: "Unlink" }).click();
+  const confirm = page.getByRole("alertdialog", { name: `Unlink ${name}?` });
+  await expect(confirm).toContainText("will stop working");
+  await confirm.getByRole("button", { name: "Unlink" }).click();
 
   await expect(page.locator(".connection").filter({ hasText: name })).toHaveCount(0);
 });
@@ -152,7 +148,7 @@ test("a connection that needs reauthorization offers the reconnect workflow", as
 
   const row = page.locator(".connection").filter({ hasText: "Spotify" });
   const reconnect = row.getByRole("button", { name: "Reconnect", exact: true });
-  await expect(row.locator("span.status-pill--warning")).toHaveText("Needs reconnecting");
+  await expect(row.locator(".status-pill")).toHaveText("Needs reconnecting");
   await expect(row.getByRole("button", { name: "Needs reconnecting" })).toHaveCount(0);
   await expect(row.getByRole("button", { name: "Edit" })).toHaveCount(0);
 

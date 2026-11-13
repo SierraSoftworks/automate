@@ -1,4 +1,5 @@
 use yew::prelude::*;
+use yewi::prelude::*;
 
 use crate::app::AuthHandle;
 
@@ -14,14 +15,17 @@ pub fn login() -> Html {
     };
 
     html! {
-        <div class="auth-screen">
-            <div class="auth-card">
-                <h1 class="auth-card__title">{ "Sign in" }</h1>
-                <p class="auth-card__lead">
-                    { "You need to sign in to access the Automate admin area." }
-                </p>
-                <button class="btn btn--primary btn--lg" {onclick}>{ "Sign in" }</button>
-            </div>
-        </div>
+        <EmptyState
+            class="auth-screen"
+            title="Sign in"
+            icon={icons::LOCK_KEYHOLE}
+            actions={html! {
+                <Button variant={ButtonVariant::Primary} icon={icons::LOG_IN} on_click={onclick}>
+                    { "Sign in" }
+                </Button>
+            }}
+        >
+            { "You need to sign in to access the Automate admin area." }
+        </EmptyState>
     }
 }

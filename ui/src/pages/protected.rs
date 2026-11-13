@@ -1,7 +1,7 @@
 use yew::prelude::*;
 
 use crate::app::{AuthHandle, AuthStatus};
-use crate::components::{Alert, AlertKind};
+use yewi::prelude::*;
 
 use super::Login;
 
@@ -18,32 +18,24 @@ pub fn protected(props: &ProtectedProps) -> Html {
     let auth = use_context::<AuthHandle>().expect("AuthHandle context must be provided");
 
     match auth.status {
-        AuthStatus::Loading => html! {
-            <p class="loading-note">{ "Loading…" }</p>
-        },
+        AuthStatus::Loading => html! { <Loading label="Loading…" layout={LoadingLayout::Block} /> },
         AuthStatus::NeedsLogin => html! { <Login /> },
         AuthStatus::Forbidden => html! {
-            <Alert
-                kind={AlertKind::Error}
-                title="Access denied"
-                message="Your request was not permitted by the admin access-control policy. \
-                    If this is unexpected, check the agent's `[web.auth]` ACL configuration."
-            />
+            <Alert tone={Tone::Danger} title="Access denied">
+                { "Your request was not permitted by the admin access-control policy. \
+                   If this is unexpected, check the agent's `[web.auth]` ACL configuration." }
+            </Alert>
         },
         AuthStatus::Error(msg) => {
-            let onclick = Callback::from(|_: MouseEvent| {
+            let on_retry = Callback::from(|_| {
                 if let Some(window) = web_sys::window() {
                     let _ = window.location().reload();
                 }
             });
             html! {
-                <Alert
-                    kind={AlertKind::Error}
-                    title="Couldn't verify your session"
-                    message={msg}
-                >
-                    <button class="btn btn--small btn--primary" {onclick}>{ "Reload" }</button>
-                </Alert>
+                <ErrorState title="Couldn't verify your session" {on_retry} retry_label="Reload">
+                    { msg }
+                </ErrorState>
             }
         }
         AuthStatus::SignedIn(_) | AuthStatus::Disabled => props.children.clone(),

@@ -96,7 +96,7 @@ test("filter expressions are checked while they are being edited", async ({ page
 
   await filter.fill("title ==");
   await expect(editor.locator(".filter-input__message--error")).toBeVisible();
-  await expect(filter).toHaveClass(/field__input--invalid/);
+  await expect(filter).toHaveAttribute("aria-invalid", "true");
 });
 
 test("text inputs preserve spaces while typing and normalize them on blur", async ({ page }) => {

@@ -17,11 +17,10 @@ use yew::prelude::*;
 
 use crate::api;
 use crate::app::AuthHandle;
-use crate::components::{
-    Alert, AlertKind, Button, ButtonKind, PageActions, RefreshButton, StatusPill, StatusTone,
-};
+use yewi::prelude::*;
+
+use crate::components::{PageActions, RefreshButton};
 use crate::search::{MatchContext, SearchContext};
-use crate::util::short_relative;
 
 #[function_component(Users)]
 pub fn users() -> Html {
@@ -89,16 +88,14 @@ pub fn users() -> Html {
     html! {
         <section class="accounts-page">
             if let Some(message) = &*error {
-                <Alert
-                    kind={AlertKind::Error}
-                    title="We could not load the accounts."
-                    message={message.clone()}
-                />
+                <Alert tone={Tone::Danger} title="We could not load the accounts.">
+                    { message.clone() }
+                </Alert>
             }
 
             {
                 match &*accounts {
-                    None => html! { <p class="accounts__empty">{ "Loading…" }</p> },
+                    None => html! { <Loading label="Loading…" layout={LoadingLayout::Block} /> },
                     Some(list) => {
                         let visible: Vec<&Account> = list
                             .iter()
@@ -122,7 +119,7 @@ pub fn users() -> Html {
                             .collect();
 
                         if visible.is_empty() {
-                            html! { <p class="accounts__empty">{ "No accounts match your search." }</p> }
+                            html! { <EmptyState title="No accounts match your search." icon={icons::SEARCH_X} /> }
                         } else {
                             html! {
                                 <ul class="accounts__list">
@@ -189,72 +186,66 @@ fn account_row(props: &AccountRowProps) -> Html {
     };
 
     let (tone, status) = if account.disabled {
-        (StatusTone::Error, "Suspended")
+        (Tone::Danger, "Suspended")
     } else if account.reserved {
-        (StatusTone::Neutral, "Installation")
+        (Tone::Neutral, "Installation")
     } else {
-        (StatusTone::Ok, "Active")
+        (Tone::Ok, "Active")
     };
 
-    let (suspend_label, suspend_kind) = if account.disabled {
-        (html! { { "Restore" } }, ButtonKind::Default)
+    let (suspend_label, suspend_variant) = if account.disabled {
+        ("Restore", ButtonVariant::Default)
     } else {
-        (html! { { "Suspend" } }, ButtonKind::Danger)
+        ("Suspend", ButtonVariant::Danger)
     };
 
     html! {
         <div class="account">
-            <div class="account__identity">
-                <span class="account__name">{ &account.display_name }</span>
-                <span class="account__username">{ account.username.to_string() }</span>
-                if let Some(email) = &account.email {
-                    <span class="account__email">{ email }</span>
-                }
-            </div>
-
+            <UserChip
+                class="account__identity"
+                name={account.display_name.clone()}
+                detail={match &account.email {
+                    Some(email) => format!("{} · {email}", account.username),
+                    None => account.username.to_string(),
+                }}
+            />
             <div class="account__facts">
-                <StatusPill tone={tone} label={status} />
+                <Pill tone={tone} dot=true>{ status }</Pill>
                 if account.is_admin {
-                    <StatusPill
-                        tone={StatusTone::Neutral}
-                        label="Administrator"
-                        title="Matched the admin filter when they last signed in."
-                    />
+                    <Tag attrs={attrs! { "title" => "Matched the admin filter when they last signed in." }}>
+                        { "Administrator" }
+                    </Tag>
                 }
-                <span class="account__seen">
+                <Text size={TextSize::Sm} color={TextColor::Muted} class="account__seen">
                     {
                         match account.last_seen_at {
-                            Some(seen) => format!("Last seen {}", short_relative(seen)),
-                            None => "Nobody signs into this account".to_string(),
+                            Some(seen) => html! { <>{ "Last seen " }<Timestamp at={seen} compact=true /></> },
+                            None => html! { { "Nobody signs into this account" } },
                         }
                     }
-                </span>
+                </Text>
             </div>
-
             <div class="account__actions">
                 if is_current {
-                    <span class="account__here">{ "You are here" }</span>
+                    <Text size={TextSize::Sm} color={TextColor::Muted}>{ "You are here" }</Text>
                 } else if !account.disabled {
-                    <Button kind={ButtonKind::Default} small=true onclick={on_act_as}>
-                        { "Act as" }
-                    </Button>
+                    <Button size={Size::Small} on_click={on_act_as}>{ "Act as" }</Button>
                 }
-                // The installation's own account has nobody to lock out, and
-                // suspending it would only put its records out of reach.
                 if !account.reserved && !is_current {
                     <Button
-                        kind={suspend_kind}
-                        small=true
+                        variant={suspend_variant}
+                        size={Size::Small}
                         disabled={*busy}
-                        onclick={on_toggle_disabled}
+                        on_click={on_toggle_disabled}
                     >
                         { suspend_label }
                     </Button>
                 }
             </div>
-
             if let Some(message) = &*error {
-                <p class="account__error">{ message }</p>
+                <Text tag={TextTag::P} size={TextSize::Sm} tone={Tone::Danger} class="account__error">
+                    { message }
+                </Text>
             }
         </div>
     }

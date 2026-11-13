@@ -1,1333 +1,143 @@
 // =============================================================================
 // Automate admin UI stylesheet
 //
-// A lightweight, typography-centric theme drawing on Element Plus for its
-// neutral palette, spacing, and component shapes. Organised top-down:
-//   1. Design tokens (variables, maps, mixins)
-//   2. Base / reset
-//   3. Primitives (buttons, badges, alerts)
-//   4. Layout chrome (app bar, shell, footer)
-//   5. Pages (landing, dashboard, auth)
-//   6. Partition browser (db / queue)
-//   7. Control gallery (debug builds only)
-//   8. Responsive
+// The look comes from yewi, whose stylesheet `main` installs: every control,
+// the app bar, dialogs, alerts and typography are its components, and every
+// colour, space and radius below is one of its `--yi-*` tokens. yewi keeps its
+// rules in `@layer yewi.*`, so the unlayered rules here win without
+// specificity games.
+//
+// What is left for this file is what yewi cannot know about: the accent, the
+// page frame, and the layouts of the rows and panels that are Automate's own.
+//   1. Theme
+//   2. Page frame
+//   3. Pages (accounts, connections, activity, workflows)
+//   4. Data browser (partitions, entities, queue timeline)
+//   5. Control gallery (debug builds only)
+//   6. Responsive
 // =============================================================================
-
-// -----------------------------------------------------------------------------
-// 1. Design tokens
-// -----------------------------------------------------------------------------
-
-// Brand
-$brand: #0f5a80;
-$brand-light: #117bb0;
-$brand-dark: #0c4866;
-$brand-tint: #eef6fb;
-$brand-tint-border: #d6e6ef;
-
-// Element-Plus inspired neutrals
-$text-primary: #303133;
-$text-regular: #606266;
-$text-secondary: #909399;
-$text-placeholder: #a8abb2;
-
-$border-base: #dcdfe6;
-$border-light: #e4e7ed;
-$border-lighter: #ebeef5;
-
-$bg-page: #f5f7fa;
-$bg-white: #ffffff;
-$fill-light: #f5f7fa;
-$fill-lighter: #fafafa;
-
-// Status colours (Element Plus)
-$success: #67c23a;
-$success-bg: #f0f9eb;
-$success-border: #e1f3d8;
-$warning: #e6a23c;
-$warning-bg: #fdf6ec;
-$warning-border: #faecd8;
-$danger: #f56c6c;
-$danger-bg: #fef0f0;
-$danger-border: #fbc4c4;
-$info: #909399;
-$info-bg: #f4f4f5;
-$info-border: #e9e9eb;
-
-// Shape & motion
-$radius-sm: 4px;
-$radius: 6px;
-$radius-lg: 8px;
-$shadow-sm: 0 1px 4px rgba(0, 0, 0, 0.06);
-$shadow-md: 0 4px 14px rgba(15, 90, 128, 0.12);
-$transition: 120ms ease;
 
 $container-width: 1280px;
 
-$font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica,
-  Arial, sans-serif;
-$font-mono: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
-
+// yewi's card surface, for the rows and panels that are laid out here.
 @mixin card {
-  background: $bg-white;
-  border: 1px solid $border-lighter;
-  border-radius: $radius-lg;
-  box-shadow: $shadow-sm;
+  background: var(--yi-surface);
+  border: 1px solid var(--yi-card-line);
+  border-radius: var(--yi-radius-card);
+  box-shadow: var(--yi-shadow-card);
 }
 
-@mixin focus-ring {
-  outline: none;
-  border-color: $brand;
-  box-shadow: 0 0 0 2px rgba(15, 90, 128, 0.18);
-}
-
-// -----------------------------------------------------------------------------
-// 2. Base / reset
-// -----------------------------------------------------------------------------
-
-*,
-*::before,
-*::after {
-  box-sizing: border-box;
-}
-
-html {
-  font-family: $font-sans;
-  color: $text-primary;
-  -webkit-font-smoothing: antialiased;
-}
-
-body {
+// A bare list: the rows bring their own shape.
+@mixin rows($gap: var(--yi-space-sm)) {
+  list-style: none;
   margin: 0;
-  min-height: 100vh;
-  background: $bg-page;
+  padding: 0;
   display: flex;
   flex-direction: column;
-  line-height: 1.5;
-}
-
-h1,
-h2,
-h3 {
-  margin: 0;
-  font-weight: 600;
-  color: $text-primary;
-}
-
-a {
-  color: $brand;
-  text-decoration: none;
-
-  &:hover {
-    color: $brand-light;
-  }
-}
-
-code,
-pre {
-  font-family: $font-mono;
-}
-
-.loading-note {
-  color: $text-secondary;
-  font-size: 0.95rem;
-  padding: 2rem 0;
+  gap: $gap;
 }
 
 // -----------------------------------------------------------------------------
-// 3. Primitives
+// 1. Theme
 // -----------------------------------------------------------------------------
 
-// Buttons (Element-Plus "plain" style by default, brand fill for primary)
-.btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 0.4rem;
-  font-family: inherit;
-  font-size: 0.875rem;
-  font-weight: 500;
-  line-height: 1;
-  padding: 0.6rem 1.1rem;
-  border-radius: $radius-sm;
-  border: 1px solid $border-base;
-  background: $bg-white;
-  color: $text-regular;
-  cursor: pointer;
-  white-space: nowrap;
-  transition: color $transition, background $transition, border-color $transition,
-    box-shadow $transition, opacity $transition;
-
-  &:hover:not(:disabled) {
-    color: $brand;
-    border-color: $brand-tint-border;
-    background: $brand-tint;
-  }
-
-  &:focus-visible {
-    @include focus-ring;
-  }
-
-  &:disabled {
-    opacity: 0.5;
-    cursor: not-allowed;
-  }
-
-  &--small {
-    font-size: 0.75rem;
-    padding: 0.4rem 0.7rem;
-  }
-
-  &--lg {
-    font-size: 0.95rem;
-    padding: 0.8rem 1.6rem;
-  }
-
-  &--primary {
-    color: #fff;
-    background: $brand;
-    border-color: $brand;
-
-    &:hover:not(:disabled) {
-      color: #fff;
-      background: $brand-light;
-      border-color: $brand-light;
-    }
-  }
-
-  &--danger {
-    color: $danger;
-    background: $danger-bg;
-    border-color: $danger-border;
-
-    &:hover:not(:disabled) {
-      color: #fff;
-      background: $danger;
-      border-color: $danger;
-    }
-  }
-
-  // Available without drawing the eye: no border or fill until pointed at.
-  &--subtle {
-    border-color: transparent;
-    background: transparent;
-    color: $text-secondary;
-
-    &:hover:not(:disabled) {
-      background: $fill-light;
-      border-color: transparent;
-      color: $text-regular;
-    }
-  }
-
-  // A request is in flight. The button is already disabled, so this only has to
-  // say why it stopped responding.
-  &--busy {
-    position: relative;
-    color: transparent;
-
-    &::after {
-      content: "";
-      position: absolute;
-      width: 0.85em;
-      height: 0.85em;
-      border: 2px solid currentColor;
-      border-top-color: transparent;
-      border-radius: 50%;
-      color: $text-secondary;
-      animation: btn-spin 640ms linear infinite;
-    }
-  }
-}
-
-@keyframes btn-spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
-
-// Several actions on one thing, joined into a single control. Sharing an edge
-// says they belong together and costs a pair of borders instead of a gap.
-.btn-group {
-  display: inline-flex;
-
-  > .btn {
-    position: relative;
-    border-radius: 0;
-    // Collapses the doubled border between neighbours to a single line.
-    margin-left: -1px;
-
-    &:first-child {
-      margin-left: 0;
-      border-radius: $radius-sm 0 0 $radius-sm;
-    }
-
-    &:last-child {
-      border-radius: 0 $radius-sm $radius-sm 0;
-    }
-
-    &:only-child {
-      border-radius: $radius-sm;
-    }
-
-    // The button being pointed at draws its whole outline, including the edge
-    // its neighbour is otherwise overlapping.
-    &:hover:not(:disabled),
-    &:focus-visible {
-      z-index: 1;
-    }
-  }
+:root {
+  // The Sierra Softworks blue Automate has always worn, and a lighter cut of it
+  // that holds up on a dark background.
+  --yi-accent: light-dark(#0f5a80, #4aa8d8);
 }
 
 // -----------------------------------------------------------------------------
-// Form fields
-//
-// Every configurable value in the application is entered through one of these,
-// so the row shape is defined once: label, control, then either help text or an
-// error - never both, because an error is the more urgent of the two and
-// stacking them makes the following field jump as the user types.
+// 2. Page frame
 // -----------------------------------------------------------------------------
 
-.field {
-  display: flex;
-  flex-direction: column;
-  gap: 0.35rem;
-  margin-bottom: 1.1rem;
-
-  &__label {
-    font-size: 0.8125rem;
-    font-weight: 600;
-    color: $text-regular;
-  }
-
-  &__required {
-    margin-left: 0.2rem;
-    color: $danger;
-  }
-
-  &__control {
-    display: flex;
-    flex-direction: column;
-  }
-
-  &__help,
-  &__error {
-    margin: 0;
-    font-size: 0.75rem;
-    line-height: 1.45;
-  }
-
-  &__help {
-    color: $text-secondary;
-  }
-
-  &__error {
-    color: $danger;
-  }
-
-  &__input {
-    width: 100%;
-    box-sizing: border-box;
-    font-family: inherit;
-    font-size: 0.875rem;
-    line-height: 1.4;
-    padding: 0.55rem 0.7rem;
-    color: $text-primary;
-    background: $bg-white;
-    border: 1px solid $border-base;
-    border-radius: $radius-sm;
-    transition: border-color $transition, box-shadow $transition;
-
-    &::placeholder {
-      color: $text-placeholder;
-    }
-
-    &:hover:not(:disabled) {
-      border-color: $text-placeholder;
-    }
-
-    &:focus-visible {
-      @include focus-ring;
-    }
-
-    &:disabled {
-      background: $fill-light;
-      color: $text-secondary;
-      cursor: not-allowed;
-    }
-
-    &--invalid {
-      border-color: $danger;
-
-      &:focus-visible {
-        outline: none;
-        border-color: $danger;
-        box-shadow: 0 0 0 2px rgba(245, 108, 108, 0.18);
-      }
-    }
-  }
-
-  &__textarea {
-    resize: vertical;
-    min-height: 4.5rem;
-
-    &--mono {
-      font-family: $font-mono;
-      font-size: 0.8125rem;
-    }
-  }
-
-  &__select {
-    // The browser draws its own arrow, which sits badly against our padding.
-    appearance: none;
-    padding-right: 2rem;
-    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23909399' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E");
-    background-repeat: no-repeat;
-    background-position: right 0.6rem center;
-    background-size: 1rem;
-    cursor: pointer;
-  }
+.yi-app-bar__brand img {
+  height: 28px;
+  width: auto;
 }
 
-// A masked value with the controls that reveal and replace it, laid over the
-// right-hand end of the input so the row stays the height of a single field.
-.secret-input {
-  position: relative;
-  display: flex;
-  flex-direction: column;
-
-  &__input {
-    // Room for the buttons, reserved whether or not the reveal one is currently
-    // drawn, so that typing the first character does not reflow the text.
-    &--actions-1 {
-      padding-right: 2.4rem;
-    }
-
-    &--actions-2 {
-      padding-right: 4.1rem;
-    }
-  }
-
-  &__actions {
-    position: absolute;
-    top: 0;
-    right: 0.3rem;
-    height: 100%;
-    display: flex;
-    align-items: center;
-    gap: 0.1rem;
-  }
-
-  &__action {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 1.7rem;
-    height: 1.7rem;
-    padding: 0;
-    color: $text-secondary;
-    background: none;
-    border: none;
-    border-radius: $radius-sm;
-    cursor: pointer;
-    transition: color $transition, background $transition;
-
-    &:hover:not(:disabled) {
-      color: $text-primary;
-      background: $fill-light;
-    }
-
-    &:focus-visible {
-      @include focus-ring;
-    }
-
-    &:disabled {
-      color: $text-placeholder;
-      cursor: not-allowed;
-    }
-  }
-}
-
-// A toggle for the settings that are simply on or off.
-.switch {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.6rem;
-  cursor: pointer;
-  user-select: none;
-
-  &--disabled {
-    cursor: not-allowed;
-    opacity: 0.5;
-  }
-
-  // Kept in the accessibility tree and focusable, but visually replaced by the
-  // track below, so keyboard and screen-reader use are unaffected.
-  &__input {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    opacity: 0;
-    margin: 0;
-  }
-
-  &__track {
-    position: relative;
-    flex: none;
-    width: 2.4rem;
-    height: 1.35rem;
-    border-radius: 999px;
-    background: $border-base;
-    transition: background $transition;
-  }
-
-  &__thumb {
-    position: absolute;
-    top: 2px;
-    left: 2px;
-    width: calc(1.35rem - 4px);
-    height: calc(1.35rem - 4px);
-    border-radius: 50%;
-    background: $bg-white;
-    box-shadow: $shadow-sm;
-    transition: transform $transition;
-  }
-
-  &__input:checked + &__track {
-    background: $brand;
-  }
-
-  &__input:checked + &__track &__thumb {
-    transform: translateX(1.05rem);
-  }
-
-  &__input:focus-visible + &__track {
-    @include focus-ring;
-  }
-
-  &__label {
-    font-size: 0.875rem;
-    color: $text-regular;
-  }
-}
-
-// Refresh button icon (spins while a refresh is in flight)
-.refresh-btn__icon {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-
-  &--spin svg {
-    transform-origin: center;
-    animation: spin 0.8s linear infinite;
-  }
-}
-
-@keyframes spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
-
-// A button which owns a short dropdown menu of choices or commands.
-.menu-button {
-  position: relative;
-  display: inline-flex;
-
-  &__icon {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-  }
-
-  &__chevron {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    margin-left: -0.1rem;
-    color: $text-secondary;
-    transition: transform $transition;
-
-    &--open {
-      transform: rotate(180deg);
-    }
-  }
-
-  // A transparent, full-viewport layer that catches outside clicks to dismiss
-  // the menu. It sits below the list but above the rest of the page.
-  &__backdrop {
-    position: fixed;
-    inset: 0;
-    z-index: 40;
-  }
-
-  &__list {
-    position: absolute;
-    top: calc(100% + 0.35rem);
-    right: 0;
-    z-index: 41;
-    min-width: 12rem;
-    margin: 0;
-    padding: 0.3rem;
-    list-style: none;
-    background: $bg-white;
-    border: 1px solid $border-base;
-    border-radius: $radius-sm;
-    box-shadow: $shadow-md;
-  }
-
-  &__item {
-    display: block;
-    width: 100%;
-    padding: 0.45rem 0.6rem;
-    border: none;
-    border-radius: $radius-sm;
-    background: transparent;
-    color: $text-regular;
-    font-family: inherit;
-    font-size: 0.82rem;
-    text-align: left;
-    cursor: pointer;
-    transition: color $transition, background $transition;
-
-    &:hover {
-      color: $brand;
-      background: $brand-tint;
-    }
-
-    &:focus-visible {
-      @include focus-ring;
-    }
-
-    // An action that destroys something reads as one before it is chosen, since
-    // a menu gives no other warning that this entry is not like its neighbours.
-    &--destructive {
-      color: $danger;
-
-      &:hover {
-        color: #fff;
-        background: $danger;
-      }
-    }
-  }
-
-  &__section {
-    display: block;
-    margin: 0.25rem 0.6rem 0.15rem;
-    color: $text-secondary;
-    font-size: 0.68rem;
-    font-weight: 600;
-    line-height: 1.2;
-    text-transform: uppercase;
-  }
-
-  // A split button: the action people came for, joined to the menu holding the
-  // ones they did not. Same shared edge as `.btn-group`, for the same reason.
-  &--split {
-    > .btn {
-      position: relative;
-      // Collapses the doubled border between the two halves to a single line.
-      margin-left: -1px;
-      border-radius: 0;
-
-      &:first-child {
-        margin-left: 0;
-        border-radius: $radius-sm 0 0 $radius-sm;
-      }
-
-      &:last-child {
-        border-radius: 0 $radius-sm $radius-sm 0;
-      }
-
-      &:only-child {
-        border-radius: $radius-sm;
-      }
-
-      &:hover:not(:disabled),
-      &:focus-visible {
-        z-index: 1;
-      }
-    }
-  }
-
-  // The chevron half carries no label, so it is sized by its glyph rather than
-  // by text it does not have.
-  &__toggle {
-    padding-left: 0.5rem;
-    padding-right: 0.5rem;
-  }
-
-}
-
-// Shown in place of ConnectMenu when integrations could not be fetched.
-.connect-menu__error {
-  display: inline-flex;
-  align-items: center;
-  padding: 0 0.4rem;
-  color: $text-secondary;
-  font-size: 0.78rem;
-  cursor: help;
-}
-
-// Connections panel: the accounts currently linked to each configured
-// integration, with a control to sever each one.
-.connections {
-  margin-bottom: 1.25rem;
-  padding: 0.9rem 1rem;
-  background: $bg-white;
-  border: 1px solid $border-base;
-  border-radius: $radius-sm;
-
-  &__heading {
-    margin: 0 0 0.75rem;
-    font-size: 0.95rem;
-    color: $text-regular;
-  }
-
-  &__group + &__group {
-    margin-top: 0.9rem;
-    padding-top: 0.9rem;
-    border-top: 1px solid $border-base;
-  }
-
-  &__title {
-    margin: 0 0 0.45rem;
-    font-size: 0.85rem;
-    color: $text-regular;
-  }
-
-  &__empty {
-    margin: 0;
-    color: $text-secondary;
-    font-size: 0.82rem;
-  }
-
-  &__list {
-    margin: 0;
-    padding: 0;
-    list-style: none;
-  }
-
-  &__item {
-    display: flex;
-    align-items: center;
-    gap: 0.6rem;
-    padding: 0.4rem 0;
-
-    & + & {
-      border-top: 1px solid $brand-tint-border;
-    }
-  }
-
-  &__name {
-    font-size: 0.85rem;
-    color: $text-regular;
-  }
-
-  &__kind,
-  &__detail {
-    color: $text-secondary;
-    font-size: 0.76rem;
-  }
-
-  // Keeps the disconnect control at the far end of the row whether or not the
-  // connection supplied a kind or a detail.
-  &__item .btn {
-    margin-left: auto;
-  }
-}
-
-// Status badges
-.badge {
-  display: inline-flex;
-  align-items: center;
-  font-size: 0.7rem;
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  padding: 0.15rem 0.5rem;
-  border-radius: $radius-sm;
-  border: 1px solid transparent;
-  white-space: nowrap;
-
-  &--pending {
-    color: $success;
-    background: $success-bg;
-    border-color: $success-border;
-  }
-
-  &--delayed {
-    color: $brand;
-    background: $brand-tint;
-    border-color: $brand-tint-border;
-  }
-
-  &--reserved {
-    color: $warning;
-    background: $warning-bg;
-    border-color: $warning-border;
-  }
-}
-
-// Alerts
-.alert {
-  display: flex;
-  align-items: flex-start;
-  gap: 0.75rem;
-  padding: 1rem 1.1rem;
-  border-radius: $radius;
-  border: 1px solid transparent;
-  margin-bottom: 1.5rem;
-
-  &__icon {
-    display: inline-flex;
-    flex-shrink: 0;
-    margin-top: 0.05rem;
-  }
-
-  &__body {
-    flex: 1;
-    min-width: 0;
-  }
-
-  &__title {
-    display: block;
-    font-weight: 600;
-    font-size: 0.95rem;
-  }
-
-  &__message {
-    margin: 0.35rem 0 0;
-    font-size: 0.875rem;
-    color: $text-regular;
-    word-break: break-word;
-  }
-
-  &__actions {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 0.5rem;
-    margin-top: 0.85rem;
-  }
-
-  &__close {
-    flex-shrink: 0;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    padding: 0.15rem;
-    border: none;
-    background: none;
-    color: $text-secondary;
-    cursor: pointer;
-    border-radius: $radius-sm;
-
-    &:hover {
-      color: $text-primary;
-    }
-  }
-
-  &--error {
-    background: $danger-bg;
-    border-color: $danger-border;
-
-    .alert__title,
-    .alert__icon {
-      color: $danger;
-    }
-  }
-
-  &--warning {
-    background: $warning-bg;
-    border-color: $warning-border;
-
-    .alert__title,
-    .alert__icon {
-      color: $warning;
-    }
-  }
-
-  &--info {
-    background: $info-bg;
-    border-color: $info-border;
-
-    .alert__title,
-    .alert__icon {
-      color: $info;
-    }
-  }
-
-  &--success {
-    background: $success-bg;
-    border-color: $success-border;
-
-    .alert__title,
-    .alert__icon {
-      color: $success;
-    }
-  }
-}
-
-// -----------------------------------------------------------------------------
-// 4. Layout chrome
-// -----------------------------------------------------------------------------
-
-.app-shell {
-  display: flex;
-  flex-direction: column;
-  min-height: 100vh;
-}
-
-// Persistent top app bar
-.app-bar {
-  position: sticky;
-  top: 0;
-  z-index: 10;
-  background: rgba(255, 255, 255, 0.92);
-  backdrop-filter: saturate(180%) blur(8px);
-  border-bottom: 1px solid $border-lighter;
-
-  &__inner {
-    width: 100%;
-    max-width: $container-width;
-    margin: 0 auto;
-    padding: 0 2.5rem;
-    height: 60px;
-    display: flex;
-    align-items: center;
-    gap: 1.5rem;
-  }
-
-  &__brand {
-    display: inline-flex;
-    align-items: center;
-    gap: 0.6rem;
-    color: $text-primary;
-
-    &:hover {
-      color: $text-primary;
-    }
-
-    img {
-      height: 26px;
-      aspect-ratio: 1;
-    }
-  }
-
-  &__brand-name {
-    font-weight: 600;
-    font-size: 1.05rem;
-    letter-spacing: -0.01em;
-  }
-
-  // Unified search field hosted in the app bar.
-  &__search {
-    position: relative;
-    flex: 1;
-    display: flex;
-    align-items: center;
-    max-width: 32rem;
-  }
-
-  &__search-icon {
-    position: absolute;
-    left: 0.7rem;
-    display: inline-flex;
-    align-items: center;
-    color: $text-placeholder;
-    pointer-events: none;
-  }
-
-  &__search-input {
-    width: 100%;
-    font-family: inherit;
-    font-size: 0.88rem;
-    padding: 0.5rem 0.8rem 0.5rem 2.2rem;
-    border: 1px solid $border-base;
-    border-radius: $radius-sm;
-    color: $text-primary;
-    background: $bg-white;
-    transition: border-color $transition, box-shadow $transition;
-
-    &::placeholder {
-      color: $text-placeholder;
-    }
-
-    &::-webkit-search-cancel-button {
-      cursor: pointer;
-    }
-
-    &:focus {
-      @include focus-ring;
-    }
-  }
-
-  // Autocomplete dropdown listing matching `field:` prefixes.
-  &__suggestions {
-    position: absolute;
-    top: calc(100% + 0.35rem);
-    left: 0;
-    right: 0;
-    z-index: 30;
-    margin: 0;
-    padding: 0.3rem;
-    list-style: none;
-    background: $bg-white;
-    border: 1px solid $border-base;
-    border-radius: $radius-sm;
-    box-shadow: $shadow-md;
-  }
-
-  &__suggestion {
-    display: flex;
-    align-items: baseline;
-    gap: 0.6rem;
-    padding: 0.4rem 0.6rem;
-    border-radius: $radius-sm;
-    cursor: pointer;
-
-    &--active {
-      background: $brand-tint;
-    }
-  }
-
-  &__suggestion-token {
-    font-family: $font-mono;
-    font-size: 0.82rem;
-    font-weight: 600;
-    color: $brand;
-  }
-
-  &__suggestion-desc {
-    font-size: 0.8rem;
-    color: $text-regular;
-  }
-
-  &__spacer {
-    flex: 1;
-  }
-}
-
-// Signed-in user chip
-.user-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.6rem;
-  margin-left: auto;
-
-  &__avatar {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 34px;
-    height: 34px;
-    flex-shrink: 0;
-    border-radius: 50%;
-    background: $brand;
-    color: #fff;
-    font-size: 0.8rem;
-    font-weight: 600;
-  }
-
-  &__meta {
-    display: flex;
-    flex-direction: column;
-    line-height: 1.25;
-  }
-
-  &__name {
-    font-size: 0.85rem;
-    font-weight: 600;
-    color: $text-primary;
-  }
-
-  &__email {
-    font-size: 0.75rem;
-    color: $text-secondary;
-  }
-
-  &__signout {
-    margin-left: 0.5rem;
-    font-size: 0.75rem;
-    color: $text-secondary;
-    background: none;
-    border: none;
-    cursor: pointer;
-    text-decoration: underline;
-
-    &:hover {
-      color: $danger;
-    }
-  }
-}
-
-// Main content column
-.app-main {
+// The search field takes the middle of the app bar, up to a comfortable
+// reading width, the way a browser's address bar does.
+.app-search {
   flex: 1;
-  width: 100%;
+  min-width: 0;
+  max-width: 44rem;
+  margin-inline: auto;
+}
+
+// Pages with no navigation of their own (landing, sign-in, the gallery) give
+// AppShell no sidebar. yewi 0.2 keeps the sidebar's column regardless, which
+// would squeeze the page into it, so the page takes the whole row there.
+.app-shell--bare > .yi-app-shell__body {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+// The page is a column the height of the window, so that a short page still
+// has its footer at the bottom.
+.app-shell > .yi-app-shell__body > .yi-app-shell__main {
+  align-self: stretch;
+  display: flex;
+  flex-direction: column;
 }
 
 .app-container {
+  flex: 1;
   width: 100%;
   max-width: $container-width;
   margin: 0 auto;
-  padding: 2.5rem;
+
+  // Room between the page's title and what it is the title of.
+  > .yi-page-header {
+    margin-bottom: var(--yi-space-xl);
+  }
 }
 
 .app-footer {
-  padding: 1.5rem 0;
+  padding-top: var(--yi-space-3xl);
   text-align: center;
-  font-size: 0.8rem;
-  color: $text-secondary;
 }
 
-// Page-specific title row
-.page-title {
-  display: flex;
-  align-items: flex-end;
-  justify-content: space-between;
-  gap: 1rem;
-  margin-bottom: 2rem;
-  padding-bottom: 1.25rem;
-  border-bottom: 1px solid $border-lighter;
-
-  &__heading {
-    font-size: 1.5rem;
-    font-weight: 600;
-    letter-spacing: -0.01em;
-  }
-
-  &__subtitle {
-    margin: 0.35rem 0 0;
-    font-size: 0.9rem;
-    color: $text-secondary;
-  }
-
-  // Groups the page's toolbar controls (Connect, Refresh) at the end of the row.
-  &__actions {
-    display: flex;
-    align-items: center;
-    gap: 0.6rem;
-  }
+// Shown while integrations could not be fetched for the connect menu.
+.connect-menu__error {
+  font-size: var(--yi-text-sm);
+  color: var(--yi-warn);
+  cursor: help;
 }
 
-.page-toolbar {
-  display: flex;
-  align-items: stretch;
-  gap: 0;
-  margin-bottom: 1.5rem;
-
-  .app-bar__search {
-    max-width: none;
-  }
-
-  .app-bar__search-input {
-    height: 100%;
-    border-radius: $radius-sm 0 0 $radius-sm;
-  }
-
-  .page-title__actions {
-    flex: none;
-    gap: 0;
-
-    > :first-child .btn,
-    > .btn:first-child {
-      border-radius: 0;
-    }
-
-    > :last-child .btn,
-    > .btn:last-child {
-      border-radius: 0 $radius-sm $radius-sm 0;
-    }
-  }
+// The strip announcing that the records on screen belong to somebody else.
+// Directly under the app bar, because every other thing on the page means
+// something different while it is showing.
+.impersonation {
+  margin-bottom: var(--yi-space-lg);
 }
-
-// Public chrome (landing / 404)
-.header {
-  position: absolute;
-  top: 1.25rem;
-  left: 1.5rem;
-
-  img {
-    height: 30px;
-    aspect-ratio: 1;
-  }
-}
-
-footer {
-  margin-top: auto;
-  padding: 1rem 0;
-  text-align: center;
-  font-size: 0.8rem;
-  color: $text-secondary;
-}
-
-// -----------------------------------------------------------------------------
-// 5. Pages
-// -----------------------------------------------------------------------------
 
 // Landing
 .landing {
-  flex: 1;
   display: flex;
+  flex-direction: column;
   align-items: center;
-  justify-content: center;
-  padding: 6rem 1.5rem;
-
-  &__inner {
-    max-width: 40rem;
-    text-align: center;
-  }
-
-  &__title {
-    font-size: 3rem;
-    font-weight: 700;
-    letter-spacing: -0.02em;
-  }
-
-  &__lead {
-    margin: 1.25rem 0 2rem;
-    font-size: 1.1rem;
-    line-height: 1.7;
-    color: $text-regular;
-  }
+  gap: var(--yi-space-lg);
+  max-width: 40rem;
+  margin: 0 auto;
+  padding: var(--yi-space-4xl) 0;
+  text-align: center;
 }
 
-// Dashboard cards
-.admin-cards {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 1.5rem;
-}
-
-.admin-card {
-  display: flex;
-  align-items: flex-start;
-  gap: 1rem;
-  flex: 1 1 260px;
-  min-width: 240px;
-  padding: 1.5rem;
-  @include card;
-  color: inherit;
-  transition: border-color $transition, box-shadow $transition, transform $transition;
-
-  &:hover {
-    color: inherit;
-    border-color: $brand-tint-border;
-    box-shadow: $shadow-md;
-    transform: translateY(-2px);
-  }
-
-  &-icon {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 48px;
-    height: 48px;
-    flex-shrink: 0;
-    border-radius: $radius-lg;
-    color: $brand;
-    background: $brand-tint;
-    border: 1px solid $brand-tint-border;
-  }
-
-  &-body {
-    display: flex;
-    flex-direction: column;
-    gap: 0.35rem;
-  }
-
-  &-title {
-    font-size: 1.05rem;
-    font-weight: 600;
-    color: $text-primary;
-  }
-
-  &-desc {
-    font-size: 0.85rem;
-    color: $text-regular;
-    line-height: 1.5;
-  }
-}
-
-// Auth / login
+// Sign-in and "not found": one message, centred in the page.
 .auth-screen {
   display: flex;
   align-items: center;
   justify-content: center;
   min-height: 40vh;
-  padding: 2rem 0;
 }
 
-.auth-card {
-  max-width: 26rem;
-  margin: 0 auto;
-  padding: 2rem 2.5rem;
-  text-align: center;
-  @include card;
-
-  &__title {
-    font-size: 1.5rem;
-  }
-
-  &__lead {
-    margin: 0.75rem 0 1.5rem;
-    color: $text-regular;
-    font-size: 0.95rem;
-  }
-}
-
-// Centred helper (404)
-.center-screen {
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  transform: translate(-50%, -50%);
-  width: min(90vw, 30rem);
-}
-
-// The strip announcing that the records on screen belong to somebody else.
-// Full-bleed and directly under the app bar, because every other thing on the
-// page means something different while it is showing.
-.impersonation {
-  display: flex;
-  align-items: center;
-  gap: 1rem;
-  padding: 0.65rem 2.5rem;
-  background: rgba($warning, 0.12);
-  border-bottom: 1px solid rgba($warning, 0.45);
-  color: $text-primary;
-
-  &__message {
-    flex: 1;
-    margin: 0;
-    font-size: 0.85rem;
-    line-height: 1.4;
-  }
-
-  &__stop {
-    flex-shrink: 0;
-  }
-}
+// -----------------------------------------------------------------------------
+// 3. Pages
+// -----------------------------------------------------------------------------
 
 // Accounts: everyone who has signed in, and the installation's own account.
-.accounts-page {
-  margin-bottom: 1.5rem;
-}
-
-.accounts {
-  &__empty {
-    color: $text-secondary;
-    font-size: 0.9rem;
-  }
-
-  &__list {
-    list-style: none;
-    margin: 0;
-    padding: 0;
-    display: flex;
-    flex-direction: column;
-    gap: 0.75rem;
-  }
+.accounts__list {
+  @include rows(var(--yi-space-md));
 }
 
 .account {
@@ -1335,141 +145,63 @@ footer {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
-  gap: 1rem;
-  padding: 1rem 1.25rem;
+  gap: var(--yi-space-md);
+  padding: var(--yi-space-md) var(--yi-space-lg);
 
   &__identity {
-    display: flex;
-    flex-direction: column;
     min-width: 14rem;
     flex: 1;
-  }
-
-  &__name {
-    font-weight: 600;
-    color: $text-primary;
-  }
-
-  &__username {
-    font-family: $font-mono;
-    font-size: 0.8rem;
-    color: $text-secondary;
-  }
-
-  &__email {
-    font-size: 0.8rem;
-    color: $text-secondary;
   }
 
   &__facts {
     display: flex;
     align-items: center;
     flex-wrap: wrap;
-    gap: 0.5rem;
-  }
-
-  &__seen {
-    font-size: 0.8rem;
-    color: $text-secondary;
+    gap: var(--yi-space-sm);
   }
 
   &__actions {
     display: flex;
     align-items: center;
-    gap: 0.5rem;
+    gap: var(--yi-space-sm);
     margin-left: auto;
-  }
-
-  &__here {
-    font-size: 0.8rem;
-    color: $text-secondary;
-    font-style: italic;
   }
 
   &__error {
     flex-basis: 100%;
-    margin: 0;
-    font-size: 0.8rem;
-    color: $danger;
   }
 }
 
 // Connections: the services an account has linked.
-.connections-page {
-  margin-bottom: 1.5rem;
+.connections__list,
+.workflows__list {
+  @include rows;
 }
 
-.connections {
+.connection,
+.workflow {
   @include card;
-  padding: 1.5rem;
-  margin-bottom: 1.5rem;
-
-  &__header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 1rem;
-    margin-bottom: 1rem;
-  }
-
-  &__title {
-    margin: 0;
-    font-size: 1.125rem;
-    font-weight: 600;
-    color: $text-primary;
-  }
-
-  &__intro {
-    margin: 0 0 1.25rem;
-    font-size: 0.875rem;
-    color: $text-secondary;
-    max-width: 62ch;
-  }
-
-  &__form-actions {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-  }
-
-  &__empty {
-    margin: 0;
-    font-size: 0.875rem;
-    color: $text-secondary;
-  }
-
-  &__list {
-    list-style: none;
-    margin: 0;
-    padding: 0;
-    display: flex;
-    flex-direction: column;
-    gap: 0.5rem;
-  }
+  padding: var(--yi-space-md) var(--yi-space-lg);
 }
 
 .connection {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 1rem;
-  padding: 0.75rem 1rem;
-  border: 1px solid $border-lighter;
-  border-radius: $radius;
-  background: $bg-white;
+  gap: var(--yi-space-md);
 
   &__detail {
     flex: 1;
     min-width: 0;
     display: flex;
     flex-direction: column;
-    gap: 0.15rem;
+    gap: var(--yi-space-2xs);
   }
 
   &__title {
     display: flex;
-    align-items: baseline;
-    gap: 0.5rem;
+    align-items: center;
+    gap: var(--yi-space-sm);
     min-width: 0;
   }
 
@@ -1477,278 +209,80 @@ footer {
     display: flex;
     align-items: baseline;
     min-width: 0;
+    font-weight: 600;
   }
 
+  // The service a connection reaches, as a path prefix to its name.
   &__provider {
     flex: none;
-    color: $text-placeholder;
-    font-size: 0.9375rem;
-    font-weight: 600;
+    color: var(--yi-fg-subtle);
   }
 
   &__name {
     min-width: 0;
-    font-weight: 600;
-    font-size: 0.9375rem;
-    color: $text-primary;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
 
-  &__account-type {
-    flex: none;
-    color: $text-placeholder;
-    font-size: 0.8125rem;
-    font-weight: 500;
-  }
-
-  &__meta {
-    font-size: 0.75rem;
-    color: $text-secondary;
-  }
-
   &__error {
     flex-basis: 100%;
-    margin: 0;
-    color: $danger;
-    font-size: 0.75rem;
+  }
+}
+
+// The accounts linked to each integration, as the control gallery shows them.
+.connections-panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--yi-space-md);
+
+  &__list {
+    @include rows(var(--yi-space-xs));
+  }
+
+  &__item {
+    display: flex;
+    align-items: center;
+    gap: var(--yi-space-sm);
+  }
+
+  &__name {
+    font-weight: 600;
+    margin-right: auto;
   }
 }
 
 // How something is doing, wherever a row has a health to report.
 .status-pill {
   flex: none;
-  font-size: 0.75rem;
-  font-weight: 600;
-  padding: 0.2rem 0.55rem;
-  border-radius: 999px;
-  white-space: nowrap;
-
-  &--ok {
-    color: $success;
-    background: $success-bg;
-    border: 1px solid $success-border;
-  }
-
-  &--warning {
-    color: $warning;
-    background: $warning-bg;
-    border: 1px solid $warning-border;
-  }
-
-  &--error {
-    color: $danger;
-    background: $danger-bg;
-    border: 1px solid $danger-border;
-  }
-
-  &--neutral {
-    color: $text-secondary;
-    background: $fill-light;
-    border: 1px solid $border-light;
-  }
 }
 
-// The links between the admin pages.
-.admin-nav {
-  display: flex;
-  gap: 0.25rem;
-  align-self: stretch;
-  align-items: stretch;
+// A payload folded away under a one-line summary.
+.activity-entry__more,
+.workflow-runs__input {
+  font-size: var(--yi-text-sm);
 
-  &__link {
-    display: inline-flex;
-    align-items: center;
-    padding: 0.5rem 0.9rem;
-    font-size: 0.875rem;
-    font-weight: 500;
-    color: $text-secondary;
-    text-decoration: none;
-    border-bottom: 2px solid transparent;
-    margin-bottom: -1px;
-    transition: color 0.2s, border-color 0.2s;
-
-    &:hover {
-      color: $brand;
-    }
-
-    &--active {
-      color: $brand;
-      border-bottom-color: $brand;
-    }
-  }
-}
-
-// Activity: the log of what the agent has been doing, and what did not work.
-.activity {
-  margin-bottom: 1.5rem;
-
-  &__empty {
-    margin: 0 0 1.25rem;
-    font-size: 0.875rem;
-    color: $text-secondary;
+  summary {
+    cursor: pointer;
+    color: var(--yi-fg-muted);
+    user-select: none;
   }
 
-  &__list {
-    list-style: none;
-    margin: 0;
-    padding: 0;
-    display: flex;
-    flex-direction: column;
-    gap: 0.5rem;
-  }
-}
-
-.activity-entry {
-  display: flex;
-  flex-direction: column;
-  gap: 0.5rem;
-  padding: 0.75rem 1rem;
-  border: 1px solid $border-lighter;
-  border-radius: $radius;
-  background: $bg-white;
-
-  &__summary {
-    display: flex;
-    align-items: center;
-    gap: 1rem;
-  }
-
-  // Fixed width so the entries line up into a column that can be read down.
-  &__when {
-    flex: none;
-    width: 5rem;
-    font-size: 0.75rem;
-    color: $text-secondary;
-    font-variant-numeric: tabular-nums;
-  }
-
-  &__detail {
-    flex: 1;
-    min-width: 0;
-    display: flex;
-    flex-direction: column;
-    gap: 0.15rem;
-  }
-
-  &__subject {
-    font-weight: 600;
-    font-size: 0.9375rem;
-    color: $text-primary;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  &__meta {
-    font-size: 0.75rem;
-    color: $text-secondary;
-  }
-
-  &__message {
-    margin: 0;
-    padding-left: 6rem;
-    font-size: 0.8125rem;
-    color: $text-regular;
-  }
-
-  &__more {
-    padding-left: 6rem;
-    font-size: 0.8125rem;
-
-    summary {
-      cursor: pointer;
-      color: $text-secondary;
-      user-select: none;
-    }
+  .yi-json-view {
+    margin-top: var(--yi-space-sm);
   }
 }
 
 // Workflows: the things a person has asked Automate to watch.
-.workflows {
-  margin-bottom: 1.5rem;
-
-  &__empty {
-    margin: 0 0 1.25rem;
-    font-size: 0.875rem;
-    color: $text-secondary;
-  }
-
-  &__list {
-    list-style: none;
-    margin: 0;
-    padding: 0;
-    display: flex;
-    flex-direction: column;
-    gap: 0.5rem;
-  }
-
-  &__form-description {
-    margin: 0 0 1rem;
-    font-size: 0.8125rem;
-    color: $text-secondary;
-  }
-}
-
-.form-modal {
-  position: fixed;
-  inset: 0;
-  z-index: 1000;
-  display: grid;
-  place-items: center;
-  padding: 1.5rem;
-  background: rgba(31, 34, 38, 0.52);
-
-  &__panel {
-    display: flex;
-    flex-direction: column;
-    width: min(46rem, 100%);
-    max-height: calc(100vh - 3rem);
-    overflow: hidden;
-    background: $bg-white;
-    border: 1px solid $border-light;
-    border-radius: $radius-lg;
-    box-shadow: $shadow-md;
-  }
-
-  &__header {
-    flex: none;
-    padding: 1.25rem 1.5rem;
-    border-bottom: 1px solid $border-lighter;
-  }
-
-  &__title {
-    font-size: 1.125rem;
-    font-weight: 600;
-    color: $text-primary;
-  }
-
-  &__body {
-    overflow-y: auto;
-    padding: 1.5rem;
-
-    &--workflow .workflow-form {
-      padding: 0;
-      background: transparent;
-      border: 0;
-    }
-  }
-}
-
 .workflow {
   display: flex;
   flex-direction: column;
-  gap: 0.75rem;
-  padding: 0.75rem 1rem;
-  border: 1px solid $border-lighter;
-  border-radius: $radius;
-  background: $bg-white;
+  gap: var(--yi-space-md);
 
   &__summary {
     display: flex;
     align-items: center;
-    gap: 1rem;
+    gap: var(--yi-space-md);
   }
 
   // The whole row opens the card, so it has to look as though it does. The
@@ -1757,25 +291,14 @@ footer {
     cursor: pointer;
   }
 
-  // Shown where an upgrade removed the workflow type this was created from.
-  &__orphaned {
-    margin: 0;
-    padding: 0.6rem 0.75rem;
-    font-size: 0.8125rem;
-    color: $text-secondary;
-    background: $fill-light;
-    border-left: 3px solid $border-light;
-    border-radius: $radius-sm;
-  }
-
   &__detail {
     flex: 1;
     min-width: 0;
     display: grid;
     grid-template-columns: auto 1fr;
     align-items: center;
-    column-gap: 0.4rem;
-    row-gap: 0.15rem;
+    column-gap: var(--yi-space-xs);
+    row-gap: var(--yi-space-2xs);
     text-align: left;
   }
 
@@ -1791,9 +314,9 @@ footer {
     cursor: pointer;
 
     &:focus-visible {
-      outline: 2px solid $brand;
+      outline: 2px solid var(--yi-focus);
       outline-offset: 3px;
-      border-radius: $radius-sm;
+      border-radius: var(--yi-radius-sm);
     }
   }
 
@@ -1801,10 +324,8 @@ footer {
     grid-row: 1;
     grid-column: 2;
     justify-self: start;
-    display: inline-flex;
-    align-items: center;
-    color: $text-placeholder;
-    transition: transform $transition;
+    color: var(--yi-fg-subtle);
+    transition: transform var(--yi-duration-fast) var(--yi-ease);
 
     &--open {
       transform: rotate(180deg);
@@ -1816,8 +337,6 @@ footer {
     grid-row: 1;
     grid-column: 1;
     font-weight: 600;
-    font-size: 0.9375rem;
-    color: $text-primary;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -1826,350 +345,103 @@ footer {
   &__meta {
     grid-row: 2;
     grid-column: 1 / -1;
-    font-size: 0.75rem;
-    color: $text-secondary;
+    font-size: var(--yi-text-sm);
+    color: var(--yi-fg-muted);
   }
 
   // What the card folds away: the address it is reached at, and its last runs.
   &__panel {
     display: flex;
     flex-direction: column;
-    gap: 0.75rem;
-  }
-
-  &__status {
-    flex: none;
-    font-size: 0.75rem;
-    font-weight: 600;
-    padding: 0.2rem 0.55rem;
-    border-radius: 999px;
-
-    &--paused {
-      color: $text-secondary;
-      background: $fill-light;
-      border: 1px solid $border-light;
-    }
-  }
-
-  // Says that a run was queued, or that state was forgotten. Both finish out of
-  // sight, so the row would otherwise answer the request by not changing.
-  &__notice {
-    margin: 0;
-    padding: 0.4rem 0.6rem;
-    font-size: 0.8125rem;
-    color: $brand-dark;
-    background: $brand-tint;
-    border-radius: $radius-sm;
-  }
-
-  // Asking before throwing away what a workflow remembers. Inline rather than a
-  // dialog, because the warning is about this row and belongs beside it.
-  &__confirm {
-    padding: 0.7rem 0.75rem;
-    background: $danger-bg;
-    border: 1px solid $danger-border;
-    border-radius: $radius-sm;
-  }
-
-  &__warning {
-    margin: 0 0 0.6rem;
-    font-size: 0.8125rem;
-    color: $text-regular;
-  }
-
-  &__confirm-actions {
-    display: flex;
-    gap: 0.5rem;
+    gap: var(--yi-space-md);
   }
 }
 
-// What a workflow's last runs did, shown inline beneath the row.
-.workflow-runs {
+// The panels a workflow row opens beneath itself: its last runs, the form that
+// edits it, and the address it is reached at.
+.workflow-runs,
+.workflow-form,
+.webhook-address {
   display: flex;
   flex-direction: column;
-  gap: 0.75rem;
-  padding: 0.75rem 1rem;
-  background: $fill-lighter;
-  border: 1px solid $border-lighter;
-  border-radius: $radius;
+  gap: var(--yi-space-md);
+  padding: var(--yi-space-md) var(--yi-space-lg);
+  background: var(--yi-tone-1);
+  border: 1px solid var(--yi-line);
+  border-radius: var(--yi-radius-control);
+}
 
-  &__empty {
-    margin: 0;
-    font-size: 0.8125rem;
-    color: $text-secondary;
-  }
+// Inside a dialog the form is the content, not a panel within a row.
+.yi-dialog .workflow-form {
+  padding: 0;
+  background: none;
+  border: 0;
+}
 
+.workflow-runs {
   &__run {
     display: flex;
     flex-direction: column;
-    gap: 0.4rem;
+    gap: var(--yi-space-xs);
   }
 
   &__header {
     display: flex;
     align-items: center;
-    gap: 0.6rem;
-  }
-
-  &__label {
-    font-size: 0.75rem;
-    font-weight: 600;
-    color: $text-secondary;
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
-  }
-
-  &__when {
-    font-size: 0.75rem;
-    color: $text-secondary;
-  }
-
-  &__message {
-    margin: 0;
-    font-size: 0.8125rem;
-    color: $text-regular;
-  }
-
-  &__input {
-    font-size: 0.8125rem;
-
-    summary {
-      cursor: pointer;
-      color: $text-secondary;
-      user-select: none;
-    }
+    gap: var(--yi-space-sm);
   }
 }
 
-// The editing form, shown inline beneath the workflow it belongs to.
-.workflow-form {
-  padding: 1rem;
-  background: $fill-lighter;
-  border: 1px solid $border-lighter;
-  border-radius: $radius;
-
-  &__actions {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    margin-top: 0.5rem;
-  }
-}
-
-// The address a webhook workflow is reached at.
-.webhook-address {
+.workflow-form__actions {
   display: flex;
-  flex-direction: column;
-  gap: 0.5rem;
-  padding: 0.75rem 1rem;
-  background: $fill-lighter;
-  border: 1px solid $border-lighter;
-  border-radius: $radius;
+  align-items: center;
+  gap: var(--yi-space-sm);
+}
 
-  &__label {
-    font-size: 0.75rem;
-    font-weight: 600;
-    color: $text-secondary;
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
-  }
-
-  &__row {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-  }
-
+.webhook-address {
   &__url {
     flex: 1;
     min-width: 0;
-    padding: 0.45rem 0.65rem;
-    font-family: $font-mono;
-    font-size: 0.8125rem;
-    color: $text-primary;
-    background: $bg-white;
-    border: 1px solid $border-light;
-    border-radius: $radius-sm;
-
-    &:focus {
-      outline: none;
-      border-color: $brand;
-    }
   }
 
   &__rotate {
     align-self: flex-start;
-    padding: 0;
-    font-size: 0.75rem;
-    color: $text-secondary;
-    background: none;
-    border: none;
-    text-decoration: underline;
-    cursor: pointer;
-
-    &:hover {
-      color: $danger;
-    }
-  }
-
-  &__confirm {
-    padding: 0.65rem 0.75rem;
-    background: $danger-bg;
-    border: 1px solid $danger-border;
-    border-radius: $radius-sm;
-  }
-
-  &__warning {
-    margin: 0 0 0.6rem;
-    font-size: 0.8125rem;
-    color: $danger;
-  }
-
-  &__actions {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-  }
-
-  &__error {
-    margin: 0;
-    font-size: 0.8125rem;
-    color: $danger;
   }
 }
 
 // The setup guidance a workflow type ships with.
-.documentation {
-  margin: 0 0 1.25rem;
-
-  &__toggle {
-    padding: 0;
-    font-size: 0.8125rem;
-    font-weight: 500;
-    color: $brand;
-    background: none;
-    border: none;
-    text-decoration: underline;
-    cursor: pointer;
-
-    &:hover { color: $brand-dark; }
-  }
-
-  &__body {
-    margin-top: 0.75rem;
-    padding: 1rem 1.25rem;
-    font-size: 0.875rem;
-    line-height: 1.6;
-    color: $text-regular;
-    background: $brand-tint;
-    border: 1px solid $brand-tint-border;
-    border-radius: $radius;
-
-    h2, h3, h4 {
-      margin: 1.25rem 0 0.5rem;
-      font-size: 0.9375rem;
-      font-weight: 600;
-      color: $text-primary;
-
-      &:first-child { margin-top: 0; }
-    }
-
-    p { margin: 0 0 0.75rem; }
-    p:last-child { margin-bottom: 0; }
-
-    ul, ol {
-      margin: 0 0 0.75rem;
-      padding-left: 1.25rem;
-    }
-
-    li { margin-bottom: 0.25rem; }
-
-    a {
-      color: $brand;
-      text-decoration: underline;
-    }
-
-    code {
-      padding: 0.1rem 0.3rem;
-      font-family: $font-mono;
-      font-size: 0.8125rem;
-      background: $bg-white;
-      border: 1px solid $brand-tint-border;
-      border-radius: $radius-sm;
-    }
-
-    pre {
-      margin: 0 0 0.75rem;
-      padding: 0.75rem;
-      overflow-x: auto;
-      background: $bg-white;
-      border: 1px solid $brand-tint-border;
-      border-radius: $radius-sm;
-
-      code {
-        padding: 0;
-        border: none;
-        background: none;
-      }
-    }
-  }
+.documentation__body {
+  margin-top: var(--yi-space-sm);
+  padding: var(--yi-space-md) var(--yi-space-lg);
+  background: var(--yi-accent-soft);
+  border: 1px solid var(--yi-accent-line);
+  border-radius: var(--yi-radius-control);
 }
 
 // A form drawn from a workflow type's description rather than written by hand.
 .dynamic-form {
   display: flex;
   flex-direction: column;
+  gap: var(--yi-space-md);
 
   // Shown where a picker cannot offer anything yet, because the account or
   // project that scopes it has not been chosen.
   &__unavailable {
-    margin: 0;
-    padding: 0.5rem 0.75rem;
-    font-size: 0.8125rem;
-    color: $text-secondary;
-    background: $fill-light;
-    border: 1px dashed $border-light;
-    border-radius: $radius-sm;
+    padding: var(--yi-space-sm) var(--yi-space-md);
+    background: var(--yi-tone-1);
+    border: 1px dashed var(--yi-line-strong);
+    border-radius: var(--yi-radius-sm);
   }
-
 }
 
 .filter-input {
   display: flex;
   flex-direction: column;
-
-  &__message,
-  &__fields {
-    margin: 0.35rem 0 0;
-    font-size: 0.75rem;
-    line-height: 1.45;
-  }
-
-  &__message {
-    &--valid {
-      color: $success;
-    }
-
-    &--warning {
-      color: $warning;
-    }
-
-    &--error {
-      color: $danger;
-    }
-  }
-
-  &__fields {
-    color: $text-placeholder;
-
-    code {
-      font-family: $font-mono;
-    }
-  }
+  gap: var(--yi-space-xs);
 }
 
 // -----------------------------------------------------------------------------
-// 6. Partition browser (db / queue)
+// 4. Data browser (partitions, entities, queue timeline)
 // -----------------------------------------------------------------------------
 
 .admin__banner {
@@ -2181,14 +453,6 @@ footer {
   grid-template-columns: minmax(220px, 280px) 1fr;
   gap: 1.5rem;
   align-items: start;
-
-  &--empty {
-    display: block;
-    padding: 2.5rem;
-    text-align: center;
-    color: $text-secondary;
-    @include card;
-  }
 
   // Left rail: partition list
   &__sidebar {
@@ -2213,29 +477,25 @@ footer {
     width: 100%;
     padding: 0.55rem 0.65rem;
     border: none;
-    border-radius: $radius-sm;
+    border-radius: var(--yi-radius-sm);
     background: none;
     cursor: pointer;
     text-align: left;
     font-family: inherit;
-    color: $text-regular;
-    transition: background $transition, color $transition;
+    color: var(--yi-fg);
+    transition: background var(--yi-duration-fast) var(--yi-ease), color var(--yi-duration-fast) var(--yi-ease);
 
     &:hover {
-      background: $fill-light;
-      color: $text-primary;
+      background: var(--yi-tone-1);
+      color: var(--yi-fg);
     }
 
     &--active {
-      background: $brand-tint;
-      color: $brand;
+      background: var(--yi-accent-soft);
+      color: var(--yi-accent-text);
 
       .browser__item-icon {
-        color: $brand;
-      }
-
-      .browser__item-count {
-        background: $bg-white;
+        color: var(--yi-accent-text);
       }
     }
   }
@@ -2245,13 +505,13 @@ footer {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    color: $text-placeholder;
+    color: var(--yi-fg-subtle);
   }
 
   &__item-name {
     flex: 1;
     min-width: 0;
-    font-family: $font-mono;
+    font-family: var(--yi-font-mono);
     font-size: 0.82rem;
     font-weight: 600;
     overflow: hidden;
@@ -2259,24 +519,9 @@ footer {
     white-space: nowrap;
   }
 
-  &__item-count {
-    flex-shrink: 0;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    min-width: 1.4rem;
-    height: 1.4rem;
-    padding: 0 0.45rem;
-    border-radius: 999px;
-    background: $brand-tint;
-    color: $brand;
-    font-size: 0.72rem;
-    font-weight: 600;
-  }
-
   &__no-match {
     padding: 0.75rem 0.65rem;
-    color: $text-secondary;
+    color: var(--yi-fg-muted);
     font-size: 0.82rem;
   }
 
@@ -2292,36 +537,29 @@ footer {
     gap: 0.75rem;
     flex-wrap: wrap;
     padding: 0.9rem 1.1rem;
-    border-bottom: 1px solid $border-lighter;
-    background: $fill-lighter;
+    border-bottom: 1px solid var(--yi-line);
+    background: var(--yi-tone-1);
   }
 
   &__detail-icon {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    color: $text-secondary;
+    color: var(--yi-fg-muted);
   }
 
   &__detail-title {
-    font-family: $font-mono;
+    font-family: var(--yi-font-mono);
     font-size: 0.95rem;
     font-weight: 600;
-    color: $text-primary;
+    color: var(--yi-fg);
     word-break: break-all;
   }
 
   &__detail-count {
     margin-left: auto;
     font-size: 0.8rem;
-    color: $text-secondary;
-  }
-
-  &__detail-empty {
-    padding: 2.5rem;
-    text-align: center;
-    color: $text-secondary;
-    font-size: 0.9rem;
+    color: var(--yi-fg-muted);
   }
 
   &__entries {
@@ -2332,7 +570,7 @@ footer {
 
 // Collapsible entity card
 .db-entity {
-  border-top: 1px solid $border-lighter;
+  border-top: 1px solid var(--yi-line);
 
   &:first-child {
     border-top: none;
@@ -2342,14 +580,14 @@ footer {
     padding: 0.7rem 1.1rem;
     cursor: pointer;
     list-style: none;
-    transition: background $transition;
+    transition: background var(--yi-duration-fast) var(--yi-ease);
 
     &::-webkit-details-marker {
       display: none;
     }
 
     &:hover {
-      background: $fill-lighter;
+      background: var(--yi-tone-1);
     }
   }
 
@@ -2360,13 +598,9 @@ footer {
   }
 
   &__chevron {
-    width: 0;
-    height: 0;
     flex-shrink: 0;
-    border-left: 5px solid $text-placeholder;
-    border-top: 4px solid transparent;
-    border-bottom: 4px solid transparent;
-    transition: transform $transition;
+    color: var(--yi-fg-subtle);
+    transition: transform var(--yi-duration-fast) var(--yi-ease);
   }
 
   &[open] > .db-entity__summary .db-entity__chevron {
@@ -2374,10 +608,10 @@ footer {
   }
 
   &__key {
-    font-family: $font-mono;
+    font-family: var(--yi-font-mono);
     font-size: 0.85rem;
     font-weight: 600;
-    color: $text-primary;
+    color: var(--yi-fg);
     word-break: break-all;
   }
 
@@ -2400,20 +634,20 @@ footer {
     margin-top: 0.5rem;
     padding-left: 1.1rem;
     font-size: 0.8rem;
-    color: $text-regular;
+    color: var(--yi-fg);
 
     // Variant revealed with the payload when the entity is expanded.
     &--expanded {
       margin-top: 0;
       padding: 0.6rem 1.1rem 0.6rem 2.1rem;
-      background: $fill-lighter;
-      border-top: 1px solid $border-lighter;
+      background: var(--yi-tone-1);
+      border-top: 1px solid var(--yi-line);
     }
   }
 
   &__meta-label {
     font-weight: 600;
-    color: $text-primary;
+    color: var(--yi-fg);
     margin-right: 0.35rem;
   }
 
@@ -2425,106 +659,11 @@ footer {
     margin-top: 0.5rem;
     padding-left: 1.1rem;
     font-size: 0.75rem;
-    color: $text-secondary;
+    color: var(--yi-fg-muted);
 
     &--expired {
-      color: $warning;
+      color: var(--yi-warn);
     }
-  }
-
-  &__expiry-icon {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-  }
-
-  &__payload {
-    margin: 0;
-    padding: 0.75rem 1.1rem 0.85rem 2.1rem;
-    font-size: 0.8rem;
-    line-height: 1.5;
-    color: $text-regular;
-    background: $fill-lighter;
-    border-top: 1px solid $border-lighter;
-    overflow-x: auto;
-    white-space: pre-wrap;
-    word-break: break-word;
-
-    // JSON syntax highlighting tokens.
-    .tok-key {
-      color: $brand-dark;
-      font-weight: 600;
-    }
-
-    .tok-str {
-      color: $success;
-    }
-
-    .tok-num {
-      color: $brand-light;
-    }
-
-    .tok-bool {
-      color: $warning;
-    }
-
-    .tok-null {
-      color: $text-placeholder;
-      font-style: italic;
-    }
-
-    .tok-punct {
-      color: $text-secondary;
-    }
-  }
-}
-
-// Syntax-highlighted JSON payload with a hover-revealed copy control.
-.json-highlight {
-  position: relative;
-
-  &__copy {
-    position: absolute;
-    top: 0.5rem;
-    right: 0.6rem;
-    z-index: 1;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    padding: 0.3rem;
-    color: $text-secondary;
-    background: $bg-white;
-    border: 1px solid $border-light;
-    border-radius: $radius-sm;
-    cursor: pointer;
-    opacity: 0;
-    transition:
-      opacity $transition,
-      color $transition,
-      border-color $transition,
-      background $transition;
-
-    &:hover {
-      color: $brand;
-      border-color: $brand;
-    }
-
-    &:focus-visible {
-      outline: 2px solid $brand;
-      outline-offset: 2px;
-    }
-
-    &--copied {
-      color: $success;
-      border-color: $success;
-      opacity: 1;
-    }
-  }
-
-  // Reveal the control while the payload is hovered or the button is focused.
-  &:hover &__copy,
-  &__copy:focus-visible {
-    opacity: 1;
   }
 }
 
@@ -2536,7 +675,7 @@ footer {
   margin-top: 0.7rem;
   padding-left: 1.1rem;
   font-size: 0.72rem;
-  color: $text-secondary;
+  color: var(--yi-fg-muted);
 
   &--collapsed {
     gap: 0.4rem;
@@ -2550,10 +689,10 @@ footer {
     flex-shrink: 0;
     white-space: nowrap;
     cursor: help;
-    border-radius: $radius-sm;
+    border-radius: var(--yi-radius-sm);
 
     &:focus-visible {
-      outline: 2px solid $brand;
+      outline: 2px solid var(--yi-accent-text);
       outline-offset: 2px;
     }
   }
@@ -2563,14 +702,14 @@ footer {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    color: $text-secondary;
+    color: var(--yi-fg-muted);
 
     &--pending {
-      color: $brand;
+      color: var(--yi-accent-text);
     }
 
     &--spin svg {
-      color: $warning;
+      color: var(--yi-warn);
       transform-origin: center;
       animation: queue-tl-spin 1.4s linear infinite;
     }
@@ -2584,75 +723,12 @@ footer {
     width: 6px;
     height: 6px;
     border-radius: 50%;
-    background: $danger;
-    box-shadow: 0 0 0 1.5px $bg-white;
+    background: var(--yi-danger);
+    box-shadow: 0 0 0 1.5px var(--yi-surface);
   }
 
   &__label {
     font-variant-numeric: tabular-nums;
-  }
-
-  // ISO 8601 popover revealed when a node is hovered or keyboard-focused. It is
-  // anchored toward the centre of the timeline (via the --start / --end
-  // modifiers) so it grows inward and is never clipped by the entry box edges.
-  &__popover {
-    position: absolute;
-    bottom: calc(100% + 8px);
-    z-index: 20;
-    padding: 0.35rem 0.55rem;
-    border-radius: $radius-sm;
-    background: $text-primary;
-    color: $bg-white;
-    font-family: $font-mono;
-    font-size: 0.7rem;
-    line-height: 1.2;
-    letter-spacing: 0.01em;
-    white-space: nowrap;
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.18);
-    opacity: 0;
-    visibility: hidden;
-    transform: translateY(4px);
-    transition:
-      opacity $transition,
-      transform $transition,
-      visibility $transition;
-    pointer-events: none;
-
-    // Downward-pointing arrow.
-    &::after {
-      content: "";
-      position: absolute;
-      top: 100%;
-      border: 5px solid transparent;
-      border-top-color: $text-primary;
-    }
-
-    // Left-hand (queued) node: anchor to the start and grow rightward.
-    &--start {
-      left: 0;
-
-      &::after {
-        left: 12px;
-        transform: translateX(-50%);
-      }
-    }
-
-    // Right-hand (state) node: anchor to the end and grow leftward.
-    &--end {
-      right: 0;
-
-      &::after {
-        right: 12px;
-        transform: translateX(50%);
-      }
-    }
-  }
-
-  &__node:hover &__popover,
-  &__node:focus-visible &__popover {
-    opacity: 1;
-    visibility: visible;
-    transform: translateY(0);
   }
 
   // The number-line connecting the queued and availability nodes.
@@ -2663,7 +739,7 @@ footer {
     max-width: 240px;
     height: 2px;
     margin: 0 0.15rem;
-    background: $border-base;
+    background: var(--yi-line-strong);
     border-radius: 1px;
   }
 
@@ -2673,7 +749,7 @@ footer {
     top: 0;
     bottom: 0;
     width: 0;
-    background: $brand-tint-border;
+    background: var(--yi-accent-line);
     border-radius: 1px;
   }
 
@@ -2684,7 +760,7 @@ footer {
     left: 0;
     width: 2px;
     border-radius: 1px;
-    background: $brand;
+    background: var(--yi-accent-text);
     transform: translateX(-50%);
   }
 
@@ -2694,7 +770,7 @@ footer {
     bottom: calc(100% + 3px);
     transform: translateX(-50%);
     font-size: 0.68rem;
-    color: $text-placeholder;
+    color: var(--yi-fg-subtle);
     white-space: nowrap;
   }
 }
@@ -2724,7 +800,7 @@ footer {
 }
 
 // -----------------------------------------------------------------------------
-// 7. Control gallery (debug builds only)
+// 5. Control gallery (debug builds only)
 //
 // Deliberately plain. The gallery exists to show what the controls look like,
 // so anything it draws around them has to be quieter than they are — otherwise
@@ -2733,36 +809,14 @@ footer {
 
 .gallery {
   display: grid;
-  grid-template-columns: 200px minmax(0, 1fr);
-  gap: 1.5rem;
+  grid-template-columns: 220px minmax(0, 1fr);
+  gap: var(--yi-space-xl);
   align-items: start;
-  margin-top: 1.5rem;
+  margin-top: var(--yi-space-xl);
 
   &__nav {
-    @include card;
-    display: flex;
-    flex-direction: column;
-    padding: 0.5rem;
     position: sticky;
-    top: 1rem;
-  }
-
-  &__link {
-    padding: 0.4rem 0.6rem;
-    border-radius: $radius-sm;
-    color: $text-regular;
-    font-size: 0.9rem;
-
-    &:hover {
-      background: $fill-light;
-      color: $text-primary;
-    }
-
-    &--active {
-      background: $brand-tint;
-      color: $brand;
-      font-weight: 600;
-    }
+    top: calc(var(--yi-space-4xl) + var(--yi-space-md));
   }
 
   &__body {
@@ -2770,137 +824,55 @@ footer {
   }
 
   &__heading {
-    margin-bottom: 1.25rem;
-  }
-
-  &__title {
-    font-size: 1.35rem;
-  }
-
-  &__blurb {
-    margin: 0.25rem 0 0;
-    color: $text-secondary;
-    font-size: 0.92rem;
+    margin-bottom: var(--yi-space-lg);
   }
 }
 
 .specimen {
   @include card;
-  padding: 1rem 1.25rem 1.25rem;
-  margin-bottom: 1rem;
+  padding: var(--yi-space-md) var(--yi-space-lg) var(--yi-space-lg);
+  margin-bottom: var(--yi-space-md);
 
   &__caption {
-    border-bottom: 1px solid $border-lighter;
-    padding-bottom: 0.5rem;
-    margin-bottom: 1rem;
-  }
-
-  &__label {
-    font-size: 0.95rem;
-  }
-
-  &__note {
-    margin: 0.25rem 0 0;
-    color: $text-secondary;
-    font-size: 0.85rem;
-    max-width: 68ch;
-  }
-
-  // The controls sit on the card's own background rather than a tinted one, so
-  // what is on screen here is what is on screen in a page.
-  &__stage {
-    display: block;
+    border-bottom: 1px solid var(--yi-line);
+    padding-bottom: var(--yi-space-sm);
+    margin-bottom: var(--yi-space-md);
   }
 
   &__row {
     display: flex;
     flex-wrap: wrap;
     align-items: center;
-    gap: 0.75rem;
+    gap: var(--yi-space-md);
   }
 
   &__stack {
     display: flex;
     flex-direction: column;
-    gap: 0.75rem;
+    gap: var(--yi-space-md);
   }
 }
 
 // -----------------------------------------------------------------------------
-// 8. Responsive
+// 6. Responsive
 // -----------------------------------------------------------------------------
 
 @media (max-width: 860px) {
-  .app-bar__inner,
-  .app-container {
-    padding-left: 1.25rem;
-    padding-right: 1.25rem;
-  }
-
-  .app-bar__inner {
-    height: auto;
-    min-height: 60px;
-    flex-wrap: wrap;
-    gap: 0;
-  }
-
-  .app-bar__brand,
-  .user-chip {
-    height: 60px;
-  }
-
-  .admin-nav {
-    order: 3;
-    flex-basis: 100%;
-    height: 40px;
-
-    &__link {
-      flex: 1;
-      justify-content: center;
-      padding: 0.5rem 0.25rem;
-    }
-  }
-
   .workflow__summary {
-    display: grid;
-    grid-template-columns: auto minmax(0, 1fr);
-    gap: 0.75rem;
-
-    .btn-group {
-      grid-column: 1 / -1;
-      justify-self: end;
-    }
+    flex-wrap: wrap;
   }
 
-  .connection {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) auto;
-    gap: 0.75rem 1rem;
-
-    &__detail {
-      grid-column: 1 / -1;
-    }
-
-    &__status {
-      grid-column: 1;
-      justify-self: start;
-    }
-
-    &__error {
-      grid-column: 1 / -1;
-    }
-
-    > .btn-group {
-      grid-column: 2;
-    }
+  .workflow__detail {
+    flex-basis: calc(100% - 4rem);
   }
 
-  .app-bar__brand-name {
-    display: none;
+  .connection__detail {
+    flex-basis: 100%;
   }
 
-  .user-chip__meta {
-    display: none;
+  .activity-entry__message,
+  .activity-entry__more {
+    padding-left: 0;
   }
 
   .browser {
@@ -2920,34 +892,6 @@ footer {
 
     &__nav {
       position: static;
-      flex-direction: row;
-      flex-wrap: wrap;
-    }
-  }
-
-  .connections {
-    padding: 1rem;
-
-    &__header {
-      align-items: stretch;
-      flex-direction: column;
-    }
-
-  }
-
-  .form-modal {
-    align-items: end;
-    padding: 0;
-
-    &__panel {
-      width: 100%;
-      max-height: calc(100vh - 1.5rem);
-      border-radius: $radius-lg $radius-lg 0 0;
-    }
-
-    &__header,
-    &__body {
-      padding: 1rem;
     }
   }
 }

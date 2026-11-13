@@ -146,15 +146,6 @@ impl SearchVocabulary {
     pub fn new(fields: Vec<SearchField>) -> Self {
         Self { fields }
     }
-
-    /// The candidate values for a scoped term's field, or `None` when the page
-    /// does not offer that field.
-    pub fn values_for(&self, field: &str) -> Option<&[AttrValue]> {
-        self.fields
-            .iter()
-            .find(|candidate| candidate.name.eq_ignore_ascii_case(field))
-            .map(|candidate| candidate.values.as_slice())
-    }
 }
 
 /// The shared completion vocabulary, provided above both the toolbar (which

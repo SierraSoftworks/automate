@@ -20,13 +20,13 @@ use wasm_bindgen_futures::spawn_local;
 use yew::prelude::*;
 
 use crate::api;
-use crate::components::{
-    Alert, AlertKind, JsonHighlight, PageActions, RefreshButton, StatusPill, StatusTone,
-};
+use yewi::prelude::*;
+
+use crate::components::{PageActions, RefreshButton};
 use crate::search::{
     MatchContext, SearchContext, SearchField, SearchVocabulary, VocabularyContext,
 };
-use crate::util::{format_iso8601, short_relative};
+use crate::util::outcome_tone;
 
 /// What each subject identifier should be called on screen.
 type Names = HashMap<String, String>;
@@ -163,11 +163,11 @@ pub fn activity() -> Html {
         .unwrap_or_default();
 
     let body = match &*entries {
-        None => html! { <p class="activity__empty">{ "Loading…" }</p> },
+        None => html! { <Loading label="Loading…" layout={LoadingLayout::Block} /> },
         Some(loaded) if loaded.is_empty() => html! {
-            <p class="activity__empty">
-                { "Nothing has happened yet. Runs, deliveries and changes will be listed here." }
-            </p>
+            <EmptyState title="Nothing has happened yet." icon={icons::HISTORY}>
+                { "Runs, deliveries and changes will be listed here." }
+            </EmptyState>
         },
         Some(loaded) => {
             let visible: Vec<&AuditRecord> = loaded
@@ -196,18 +196,20 @@ pub fn activity() -> Html {
                 .collect();
 
             if visible.is_empty() {
-                html! { <p class="activity__empty">{ "Nothing matches your search." }</p> }
+                html! { <EmptyState title="Nothing matches your search." icon={icons::SEARCH_X} /> }
             } else {
                 html! {
-                    <ul class="activity__list">
-                        { for visible.into_iter().map(|entry| html! {
-                            <ActivityRow
-                                key={entry.id}
-                                entry={entry.clone()}
-                                subject={subject_label(entry, &names)}
-                            />
-                        }) }
-                    </ul>
+                    <Card>
+                        <Timeline label="Activity, newest first" divided=true run_off={TimelineRunOff::End}>
+                            { for visible.into_iter().map(|entry| html! {
+                                <ActivityRow
+                                    key={entry.id}
+                                    entry={entry.clone()}
+                                    subject={subject_label(entry, &names)}
+                                />
+                            }) }
+                        </Timeline>
+                    </Card>
                 }
             }
         }
@@ -216,11 +218,7 @@ pub fn activity() -> Html {
     html! {
         <section class="activity">
             if let Some(message) = (*error).clone() {
-                <Alert
-                    kind={AlertKind::Error}
-                    title="We could not load your activity."
-                    message={message}
-                />
+                <Alert tone={Tone::Danger} title="We could not load your activity.">{ message }</Alert>
             }
 
             { body }
@@ -246,45 +244,57 @@ struct ActivityRowProps {
     subject: String,
 }
 
+/// The mark an entry wears on the rail, so the kind of thing that happened can
+/// be picked out without reading each line.
+fn category_icon(category: AuditCategory) -> IconData {
+    match category {
+        AuditCategory::WorkflowRun => icons::PLAY,
+        AuditCategory::WebhookDelivery => icons::WEBHOOK,
+        AuditCategory::WorkflowConfig => icons::WORKFLOW,
+        AuditCategory::Connection => icons::PLUG,
+        AuditCategory::Authentication => icons::LOG_IN,
+        AuditCategory::Administration => icons::SETTINGS,
+    }
+}
+
 #[function_component(ActivityRow)]
 fn activity_row(props: &ActivityRowProps) -> Html {
     let entry = &props.entry;
 
-    html! {
-        <li class="activity-entry">
-            <div class="activity-entry__summary">
-                <span class="activity-entry__when" title={format_iso8601(entry.occurred_at)}>
-                    { short_relative(entry.occurred_at) }
-                </span>
-
-                <div class="activity-entry__detail">
-                    <span class="activity-entry__subject">{ &props.subject }</span>
-                    <span class="activity-entry__meta">
-                        { entry.category.label() }{ " · " }{ &entry.action }
-                        if let Some(actor) = &entry.actor {
-                            { " · by " }{ actor }
-                        }
-                    </span>
-                </div>
-
-                <StatusPill
-                    tone={StatusTone::of_outcome(entry.outcome)}
-                    label={entry.outcome.label()}
-                />
-            </div>
-
-            if let Some(message) = &entry.message {
-                <p class="activity-entry__message">{ message }</p>
+    let title = html! { { &props.subject } };
+    let meta = html! {
+        <>
+            <Timestamp at={entry.occurred_at} />
+            { " · " }{ entry.category.label() }{ " · " }{ &entry.action }
+            if let Some(actor) = &entry.actor {
+                { " · by " }{ actor }
             }
+        </>
+    };
+    let aside = html! {
+        <Pill tone={outcome_tone(entry.outcome)} dot=true class="status-pill">
+            { entry.outcome.label() }
+        </Pill>
+    };
 
-            // Structured detail is the exception rather than the rule, and it is
-            // long when it is there, so it stays folded away until it is asked for.
+    html! {
+        <TimelineItem
+            class="activity-entry"
+            {title}
+            {meta}
+            {aside}
+            tone={outcome_tone(entry.outcome)}
+            icon={category_icon(entry.category)}
+        >
+            if let Some(message) = &entry.message {
+                <Text tag={TextTag::P} size={TextSize::Sm} class="activity-entry__message">{ message }</Text>
+            }
             if let Some(detail) = &entry.detail {
                 <details class="activity-entry__more">
                     <summary>{ "Detail" }</summary>
-                    <JsonHighlight value={detail.clone()} />
+                    <JsonView value={Json::from(detail)} variant={JsonViewVariant::Source} />
                 </details>
             }
-        </li>
+        </TimelineItem>
     }
 }

@@ -1,5 +1,6 @@
 use yew::prelude::*;
 use yew_router::prelude::*;
+use yewi::prelude::{Loading, LoadingLayout};
 
 use crate::app::{AuthHandle, AuthStatus, Route};
 
@@ -31,9 +32,7 @@ pub fn auth_callback() -> Html {
 
     html! {
         <div class="auth-screen">
-            <div class="auth-card">
-                <p class="auth-card__lead">{ "Completing sign-in…" }</p>
-            </div>
+            <Loading label="Completing sign-in…" layout={LoadingLayout::Block} />
         </div>
     }
 }

@@ -16,27 +16,21 @@
 use automate_api::Account;
 use wasm_bindgen_futures::spawn_local;
 use yew::prelude::*;
+use yewi::prelude::*;
 
 use crate::api;
 use crate::app::AuthHandle;
-use crate::components::{MenuButton, MenuButtonOption};
 
-/// The menu value that means "go back to my own account". A sentinel rather
-/// than an empty string so that it cannot collide with an account name.
-const STOP: &str = "\u{0}stop";
-
-/// The "act as" menu, shown only to administrators.
+/// The entries an administrator's user menu offers for acting as somebody else.
 ///
-/// Suspended accounts are left out because the agent refuses to act as one, and
-/// offering a choice that always fails is worse than not offering it.
-#[function_component(ActAsMenu)]
-pub fn act_as_menu() -> Html {
+/// It renders nothing for anybody who is not an administrator, and nothing
+/// when there is nobody to act as — an empty group would only be a heading over
+/// nothing. While an administrator is acting as somebody, the way back is the
+/// first entry, ahead of the list of other accounts.
+#[function_component(ActAsItems)]
+pub fn act_as_items() -> Html {
     let auth = use_context::<AuthHandle>().expect("AuthHandle context must be provided");
     let accounts = use_state(Vec::<Account>::new);
-
-    // `is_admin` describes whoever signed in, not the account being acted as, so
-    // this stays available while impersonating — which is what lets somebody
-    // switch straight from one account to another.
     let is_admin = auth.user.as_ref().is_some_and(|user| user.is_admin);
 
     {
@@ -58,52 +52,47 @@ pub fn act_as_menu() -> Html {
     }
 
     let current = auth.user.as_ref().and_then(|user| user.username.clone());
-
-    let mut options: Vec<MenuButtonOption> = accounts
+    let others: Vec<&Account> = accounts
         .iter()
         .filter(|account| !account.disabled && Some(&account.username) != current.as_ref())
-        .map(|account| {
-            MenuButtonOption::new(
-                account.username.to_string(),
-                format!("{} ({})", account.display_name, account.username),
-            )
-            .in_section("Act as")
-        })
         .collect();
 
-    if auth.acting_as.is_some() {
-        options.insert(0, MenuButtonOption::new(STOP, "Back to my own account"));
-    }
-
-    if options.is_empty() {
-        return html! {};
-    }
-
-    let onselect = {
-        let act_as = auth.act_as.clone();
-        Callback::from(move |value: String| act_as.emit((value != STOP).then_some(value)))
-    };
+    let stop = auth.acting_as.is_some().then(|| {
+        let on_select = auth.act_as.reform(|_: MouseEvent| None);
+        html! {
+            <MenuGroup>
+                <MenuItem icon={icons::UNDO_2} {on_select}>{ "Back to my own account" }</MenuItem>
+            </MenuGroup>
+        }
+    });
 
     html! {
-        <MenuButton
-            label="Act as…"
-            options={options}
-            onselect={onselect}
-            small=true
-            title="Act as another account"
-        />
+        <>
+            { stop }
+            if !others.is_empty() {
+                <MenuGroup label="Act as">
+                    { for others.into_iter().map(|account| {
+                        let username = account.username.to_string();
+                        let on_select = auth.act_as.reform(move |_: MouseEvent| Some(username.clone()));
+                        html! {
+                            <MenuItem key={account.username.to_string()} {on_select}>
+                                { format!("{} ({})", account.display_name, account.username) }
+                            </MenuItem>
+                        }
+                    }) }
+                </MenuGroup>
+            }
+        </>
     }
 }
 
-/// The banner announcing that the records on screen are somebody else's.
+/// The strip announcing that the records on screen belong to somebody else.
 ///
-/// Split from [`ImpersonationNotice`] so that the thing being looked at in the
-/// gallery is the same markup the shell renders, rather than a copy of it: this
-/// half only decides *whether* there is anything to say.
+/// It reads the stored choice rather than the resolved identity, so that it
+/// still shows — and can still be dismissed — when the agent refused the choice.
 #[function_component(ImpersonationBanner)]
 pub fn impersonation_banner() -> Html {
     let auth = use_context::<AuthHandle>().expect("AuthHandle context must be provided");
-
     let Some(account) = auth.acting_as.clone() else {
         return html! {};
     };
@@ -118,24 +107,35 @@ pub fn impersonation_banner() -> Html {
 
 #[derive(Properties, PartialEq)]
 pub struct ImpersonationNoticeProps {
-    /// The account whose records are on screen.
+    /// The account being acted as.
     pub account: AttrValue,
+
+    /// Fired when the administrator asks to return to their own account.
     pub onstop: Callback<MouseEvent>,
 }
 
+/// The notice itself, separate from the context that decides whether to show
+/// it so that the control gallery can render one.
 #[function_component(ImpersonationNotice)]
 pub fn impersonation_notice(props: &ImpersonationNoticeProps) -> Html {
+    let actions = html! {
+        <Button size={Size::Small} on_click={props.onstop.clone()}>
+            { "Back to my own account" }
+        </Button>
+    };
+
     html! {
-        <div class="impersonation" role="status">
-            <p class="impersonation__message">
-                { "You are acting as " }
-                <strong>{ props.account.clone() }</strong>
-                { ". Everything below belongs to that account, and anything you \
-                   change is recorded against it in your name." }
-            </p>
-            <button class="btn btn--small impersonation__stop" onclick={props.onstop.clone()}>
-                { "Back to my own account" }
-            </button>
-        </div>
+        <Banner
+            class="impersonation"
+            tone={Tone::Warn}
+            icon={icons::USER_ROUND_COG}
+            {actions}
+            attrs={attrs! { "role" => "status" }}
+        >
+            { "You are acting as " }
+            <strong>{ props.account.clone() }</strong>
+            { ". Everything below belongs to that account, and anything you \
+               change is recorded against it in your name." }
+        </Banner>
     }
 }
