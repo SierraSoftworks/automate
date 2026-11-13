@@ -51,20 +51,24 @@ $container-width: 1280px;
 // 2. Page frame
 // -----------------------------------------------------------------------------
 
-// The app bar spans the window; its content lines up with the page column.
-.yi-app-bar {
-  padding-inline: max(var(--yi-space-xl), calc((100% - #{$container-width}) / 2));
-}
-
 .yi-app-bar__brand img {
   height: 28px;
   width: auto;
 }
 
-// Automate navigates from the app bar and has no sidebar. yewi 0.2's AppShell
-// keeps the sidebar's column even when it is given none, which would squeeze
-// the page into it, so the page takes the whole row here.
-.app-shell > .yi-app-shell__body {
+// The search field takes the middle of the app bar, up to a comfortable
+// reading width, the way a browser's address bar does.
+.app-search {
+  flex: 1;
+  min-width: 0;
+  max-width: 44rem;
+  margin-inline: auto;
+}
+
+// Pages with no navigation of their own (landing, sign-in, the gallery) give
+// AppShell no sidebar. yewi 0.2 keeps the sidebar's column regardless, which
+// would squeeze the page into it, so the page takes the whole row there.
+.app-shell--bare > .yi-app-shell__body {
   grid-template-columns: minmax(0, 1fr);
 }
 
@@ -81,25 +85,16 @@ $container-width: 1280px;
   width: 100%;
   max-width: $container-width;
   margin: 0 auto;
+
+  // Room between the page's title and what it is the title of.
+  > .yi-page-header {
+    margin-bottom: var(--yi-space-xl);
+  }
 }
 
 .app-footer {
   padding-top: var(--yi-space-3xl);
   text-align: center;
-}
-
-// The search field and the page's own actions, on one row beneath the title.
-.page-toolbar {
-  display: flex;
-  align-items: center;
-  gap: var(--yi-space-md);
-  margin: var(--yi-space-lg) 0 var(--yi-space-xl);
-
-  &__search,
-  &__spacer {
-    flex: 1;
-    min-width: 0;
-  }
 }
 
 // Shown while integrations could not be fetched for the connect menu.
@@ -179,13 +174,11 @@ $container-width: 1280px;
 
 // Connections: the services an account has linked.
 .connections__list,
-.activity__list,
 .workflows__list {
   @include rows;
 }
 
 .connection,
-.activity-entry,
 .workflow {
   @include card;
   padding: var(--yi-space-md) var(--yi-space-lg);
@@ -262,46 +255,6 @@ $container-width: 1280px;
 // How something is doing, wherever a row has a health to report.
 .status-pill {
   flex: none;
-}
-
-// Activity: the log of what the agent has been doing, and what did not work.
-.activity-entry {
-  display: flex;
-  flex-direction: column;
-  gap: var(--yi-space-sm);
-
-  &__summary {
-    display: flex;
-    align-items: center;
-    gap: var(--yi-space-md);
-  }
-
-  // Fixed width so the entries line up into a column that can be read down.
-  &__when {
-    flex: none;
-    width: 5rem;
-    font-variant-numeric: tabular-nums;
-  }
-
-  &__detail {
-    flex: 1;
-    min-width: 0;
-    display: flex;
-    flex-direction: column;
-    gap: var(--yi-space-2xs);
-  }
-
-  &__subject {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  // Indented to sit under the subject rather than under the time.
-  &__message,
-  &__more {
-    padding-left: calc(5rem + var(--yi-space-md));
-  }
 }
 
 // A payload folded away under a one-line summary.

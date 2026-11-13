@@ -33,10 +33,10 @@ async function openTodoistConnection(page: import("@playwright/test").Page) {
 test("credential and account setup methods share one menu", async ({ page }) => {
   await gotoApp(page, "/admin/connections?demo");
 
-  const toolbar = page.locator(".page-toolbar");
-  const add = toolbar.getByRole("button", { name: "Add Connection" });
+  const header = page.locator(".yi-page-header");
+  const add = header.getByRole("button", { name: "Add Connection" });
   await expect(add).toHaveCount(1);
-  await expect(toolbar.getByRole("button", { name: "Connect", exact: true })).toHaveCount(0);
+  await expect(header.getByRole("button", { name: "Connect", exact: true })).toHaveCount(0);
 
   await add.click();
   await expect(page.getByRole("group", { name: "API keys" })).toBeVisible();
@@ -51,7 +51,7 @@ test("credential and account setup methods share one menu", async ({ page }) => 
   ]);
 
   await page.getByRole("menuitem", { name: "Spotify" }).click();
-  await expect(toolbar.getByRole("status")).toContainText(
+  await expect(header.getByRole("status")).toContainText(
     "Some connection methods unavailable",
   );
 });

@@ -12,7 +12,7 @@ import { expect, gotoApp, test, waitForApp } from "./helpers";
 const pages = [
   {
     path: "/admin",
-    title: "Admin",
+    title: "Data",
     subtitle: "Browse the key-value store and job queues across every partition.",
     nav: "Data",
   },
@@ -46,7 +46,7 @@ for (const { path, title, subtitle, nav } of pages) {
     // Only one link may be highlighted. Both spellings of the browser route
     // resolve to the same destination, so it is possible for one to appear
     // unselected while the other is on screen.
-    const active = page.locator('header nav [aria-current="page"]');
+    const active = page.getByRole("navigation", { name: "Admin pages" }).locator('[aria-current="page"]');
     await expect(active).toHaveCount(1);
     await expect(active).toHaveText(nav);
   });
@@ -60,26 +60,26 @@ test("following a nav link changes the page without a reload", async ({ page }) 
 
   await expect(page).toHaveURL(/\/admin\/connections$/);
   await expect(page.getByRole("heading", { level: 1, name: "Connections" })).toBeVisible();
-  await expect(page.locator('header nav [aria-current="page"]')).toHaveText("Connections");
+  await expect(page.getByRole("navigation", { name: "Admin pages" }).locator('[aria-current="page"]')).toHaveText("Connections");
   await expect(page.getByRole("combobox", { name: "Search" })).toHaveValue("");
 });
 
 test("connection management lives on the Connections page", async ({ page }) => {
   await gotoApp(page, "/admin?demo");
 
-  const dataToolbar = page.locator(".page-toolbar");
+  const dataHeader = page.locator(".yi-page-header");
   await expect(page.locator("section.connections")).toHaveCount(0);
-  await expect(dataToolbar.getByRole("button", { name: "Connect", exact: true })).toHaveCount(0);
-  await expect(dataToolbar.getByRole("button", { name: "Refresh" })).toBeVisible();
+  await expect(dataHeader.getByRole("button", { name: "Connect", exact: true })).toHaveCount(0);
+  await expect(dataHeader.getByRole("button", { name: "Refresh" })).toBeVisible();
 
   await gotoApp(page, "/admin/connections?demo");
 
-  const connectionsToolbar = page.locator(".page-toolbar");
+  const connectionsHeader = page.locator(".yi-page-header");
   await expect(
-    connectionsToolbar.getByRole("button", { name: "Add Connection" }),
+    connectionsHeader.getByRole("button", { name: "Add Connection" }),
   ).toHaveCount(1);
   await expect(
-    connectionsToolbar.getByRole("button", { name: "Connect", exact: true }),
+    connectionsHeader.getByRole("button", { name: "Connect", exact: true }),
   ).toHaveCount(0);
 });
 
@@ -90,11 +90,11 @@ for (const { path, title, action } of [
   test(`${title} uses the flat list layout`, async ({ page }) => {
     await gotoApp(page, path);
 
-    await expect(page.locator("header").getByRole("navigation")).toBeVisible();
+    await expect(page.getByRole("navigation", { name: "Admin pages" })).toBeVisible();
     await expect(page.getByRole("heading", { level: 1, name: title })).toHaveCount(1);
     await expect(page.getByRole("heading", { level: 2, name: title })).toHaveCount(0);
-    await expect(page.locator(".page-toolbar").getByRole("combobox", { name: "Search" })).toBeVisible();
-    await expect(page.locator(".page-toolbar").getByRole("button", { name: action })).toBeVisible();
+    await expect(page.locator("header").getByRole("combobox", { name: "Search" })).toBeVisible();
+    await expect(page.locator(".yi-page-header").getByRole("button", { name: action })).toBeVisible();
   });
 }
 
@@ -104,10 +104,10 @@ for (const { path, action } of [
   { path: "/admin/activity?demo", action: "Refresh" },
   { path: "/admin?demo", action: "Refresh" },
 ]) {
-  test(`${path} uses a primary toolbar action`, async ({ page }) => {
+  test(`${path} uses a primary page action`, async ({ page }) => {
     await gotoApp(page, path);
 
-    await expect(page.locator(".page-toolbar").getByRole("button", { name: action })).toHaveClass(
+    await expect(page.locator(".yi-page-header").getByRole("button", { name: action })).toHaveClass(
       /\byi-button--primary\b/,
     );
   });

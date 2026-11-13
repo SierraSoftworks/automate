@@ -199,15 +199,17 @@ pub fn activity() -> Html {
                 html! { <EmptyState title="Nothing matches your search." icon={icons::SEARCH_X} /> }
             } else {
                 html! {
-                    <ul class="activity__list">
-                        { for visible.into_iter().map(|entry| html! {
-                            <ActivityRow
-                                key={entry.id}
-                                entry={entry.clone()}
-                                subject={subject_label(entry, &names)}
-                            />
-                        }) }
-                    </ul>
+                    <Card>
+                        <Timeline label="Activity, newest first" divided=true run_off={TimelineRunOff::End}>
+                            { for visible.into_iter().map(|entry| html! {
+                                <ActivityRow
+                                    key={entry.id}
+                                    entry={entry.clone()}
+                                    subject={subject_label(entry, &names)}
+                                />
+                            }) }
+                        </Timeline>
+                    </Card>
                 }
             }
         }
@@ -242,29 +244,48 @@ struct ActivityRowProps {
     subject: String,
 }
 
+/// The mark an entry wears on the rail, so the kind of thing that happened can
+/// be picked out without reading each line.
+fn category_icon(category: AuditCategory) -> IconData {
+    match category {
+        AuditCategory::WorkflowRun => icons::PLAY,
+        AuditCategory::WebhookDelivery => icons::WEBHOOK,
+        AuditCategory::WorkflowConfig => icons::WORKFLOW,
+        AuditCategory::Connection => icons::PLUG,
+        AuditCategory::Authentication => icons::LOG_IN,
+        AuditCategory::Administration => icons::SETTINGS,
+    }
+}
+
 #[function_component(ActivityRow)]
 fn activity_row(props: &ActivityRowProps) -> Html {
     let entry = &props.entry;
 
+    let title = html! { { &props.subject } };
+    let meta = html! {
+        <>
+            <Timestamp at={entry.occurred_at} />
+            { " · " }{ entry.category.label() }{ " · " }{ &entry.action }
+            if let Some(actor) = &entry.actor {
+                { " · by " }{ actor }
+            }
+        </>
+    };
+    let aside = html! {
+        <Pill tone={outcome_tone(entry.outcome)} dot=true class="status-pill">
+            { entry.outcome.label() }
+        </Pill>
+    };
+
     html! {
-        <li class="activity-entry">
-            <div class="activity-entry__summary">
-                <Text size={TextSize::Sm} color={TextColor::Muted} class="activity-entry__when">
-                    <Timestamp at={entry.occurred_at} compact=true />
-                </Text>
-                <div class="activity-entry__detail">
-                    <Text weight={TextWeight::Medium} class="activity-entry__subject">{ &props.subject }</Text>
-                    <Text size={TextSize::Sm} color={TextColor::Muted} class="activity-entry__meta">
-                        { entry.category.label() }{ " · " }{ &entry.action }
-                        if let Some(actor) = &entry.actor {
-                            { " · by " }{ actor }
-                        }
-                    </Text>
-                </div>
-                <Pill tone={outcome_tone(entry.outcome)} dot=true class="status-pill">
-                    { entry.outcome.label() }
-                </Pill>
-            </div>
+        <TimelineItem
+            class="activity-entry"
+            {title}
+            {meta}
+            {aside}
+            tone={outcome_tone(entry.outcome)}
+            icon={category_icon(entry.category)}
+        >
             if let Some(message) = &entry.message {
                 <Text tag={TextTag::P} size={TextSize::Sm} class="activity-entry__message">{ message }</Text>
             }
@@ -274,6 +295,6 @@ fn activity_row(props: &ActivityRowProps) -> Html {
                     <JsonView value={Json::from(detail)} variant={JsonViewVariant::Source} />
                 </details>
             }
-        </li>
+        </TimelineItem>
     }
 }

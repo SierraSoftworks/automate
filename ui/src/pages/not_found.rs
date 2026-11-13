@@ -8,7 +8,7 @@ use crate::components::{Footer, brand};
 #[function_component(NotFound)]
 pub fn not_found() -> Html {
     html! {
-        <AppShell bar={html! { <AppBar brand={brand()} actions={html! { <ThemeToggle /> }} /> }} class="app-shell">
+        <AppShell bar={html! { <AppBar brand={brand()} actions={html! { <ThemeToggle /> }} /> }} class="app-shell app-shell--bare">
             <EmptyState
                 class="auth-screen"
                 title="Page not found"

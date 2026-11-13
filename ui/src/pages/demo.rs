@@ -110,7 +110,7 @@ fn shell(body: Html) -> Html {
     };
 
     html! {
-        <AppShell class="app-shell">
+        <AppShell class="app-shell app-shell--bare">
             <div class="app-container">
                 <PageHeader
                     title="Controls"

@@ -50,7 +50,7 @@ pub fn landing() -> Html {
         .map(|handle| handle.login.reform(|_: MouseEvent| ()));
 
     html! {
-        <AppShell bar={html! { <AppBar brand={brand()} actions={html! { <ThemeToggle /> }} /> }} class="app-shell">
+        <AppShell bar={html! { <AppBar brand={brand()} actions={html! { <ThemeToggle /> }} /> }} class="app-shell app-shell--bare">
             <div class="landing">
                 <Heading level={HeadingLevel::H1} size={TextSize::Xxxl}>{ "Automate" }</Heading>
                 <Text tag={TextTag::P} size={TextSize::Lg} color={TextColor::Muted}>
