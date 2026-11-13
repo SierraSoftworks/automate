@@ -108,7 +108,7 @@ troubleshooting.
 **Run tests with coverage:**
 ```bash
 RUSTFLAGS="-Cinstrument-coverage" cargo test --no-fail-fast
-grcov . --binary-path target/debug/deps/ -s . -t lcov --ignore-not-existing --ignore '../**' --ignore '/*' --ignore 'C:/' -o ./lcov.info
+grcov . --binary-path target/debug/ -s . -t lcov --ignore-not-existing --ignore '../**' --ignore '/*' --ignore 'C:/' -o ./lcov.info
 ```
 
 ## Linting and Code Quality
