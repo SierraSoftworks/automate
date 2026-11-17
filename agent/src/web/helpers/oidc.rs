@@ -626,7 +626,7 @@ mod tests {
         jsonwebtoken::encode(
             &header,
             &claims,
-            &jsonwebtoken::EncodingKey::from_secret(b"super-secret"),
+            &jsonwebtoken::EncodingKey::from_secret(b"super-secret").unwrap(),
         )
         .unwrap()
     }
