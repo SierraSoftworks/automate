@@ -457,7 +457,7 @@ dependencies = [
  "reqwest 0.12.28",
  "rsa",
  "rstest",
- "rusqlite",
+ "rusqlite 0.43.0",
  "rust-ynab",
  "scraper",
  "serde",
@@ -3687,6 +3687,21 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a4edff0039f148731aee2fd80f76dbfeb12d204ab3d1c544838d34e02151049b"
 dependencies = [
  "bitflags",
+ "fallible-iterator",
+ "fallible-streaming-iterator",
+ "hashlink",
+ "libsqlite3-sys",
+ "smallvec",
+ "sqlite-wasm-rs",
+]
+
+[[package]]
+name = "rusqlite"
+version = "0.43.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f172c4812a19b26d1c23cdb0070e69db335503dfa378b910eb857386e5b8beba"
+dependencies = [
+ "bitflags",
  "chrono",
  "fallible-iterator",
  "fallible-streaming-iterator",
@@ -4679,7 +4694,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cef2b2b09428079c22bf68cb48170c80b4f8c9c3ae1879aabfc22a94b5eaf2a1"
 dependencies = [
  "crossbeam-channel",
- "rusqlite",
+ "rusqlite 0.42.0",
  "tokio",
 ]
 
