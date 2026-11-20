@@ -659,6 +659,24 @@ mod tests {
             .await
             .unwrap();
 
+        // The consumer only hands over a schedule once it has come due, so make
+        // this one due before firing it. Firing it early, while it still waits
+        // for its next midnight, would re-arm it for that same midnight: the two
+        // fire times would then differ only by how long each enqueue took to
+        // read the clock, and comparing them would measure scheduling noise
+        // rather than whether the run re-armed at all.
+        let pending = armed(&services).await;
+        services
+            .queue()
+            .enqueue(
+                CRON_PARTITION,
+                pending[0].payload.clone(),
+                Some(pending[0].key.clone().into()),
+                Some(chrono::TimeDelta::zero()),
+            )
+            .await
+            .unwrap();
+
         let before = armed(&services).await[0].hidden_until;
         let after = run_once(&services).await;
 
