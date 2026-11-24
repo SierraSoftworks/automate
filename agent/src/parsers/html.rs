@@ -18,16 +18,13 @@ pub fn html_to_markdown(html: &str, base_url: Url) -> String {
         })
         .add_handler(
             vec!["a"],
-            move |handlers: &dyn Handlers, element: Element| {
-                if let Some(href) = element
-                    .attrs
-                    .iter()
-                    .find(|a| a.name.local.to_string() == "href")
-                {
-                    let new_url = base_url
-                        .join(href.value.as_ref())
-                        .unwrap_or_else(|_| base_url.clone());
-                    let content = handlers.walk_children(element.node).content;
+            move |handlers: &dyn Handlers, element: &Element| {
+                // htmd 0.6 no longer exposes `Element::attrs`; attributes are
+                // read through the element's DOM node instead.
+                let href = element.node.attrs().get("href").map(str::to_owned);
+                if let Some(href) = href {
+                    let new_url = base_url.join(&href).unwrap_or_else(|_| base_url.clone());
+                    let content = handlers.walk_children_content(element.node, element.context);
 
                     Some(HandlerResult {
                         content: format!("[{}]({})", content, new_url),
